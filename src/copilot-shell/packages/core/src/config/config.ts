@@ -430,7 +430,7 @@ export class Config {
 
   private modelsConfig!: ModelsConfig;
   private readonly modelProvidersConfig?: ModelProvidersConfig;
-  private readonly targetDir: string;
+  private targetDir: string;
   private workspaceContext: WorkspaceContext;
   private readonly debugMode: boolean;
   private readonly inputFormat: InputFormat;
@@ -1088,6 +1088,11 @@ export class Config {
 
   getTargetDir(): string {
     return this.targetDir;
+  }
+
+  setTargetDir(dir: string): void {
+    this.targetDir = dir;
+    this.fileDiscoveryService = null;
   }
 
   getProjectRoot(): string {

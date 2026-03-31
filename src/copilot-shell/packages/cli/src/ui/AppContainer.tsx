@@ -169,6 +169,15 @@ export const AppContainer = (props: AppContainerProps) => {
     config.isTrustedFolder(),
   );
 
+  const [startupWarnings, setStartupWarnings] = useState<string[]>(
+    props.startupWarnings || [],
+  );
+  const dismissWarning = useCallback((match: string) => {
+    setStartupWarnings((prev: string[]) =>
+      prev.filter((w: string) => !w.includes(match)),
+    );
+  }, []);
+
   const extensionManager = config.getExtensionManager();
 
   const { addConfirmUpdateExtensionRequest, confirmUpdateExtensionRequests } =
@@ -1664,7 +1673,8 @@ export const AppContainer = (props: AppContainerProps) => {
           <AppContext.Provider
             value={{
               version: props.version,
-              startupWarnings: props.startupWarnings || [],
+              startupWarnings,
+              dismissWarning,
             }}
           >
             <ShellFocusContext.Provider value={isFocused}>

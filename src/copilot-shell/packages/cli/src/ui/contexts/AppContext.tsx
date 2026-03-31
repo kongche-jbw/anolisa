@@ -9,6 +9,7 @@ import { createContext, useContext } from 'react';
 export interface AppState {
   version: string;
   startupWarnings: string[];
+  dismissWarning: (match: string) => void;
 }
 
 export const AppContext = createContext<AppState | null>(null);

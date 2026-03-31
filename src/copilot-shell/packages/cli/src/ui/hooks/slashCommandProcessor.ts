@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useCallback, useMemo, useEffect, useState } from 'react';
+import { useCallback, useMemo, useEffect, useState, useContext } from 'react';
 import { type PartListUnion } from '@google/genai';
 import type { UseHistoryManagerReturn } from './useHistoryManager.js';
 import {
@@ -18,6 +18,7 @@ import {
   IdeClient,
 } from '@copilot-shell/core';
 import { useSessionStats } from '../contexts/SessionContext.js';
+import { AppContext } from '../contexts/AppContext.js';
 import type {
   Message,
   HistoryItemWithoutId,
@@ -97,6 +98,11 @@ export const useSlashCommandProcessor = (
   logger: Logger | null,
 ) => {
   const { stats: sessionStats, startNewSession } = useSessionStats();
+  const appContext = useContext(AppContext);
+  const dismissWarning = useMemo(
+    () => appContext?.dismissWarning ?? ((_: string) => {}),
+    [appContext?.dismissWarning],
+  );
   const [commands, setCommands] = useState<readonly SlashCommand[]>([]);
   const [reloadTrigger, setReloadTrigger] = useState(0);
 
@@ -216,6 +222,7 @@ export const useSlashCommandProcessor = (
         dispatchExtensionStateUpdate: actions.dispatchExtensionStateUpdate,
         addConfirmUpdateExtensionRequest:
           actions.addConfirmUpdateExtensionRequest,
+        dismissStartupWarning: dismissWarning,
       },
       session: {
         stats: sessionStats,
@@ -242,6 +249,7 @@ export const useSlashCommandProcessor = (
       setGeminiMdFileCount,
       reloadCommands,
       extensionsUpdateState,
+      dismissWarning,
     ],
   );
 

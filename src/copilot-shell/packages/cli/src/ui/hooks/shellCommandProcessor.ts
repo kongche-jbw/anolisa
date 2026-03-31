@@ -286,7 +286,14 @@ export const useShellCommandProcessor = (
 
               if (pwdFilePath && fs.existsSync(pwdFilePath)) {
                 const finalPwd = fs.readFileSync(pwdFilePath, 'utf8').trim();
-                if (finalPwd && finalPwd !== targetDir) {
+                // Normalize both paths before comparing to avoid false positives
+                // from trailing slashes or platform path differences.
+                const normalizedFinalPwd = path.normalize(finalPwd);
+                const normalizedTargetDir = path.normalize(targetDir);
+                if (
+                  normalizedFinalPwd &&
+                  normalizedFinalPwd !== normalizedTargetDir
+                ) {
                   const warning = `WARNING: shell mode is stateless; the directory change to '${finalPwd}' will not persist.`;
                   finalOutput = `${warning}\n\n${finalOutput}`;
                 }

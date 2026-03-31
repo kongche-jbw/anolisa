@@ -78,6 +78,8 @@ export interface CommandContext {
     extensionsUpdateState: Map<string, ExtensionUpdateStatus>;
     dispatchExtensionStateUpdate: (action: ExtensionUpdateAction) => void;
     addConfirmUpdateExtensionRequest: (value: ConfirmationRequest) => void;
+    /** Removes startup warnings that contain the given match string. */
+    dismissStartupWarning?: (match: string) => void;
   };
   // Session-specific data
   session: {

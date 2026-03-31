@@ -31,7 +31,7 @@ const homeDirectoryCheck: WarningCheck = {
       ]);
 
       if (workspaceRealPath === homeRealPath) {
-        return 'You are running Copilot Shell in your home directory. It is recommended to run in a project-specific directory.';
+        return 'You are running Copilot Shell in your home directory. It is recommended to run in a project-specific directory. Use "/dir cd <path>" to switch to a project directory.';
       }
       return null;
     } catch (_err: unknown) {
