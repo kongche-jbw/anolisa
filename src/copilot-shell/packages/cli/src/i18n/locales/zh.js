@@ -360,6 +360,24 @@ export default {
   'Add directories to the workspace. Use comma to separate multiple paths':
     '将目录添加到工作区。使用逗号分隔多个路径',
   'Show all directories in the workspace': '显示工作区中的所有目录',
+  'Switch the working directory for the current session':
+    '切换当前会话的工作目录',
+  'Please provide a path to switch to. Usage: /dir cd <path>':
+    '请提供要切换的路径。用法：/dir cd <路径>',
+  'Directory "{{path}}" does not exist.': '目录 "{{path}}" 不存在。',
+  'Failed to change directory to "{{path}}": {{error}}':
+    '切换到目录 "{{path}}" 失败：{{error}}',
+  'Switched working directory to: {{path}}': '已切换工作目录到：{{path}}',
+  'You are running Copilot Shell in your home directory. It is recommended to run in a project-specific directory. Use "/dir cd <path>" to switch to a project directory.':
+    '您正在主目录中运行 Copilot Shell。建议在特定项目目录中运行。使用 "/dir cd <路径>" 切换到项目目录。',
+  'Warning: You are running Copilot Shell in the root directory. Your entire folder structure will be used for context. It is strongly recommended to run in a project-specific directory.':
+    '警告：您正在根目录中运行 Copilot Shell。整个目录结构将作为上下文使用。强烈建议在特定项目目录中运行。',
+  'Could not verify the current directory due to a file system error.':
+    '由于文件系统错误，无法验证当前目录。',
+  'Ripgrep not available: Please install ripgrep globally to enable faster file content search. Falling back to built-in grep.':
+    'Ripgrep 不可用：请全局安装 ripgrep 以启用更快的文件内容搜索。回退到内置 grep。',
+  'Ripgrep not available: {{message}}. Falling back to built-in grep.':
+    'Ripgrep 不可用：{{message}}。回退到内置 grep。',
   'set external editor preference': '设置外部编辑器首选项',
   'Select Editor': '选择编辑器',
   'Editor Preference': '编辑器首选项',

@@ -373,6 +373,26 @@ export default {
     'Add directories to the workspace. Use comma to separate multiple paths',
   'Show all directories in the workspace':
     'Show all directories in the workspace',
+  'Switch the working directory for the current session':
+    'Switch the working directory for the current session',
+  'Please provide a path to switch to. Usage: /dir cd <path>':
+    'Please provide a path to switch to. Usage: /dir cd <path>',
+  'Directory "{{path}}" does not exist.':
+    'Directory "{{path}}" does not exist.',
+  'Failed to change directory to "{{path}}": {{error}}':
+    'Failed to change directory to "{{path}}": {{error}}',
+  'Switched working directory to: {{path}}':
+    'Switched working directory to: {{path}}',
+  'You are running Copilot Shell in your home directory. It is recommended to run in a project-specific directory. Use "/dir cd <path>" to switch to a project directory.':
+    'You are running Copilot Shell in your home directory. It is recommended to run in a project-specific directory. Use "/dir cd <path>" to switch to a project directory.',
+  'Warning: You are running Copilot Shell in the root directory. Your entire folder structure will be used for context. It is strongly recommended to run in a project-specific directory.':
+    'Warning: You are running Copilot Shell in the root directory. Your entire folder structure will be used for context. It is strongly recommended to run in a project-specific directory.',
+  'Could not verify the current directory due to a file system error.':
+    'Could not verify the current directory due to a file system error.',
+  'Ripgrep not available: Please install ripgrep globally to enable faster file content search. Falling back to built-in grep.':
+    'Ripgrep not available: Please install ripgrep globally to enable faster file content search. Falling back to built-in grep.',
+  'Ripgrep not available: {{message}}. Falling back to built-in grep.':
+    'Ripgrep not available: {{message}}. Falling back to built-in grep.',
   'set external editor preference': 'set external editor preference',
   'Select Editor': 'Select Editor',
   'Editor Preference': 'Editor Preference',
