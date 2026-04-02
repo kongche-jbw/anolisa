@@ -1,0 +1,261 @@
+###############################################################################
+# PR Lint 门禁 — Commit Message + PR 标题 + 分支命名 + Merge 策略提示
+#
+# 规范要求：
+#   - Commit message 格式由 CI 强制校验，不合规的 commit 无法通过门禁
+#   - 所有分支必须携带 <scope> 标明归属子项目
+#   - PR 标题须符合 Conventional Commits（Squash Merge 场景）
+###############################################################################
+
+name: 🔍 PR Lint
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+    branches: [main, 'feature/**']
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  # =========================================================================
+  # Job 1: Commit Message Lint
+  # =========================================================================
+  commit-lint:
+    name: 📝 Commit Message Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Lint commit messages
+        uses: wagoid/commitlint-github-action@v6
+        with:
+          configFile: .github/commitlint.config.json
+
+  # =========================================================================
+  # Job 2: PR Title Validation
+  # =========================================================================
+  pr-title:
+    name: 📋 PR Title Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate PR title
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = context.payload.pull_request.title;
+            console.log(`PR Title: "${title}"`);
+
+            // Conventional Commits pattern: type(scope): description
+            // Optional ! for breaking changes
+            const pattern = /^(feat|fix|refactor|perf|docs|chore|test|ci|build|style|revert)(\(.+\))!?: .+/;
+
+            if (!pattern.test(title)) {
+              core.setFailed(
+                `❌ PR 标题不符合 Conventional Commits 格式。\n\n` +
+                `期望格式: type(scope): description\n` +
+                `示例: feat(cosh): add json output\n` +
+                `      fix(agent-sec-core): handle sandbox escape\n\n` +
+                `有效 type: feat, fix, refactor, perf, docs, chore, test, ci, build, style, revert\n` +
+                `有效 scope: cosh, agent-sec-core, os-skills, agentsight, deps, ci, docs, chore\n\n` +
+                `当前标题: "${title}"`
+              );
+              return;
+            }
+
+            // Validate scope
+            const scopeMatch = title.match(/^\w+\(([^)]+)\)/);
+            if (scopeMatch) {
+              const scope = scopeMatch[1];
+              const validScopes = [
+                'cosh', 'agent-sec-core', 'os-skills', 'agentsight',
+                'deps', 'ci', 'docs', 'chore'
+              ];
+              if (!validScopes.includes(scope)) {
+                core.setFailed(
+                  `❌ PR 标题中的 scope "${scope}" 不在允许列表中。\n\n` +
+                  `有效 scope: ${validScopes.join(', ')}\n\n` +
+                  `当前标题: "${title}"`
+                );
+                return;
+              }
+            }
+
+            console.log('✅ PR 标题格式正确');
+
+  # =========================================================================
+  # Job 3: Branch Name Validation
+  # =========================================================================
+  branch-name:
+    name: 🌿 Branch Name Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate branch name
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const branch = context.payload.pull_request.head.ref;
+            const baseBranch = context.payload.pull_request.base.ref;
+            console.log(`Head branch: "${branch}"`);
+            console.log(`Base branch: "${baseBranch}"`);
+
+            // Whitelist: these branches are always allowed
+            const whitelist = [
+              /^main$/,
+              /^dependabot\/.+/,
+              /^renovate\/.+/,
+              /^revert-.+/,
+            ];
+
+            for (const pattern of whitelist) {
+              if (pattern.test(branch)) {
+                console.log(`✅ Branch "${branch}" is whitelisted`);
+                return;
+              }
+            }
+
+            // Valid scopes
+            const validScopes = ['cosh', 'agent-sec-core', 'os-skills', 'agentsight'];
+            const scopePattern = validScopes.join('|');
+
+            // Valid branch patterns per development spec
+            const validPatterns = [
+              // feature/<scope>/<desc>
+              new RegExp(`^feature/(${scopePattern})/[a-z0-9][a-z0-9._-]*$`),
+              // feature/<scope>/<feature-name>/<task> (collaborative track)
+              new RegExp(`^feature/(${scopePattern})/[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*$`),
+              // fix/<scope>/<desc>
+              new RegExp(`^fix/(${scopePattern})/[a-z0-9][a-z0-9._-]*$`),
+              // release/<scope>/vX.Y
+              new RegExp(`^release/(${scopePattern})/v\\d+\\.\\d+$`),
+              // hotfix/<scope>/<desc>
+              new RegExp(`^hotfix/(${scopePattern})/[a-z0-9][a-z0-9._-]*$`),
+            ];
+
+            const isValid = validPatterns.some(p => p.test(branch));
+
+            if (!isValid) {
+              core.setFailed(
+                `❌ 分支名 "${branch}" 不符合命名规范。\n\n` +
+                `有效格式：\n` +
+                `  feature/<scope>/<short-desc>         例: feature/cosh/json-output\n` +
+                `  feature/<scope>/<name>/<task>         例: feature/cosh/auth-refactor/oauth\n` +
+                `  fix/<scope>/<short-desc>              例: fix/agent-sec-core/sandbox-escape\n` +
+                `  release/<scope>/vX.Y                  例: release/cosh/v2.1\n` +
+                `  hotfix/<scope>/<short-desc>           例: hotfix/os-skills/broken-load\n\n` +
+                `有效 scope: ${validScopes.join(', ')}\n` +
+                `分支名须使用小写字母、数字、短横线和点号`
+              );
+              return;
+            }
+
+            console.log('✅ 分支名格式正确');
+
+  # =========================================================================
+  # Job 4: Merge Strategy Hint
+  # =========================================================================
+  merge-hint:
+    name: 💡 Merge Strategy Hint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Suggest merge strategy
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const head = context.payload.pull_request.head.ref;
+            const base = context.payload.pull_request.base.ref;
+            const prNumber = context.payload.pull_request.number;
+
+            let strategy = '';
+            let label = '';
+
+            // Integration branch → main: Rebase Commit
+            // Pattern: feature/<scope>/<name> (3 segments, no task suffix) → main
+            const isIntegrationToMain = /^feature\/[^/]+\/[^/]+$/.test(head)
+              && base === 'main'
+              && false; // Disabled: same pattern as fast-track feature. See note below.
+
+            // Task branch → integration branch: Squash Merge
+            // Pattern: feature/<scope>/<name>/<task> → feature/<scope>/<name>
+            const isTaskToIntegration = /^feature\/[^/]+\/[^/]+\/[^/]+$/.test(head)
+              && /^feature\/[^/]+\/[^/]+$/.test(base);
+
+            // Feature/fix → main: Squash Merge (Fast Track)
+            const isFeatureToMain = (/^feature\//.test(head) || /^fix\//.test(head) || /^hotfix\//.test(head))
+              && base === 'main';
+
+            if (isTaskToIntegration) {
+              strategy = 'Squash Merge';
+              label = 'merge:squash';
+            } else if (isFeatureToMain) {
+              // For integration branches (Collaborative Track) merging to main,
+              // maintainers should manually select Rebase Merge.
+              // We default to Squash for safety (Fast Track is more common).
+              strategy = 'Squash Merge';
+              label = 'merge:squash';
+            }
+
+            if (!strategy) {
+              console.log('ℹ️ No merge strategy hint for this branch combination');
+              return;
+            }
+
+            console.log(`Suggested strategy: ${strategy} (${label})`);
+
+            // Add label
+            try {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                labels: [label]
+              });
+            } catch (e) {
+              console.log(`Note: Could not add label "${label}" — it may not exist yet. Create it manually.`);
+            }
+
+            // Check if we already left a merge hint comment
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+            });
+
+            const marker = '<!-- merge-strategy-hint -->';
+            const existing = comments.data.find(c => c.body.includes(marker));
+
+            const body = [
+              marker,
+              `## 💡 Merge Strategy Hint`,
+              ``,
+              `Based on branch pattern analysis:`,
+              `- **Head**: \`${head}\``,
+              `- **Base**: \`${base}\``,
+              ``,
+              `**Recommended merge method: ${strategy}**`,
+              ``,
+              strategy === 'Squash Merge'
+                ? `> 📌 Squash Merge 会将所有 commits 合并为一个，PR 标题将作为最终 commit message。请确保 PR 标题符合 Conventional Commits 格式。`
+                : `> 📌 Rebase Merge 会保留所有 commits 记录，便于追溯完整功能轨迹。`,
+              ``,
+              `> ⚠️ 如果这是**集成分支**（Collaborative Track）合入 main，请手动选择 **Rebase Merge**。`,
+            ].join('\n');
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body
+              });
+            }

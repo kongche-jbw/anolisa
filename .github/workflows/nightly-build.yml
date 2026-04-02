@@ -1,0 +1,217 @@
+name: Nightly Build
+
+on:
+  schedule:
+    # UTC 19:00 = Beijing 03:00
+    - cron: '0 19 * * *'
+  workflow_dispatch:
+    inputs:
+      component:
+        description: 'Which component to build (leave empty for all)'
+        required: false
+        type: choice
+        options:
+          - all
+          - copilot-shell
+          - agent-sec-core
+          - agentsight
+          - anolisa-skills
+        default: all
+
+permissions:
+  contents: read
+
+jobs:
+  # =========================================================================
+  # copilot-shell RPM
+  # =========================================================================
+  build-copilot-shell:
+    name: 'RPM: copilot-shell'
+    if: >-
+      github.event_name == 'schedule' ||
+      inputs.component == 'all' ||
+      inputs.component == 'copilot-shell'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install RPM build tools
+        run: sudo apt-get update && sudo apt-get install -y rpm
+
+      - name: Calculate version
+        id: version
+        run: |
+          git fetch --tags
+          GIT_DESC=$(git describe --tags --long --dirty --always)
+          echo "Git describe: $GIT_DESC"
+
+          if [[ "$GIT_DESC" == *-0-g* ]] && [[ "$GIT_DESC" != *-dirty ]]; then
+            RAW_TAG=${GIT_DESC%-0-g*}
+            VERSION=$(echo "${RAW_TAG}" | sed 's/^v//' | tr '-' '.')
+            echo "Mode: RELEASE"
+          else
+            BASE_TAG=$(echo "$GIT_DESC" | sed 's/-[0-9]*-g.*//')
+            BASE_VERSION=$(echo "${BASE_TAG}" | sed 's/^v//' | tr '-' '.')
+            COMMITS=$(echo "$GIT_DESC" | sed 's/.*-\([0-9]*\)-g.*/\1/')
+            HASH_PART=$(echo "$GIT_DESC" | sed 's/.*-g\([^ ]*\).*/\1/')
+            SHORT_HASH=$(echo "$HASH_PART" | sed 's/-dirty$//')
+            SUFFIX=""
+            [[ "$GIT_DESC" == *-dirty ]] && SUFFIX=".dirty"
+            VERSION="${BASE_VERSION}~nightly.${COMMITS}.${SHORT_HASH}${SUFFIX}"
+            echo "Mode: NIGHTLY"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "### copilot-shell" >> $GITHUB_STEP_SUMMARY
+          echo "- Git: \`$GIT_DESC\`" >> $GITHUB_STEP_SUMMARY
+          echo "- RPM Version: \`$VERSION\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Build RPM
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: ./scripts/rpm-build.sh copilot-shell
+
+      - name: Upload RPM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpm-copilot-shell
+          path: scripts/rpmbuild/RPMS/**/*.rpm
+          if-no-files-found: error
+          retention-days: 30
+
+  # =========================================================================
+  # agent-sec-core RPM
+  # =========================================================================
+  build-agent-sec-core:
+    name: 'RPM: agent-sec-core'
+    if: >-
+      github.event_name == 'schedule' ||
+      inputs.component == 'all' ||
+      inputs.component == 'agent-sec-core'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.93.0'
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/agent-sec-core/linux-sandbox
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm clang llvm libssl-dev libseccomp-dev
+
+      - name: Build RPM
+        run: ./scripts/rpm-build.sh agent-sec-core
+
+      - name: Upload RPM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpm-agent-sec-core
+          path: scripts/rpmbuild/RPMS/**/*.rpm
+          if-no-files-found: error
+          retention-days: 30
+
+  # =========================================================================
+  # agentsight RPM
+  # =========================================================================
+  build-agentsight:
+    name: 'RPM: agentsight'
+    if: >-
+      github.event_name == 'schedule' ||
+      inputs.component == 'all' ||
+      inputs.component == 'agentsight'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/agentsight
+
+      - name: Install eBPF build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm clang llvm libbpf-dev libelf-dev elfutils libssl-dev zlib1g-dev pkg-config
+          sudo apt-get install -y perl perl-modules
+
+      - name: Build RPM
+        run: ./scripts/rpm-build.sh agentsight
+
+      - name: Upload RPM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpm-agentsight
+          path: scripts/rpmbuild/RPMS/**/*.rpm
+          if-no-files-found: error
+          retention-days: 30
+
+  # =========================================================================
+  # anolisa-skills RPM
+  # =========================================================================
+  build-anolisa-skills:
+    name: 'RPM: anolisa-skills'
+    if: >-
+      github.event_name == 'schedule' ||
+      inputs.component == 'all' ||
+      inputs.component == 'anolisa-skills'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install RPM build tools
+        run: sudo apt-get update && sudo apt-get install -y rpm
+
+      - name: Calculate version
+        id: version
+        run: |
+          git fetch --tags
+          GIT_DESC=$(git describe --tags --long --dirty --always)
+
+          if [[ "$GIT_DESC" == *-0-g* ]] && [[ "$GIT_DESC" != *-dirty ]]; then
+            RAW_TAG=${GIT_DESC%-0-g*}
+            VERSION=$(echo "${RAW_TAG}" | sed 's/^v//' | tr '-' '.')
+          else
+            BASE_TAG=$(echo "$GIT_DESC" | sed 's/-[0-9]*-g.*//')
+            BASE_VERSION=$(echo "${BASE_TAG}" | sed 's/^v//' | tr '-' '.')
+            COMMITS=$(echo "$GIT_DESC" | sed 's/.*-\([0-9]*\)-g.*/\1/')
+            HASH_PART=$(echo "$GIT_DESC" | sed 's/.*-g\([^ ]*\).*/\1/')
+            SHORT_HASH=$(echo "$HASH_PART" | sed 's/-dirty$//')
+            SUFFIX=""
+            [[ "$GIT_DESC" == *-dirty ]] && SUFFIX=".dirty"
+            VERSION="${BASE_VERSION}~nightly.${COMMITS}.${SHORT_HASH}${SUFFIX}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "### anolisa-skills" >> $GITHUB_STEP_SUMMARY
+          echo "- Git: \`$GIT_DESC\`" >> $GITHUB_STEP_SUMMARY
+          echo "- RPM Version: \`$VERSION\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Build RPM
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: ./scripts/rpm-build.sh anolisa-skills
+
+      - name: Upload RPM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpm-anolisa-skills
+          path: scripts/rpmbuild/RPMS/**/*.rpm
+          if-no-files-found: error
+          retention-days: 30

@@ -1,0 +1,116 @@
+###############################################################################
+# ANOLISA 社区每日报告 - GitHub Actions Workflow
+#
+# 功能：
+#   1. 每天定时从上游仓库 (alibaba/anolisa) 拉取社区数据
+#   2. 生成中文日报（commits、issues、PRs、贡献者统计）
+#   3. 通过邮件发送报告
+#
+# 需要配置的 Secrets (Settings → Secrets → Actions):
+#   - MAIL_SERVER    : SMTP 服务器 (如 smtp.qq.com)
+#   - MAIL_PORT      : SMTP 端口 (如 465)
+#   - MAIL_USERNAME  : 邮箱账号
+#   - MAIL_PASSWORD  : 邮箱授权码（非登录密码）
+#   - MAIL_TO        : 收件人邮箱，多个用逗号分隔
+#
+# 可选 Variables (Settings → Variables → Actions):
+#   - UPSTREAM_REPO  : 上游仓库 (默认: alibaba/anolisa)
+###############################################################################
+
+name: 📊 ANOLISA 社区日报
+
+on:
+  schedule:
+    # 每天 UTC 00:00 运行 = 北京时间 08:00
+    - cron: '0 0 * * *'
+
+  workflow_dispatch:
+    inputs:
+      report_date:
+        description: '报告日期 (YYYY-MM-DD 格式，留空则为今天)'
+        required: false
+        type: string
+      skip_email:
+        description: '跳过邮件发送（仅生成报告）'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  UPSTREAM_REPO: ${{ vars.UPSTREAM_REPO || 'alibaba/anolisa' }}
+
+jobs:
+  generate-and-send-report:
+    name: 📊 生成并发送日报
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      # -----------------------------------------------------------------
+      # 1. 检出仓库（获取脚本）
+      # -----------------------------------------------------------------
+      - name: 📥 检出仓库
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------
+      # 2. 安装 jq（ubuntu-latest 通常已预装）
+      # -----------------------------------------------------------------
+      - name: 🔧 确认 jq 已安装
+        run: |
+          jq --version || sudo apt-get install -y jq
+
+      # -----------------------------------------------------------------
+      # 3. 运行报告生成脚本
+      # -----------------------------------------------------------------
+      - name: 📊 生成社区日报
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          chmod +x .github/scripts/generate-daily-report.sh
+          REPORT_DATE="${{ inputs.report_date || '' }}"
+          .github/scripts/generate-daily-report.sh "$REPORT_DATE" > report.md
+          echo "--- 生成的报告预览 (前 50 行) ---"
+          head -50 report.md
+
+      # -----------------------------------------------------------------
+      # 4. 将报告内容设置为环境变量（供邮件步骤使用）
+      # -----------------------------------------------------------------
+      - name: 📋 准备邮件内容
+        if: ${{ !inputs.skip_email }}
+        run: |
+          {
+            echo 'REPORT_BODY<<ENDOFREPORT'
+            cat report.md
+            echo 'ENDOFREPORT'
+          } >> "$GITHUB_ENV"
+
+      # -----------------------------------------------------------------
+      # 5. 发送邮件
+      # -----------------------------------------------------------------
+      - name: 📧 发送邮件报告
+        if: ${{ !inputs.skip_email }}
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.MAIL_SERVER }}
+          server_port: ${{ secrets.MAIL_PORT }}
+          secure: true
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "📊 ANOLISA 社区日报 - ${{ env.REPORT_DATE }}"
+          to: ${{ secrets.MAIL_TO }}
+          from: "ANOLISA Daily Report <${{ secrets.MAIL_USERNAME }}>"
+          body: ${{ env.REPORT_BODY }}
+          convert_markdown: true
+          attachments: report.md
+
+      # -----------------------------------------------------------------
+      # 6. 保存报告为 Artifact（保留 90 天）
+      # -----------------------------------------------------------------
+      - name: 📦 上传报告 Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-report-${{ env.REPORT_DATE }}
+          path: report.md
+          retention-days: 90

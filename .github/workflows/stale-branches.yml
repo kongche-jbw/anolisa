@@ -1,0 +1,151 @@
+###############################################################################
+# Stale Branch 统一提醒
+#
+# 规范要求：
+#   feature/fix 分支生命周期不超过 2 周，超期须 rebase 或关闭
+#
+# 实现：
+#   每周一扫描所有 feature/** 和 fix/** 远端分支，
+#   将 > 14 天无 commit 的分支汇总到一个 Issue 中提醒。
+###############################################################################
+
+name: 🧹 Stale Branch Reminder
+
+on:
+  schedule:
+    # 每周一 UTC 00:00 = 北京 08:00
+    - cron: '0 0 * * 1'
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  check-stale:
+    name: 🔍 Check stale branches
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Find stale branches
+        id: stale
+        run: |
+          echo "🔍 Scanning for stale branches (>14 days inactive)..."
+
+          CUTOFF=$(date -d '14 days ago' +%s 2>/dev/null || date -v-14d +%s)
+          STALE_BRANCHES=""
+          STALE_COUNT=0
+
+          # Fetch all remote branches
+          git fetch --all --prune
+
+          for branch in $(git branch -r --format='%(refname:short)' | grep -E '^origin/(feature|fix)/'); do
+            # Strip origin/ prefix
+            BRANCH_NAME="${branch#origin/}"
+
+            # Get last commit date
+            LAST_COMMIT_DATE=$(git log -1 --format='%ct' "$branch" 2>/dev/null || echo "0")
+            LAST_COMMIT_HUMAN=$(git log -1 --format='%ci' "$branch" 2>/dev/null || echo "unknown")
+            LAST_AUTHOR=$(git log -1 --format='%an' "$branch" 2>/dev/null || echo "unknown")
+
+            if [ "$LAST_COMMIT_DATE" -lt "$CUTOFF" ]; then
+              DAYS_AGO=$(( ($(date +%s) - LAST_COMMIT_DATE) / 86400 ))
+              STALE_BRANCHES="${STALE_BRANCHES}| \`${BRANCH_NAME}\` | ${LAST_AUTHOR} | ${DAYS_AGO} 天前 | ${LAST_COMMIT_HUMAN%% *} |\n"
+              STALE_COUNT=$((STALE_COUNT + 1))
+            fi
+          done
+
+          echo "stale_count=$STALE_COUNT" >> $GITHUB_OUTPUT
+
+          if [ "$STALE_COUNT" -eq 0 ]; then
+            echo "✅ No stale branches found"
+            echo "body=没有超期分支 🎉" >> $GITHUB_OUTPUT
+          else
+            echo "⚠️ Found $STALE_COUNT stale branches"
+            BODY="## 🧹 超期分支清理提醒\n\n"
+            BODY+="以下 **${STALE_COUNT}** 个 \`feature/\` 或 \`fix/\` 分支已超过 **14 天**未活跃。\n"
+            BODY+="根据开发规范，分支生命周期不应超过 2 周，请及时 rebase 或关闭。\n\n"
+            BODY+="| 分支 | 最后提交者 | 空闲时间 | 最后提交日期 |\n"
+            BODY+="|------|-----------|---------|-------------|\n"
+            BODY+="${STALE_BRANCHES}\n"
+            BODY+="> 🤖 此 Issue 由 Stale Branch Reminder 自动生成/更新，每周一检查一次。"
+
+            # Write to file for multiline support
+            echo -e "$BODY" > /tmp/stale-body.md
+            echo "body_file=/tmp/stale-body.md" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create or update reminder Issue
+        if: steps.stale.outputs.stale_count != '0'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const bodyFile = '${{ steps.stale.outputs.body_file }}';
+            const body = fs.readFileSync(bodyFile, 'utf-8');
+            const title = '🧹 Stale branches cleanup reminder';
+
+            // Search for existing issue with same title
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'maintenance',
+              per_page: 100
+            });
+
+            const existing = issues.data.find(i => i.title === title);
+
+            if (existing) {
+              console.log(`Updating existing issue #${existing.number}`);
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body
+              });
+            } else {
+              console.log('Creating new stale branches issue');
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ['maintenance']
+              });
+            }
+
+      - name: Close reminder if no stale branches
+        if: steps.stale.outputs.stale_count == '0'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = '🧹 Stale branches cleanup reminder';
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'maintenance',
+              per_page: 100
+            });
+
+            const existing = issues.data.find(i => i.title === title);
+            if (existing) {
+              console.log(`Closing issue #${existing.number} — no more stale branches`);
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                state: 'closed',
+                state_reason: 'completed'
+              });
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body: '✅ 所有超期分支已清理完毕，自动关闭此 Issue。'
+              });
+            }

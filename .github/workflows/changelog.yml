@@ -1,0 +1,130 @@
+###############################################################################
+# CHANGELOG 半自动生成
+#
+# 规范要求：
+#   使用 git-cliff 半自动生成，仓库根目录维护唯一一份公共 cliff.toml，
+#   通过 --include-path 参数限定各子项目路径。
+#   生成后由维护者做最终人工校对，再提交进发布 PR。
+#
+# 使用方式：
+#   通过 workflow_dispatch 手动触发，选择 scope 和上一个 tag
+###############################################################################
+
+name: 📝 Generate CHANGELOG
+
+on:
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: 'Component scope'
+        required: true
+        type: choice
+        options:
+          - cosh
+          - agent-sec-core
+          - agentsight
+          - os-skills
+      previous_tag:
+        description: 'Previous tag (e.g. cosh/v2.0.0). Leave empty to generate full changelog.'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  generate:
+    name: 📝 Generate CHANGELOG
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install git-cliff
+        run: |
+          curl -sSfL https://github.com/orhun/git-cliff/releases/latest/download/git-cliff-x86_64-unknown-linux-gnu.tar.gz \
+            | tar -xz -C /usr/local/bin/
+
+      - name: Determine paths
+        id: config
+        run: |
+          SCOPE="${{ inputs.scope }}"
+          PREV_TAG="${{ inputs.previous_tag }}"
+
+          case "$SCOPE" in
+            cosh)
+              INCLUDE_PATH="src/copilot-shell/**"
+              OUTPUT_PATH="src/copilot-shell/CHANGELOG.md"
+              ;;
+            agent-sec-core)
+              INCLUDE_PATH="src/agent-sec-core/**"
+              OUTPUT_PATH="src/agent-sec-core/CHANGELOG.md"
+              ;;
+            agentsight)
+              INCLUDE_PATH="src/agentsight/**"
+              OUTPUT_PATH="src/agentsight/CHANGELOG.md"
+              ;;
+            os-skills)
+              INCLUDE_PATH="src/os-skills/**"
+              OUTPUT_PATH="src/os-skills/CHANGELOG.md"
+              ;;
+          esac
+
+          echo "include_path=$INCLUDE_PATH" >> $GITHUB_OUTPUT
+          echo "output_path=$OUTPUT_PATH" >> $GITHUB_OUTPUT
+          echo "scope=$SCOPE" >> $GITHUB_OUTPUT
+
+          if [ -n "$PREV_TAG" ]; then
+            echo "range=${PREV_TAG}..HEAD" >> $GITHUB_OUTPUT
+          else
+            echo "range=" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate CHANGELOG
+        run: |
+          RANGE="${{ steps.config.outputs.range }}"
+          INCLUDE="${{ steps.config.outputs.include_path }}"
+          OUTPUT="${{ steps.config.outputs.output_path }}"
+
+          echo "📝 Generating CHANGELOG..."
+          echo "  Range: ${RANGE:-'(full history)'}"
+          echo "  Include: $INCLUDE"
+          echo "  Output: $OUTPUT"
+
+          if [ -n "$RANGE" ]; then
+            git cliff $RANGE \
+              --include-path "$INCLUDE" \
+              -o "$OUTPUT"
+          else
+            git cliff \
+              --include-path "$INCLUDE" \
+              -o "$OUTPUT"
+          fi
+
+          echo "### Generated CHANGELOG" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          head -50 "$OUTPUT" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Create PR
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore(${{ steps.config.outputs.scope }}): update CHANGELOG"
+          title: "chore(${{ steps.config.outputs.scope }}): update CHANGELOG"
+          body: |
+            ## 📝 CHANGELOG 自动生成
+
+            **Scope**: `${{ steps.config.outputs.scope }}`
+            **Range**: `${{ steps.config.outputs.range || '(full history)' }}`
+            **Include path**: `${{ steps.config.outputs.include_path }}`
+
+            ---
+
+            > 🤖 由 CHANGELOG Generator 自动生成。
+            > 请 review CHANGELOG 内容，确认无误后合入。
+          branch: chore/changelog-${{ steps.config.outputs.scope }}
+          delete-branch: true
+          labels: docs

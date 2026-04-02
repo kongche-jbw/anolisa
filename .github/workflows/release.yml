@@ -1,0 +1,295 @@
+###############################################################################
+# Tag Push → 正式 Release 构建
+#
+# 规范要求：
+#   - Tag push 后触发 CI 自动执行 RPM 构建与发布
+#   - Tag 命名格式: <scope>/vX.Y.Z
+#   - Tag 只在 main 分支上创建，必须使用 annotated tag
+#   - 产物上传到 GitHub Releases
+###############################################################################
+
+name: 🚀 Release
+
+on:
+  push:
+    tags:
+      - 'cosh/v*'
+      - 'agent-sec-core/v*'
+      - 'agentsight/v*'
+      - 'os-skills/v*'
+
+permissions:
+  contents: write
+
+jobs:
+  # =========================================================================
+  # Step 1: Validate tag & determine build target
+  # =========================================================================
+  validate:
+    name: 🔍 Validate Tag
+    runs-on: ubuntu-latest
+    outputs:
+      scope: ${{ steps.parse.outputs.scope }}
+      version: ${{ steps.parse.outputs.version }}
+      build_target: ${{ steps.parse.outputs.build_target }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Parse tag
+        id: parse
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          echo "🏷️ Tag: $TAG"
+
+          # Extract scope and version
+          SCOPE=$(echo "$TAG" | sed 's|/v.*||')
+          VERSION=$(echo "$TAG" | sed 's|.*/v||')
+
+          echo "scope=$SCOPE" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+          # Map scope → rpm-build.sh argument
+          case "$SCOPE" in
+            cosh)           BUILD_TARGET="copilot-shell" ;;
+            agent-sec-core) BUILD_TARGET="agent-sec-core" ;;
+            agentsight)     BUILD_TARGET="agentsight" ;;
+            os-skills)      BUILD_TARGET="anolisa-skills" ;;
+            *)
+              echo "❌ Unknown scope: $SCOPE"
+              exit 1
+              ;;
+          esac
+          echo "build_target=$BUILD_TARGET" >> $GITHUB_OUTPUT
+
+          echo "### Release Validation" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Tag | \`$TAG\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Scope | \`$SCOPE\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Version | \`$VERSION\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build Target | \`$BUILD_TARGET\` |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Validate tag format
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+
+          # Check version format (semver)
+          VERSION="${{ steps.parse.outputs.version }}"
+          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "❌ Version '$VERSION' does not match semver X.Y.Z"
+            exit 1
+          fi
+
+          # Check annotated tag
+          TAG_TYPE=$(git cat-file -t "$TAG" 2>/dev/null || echo "unknown")
+          if [ "$TAG_TYPE" != "tag" ]; then
+            echo "⚠️ Tag '$TAG' is not an annotated tag (type: $TAG_TYPE)"
+            echo "建议使用: git tag -a $TAG -m 'release message'"
+            # Warning only, don't fail — lightweight tags still trigger builds
+          fi
+
+          # Check tag is on main branch
+          TAG_COMMIT=$(git rev-list -n 1 "$TAG")
+          if git branch -r --contains "$TAG_COMMIT" | grep -q 'origin/main'; then
+            echo "✅ Tag is on main branch"
+          else
+            echo "⚠️ Tag commit is not on main branch. Per spec, tags should only be created on main."
+          fi
+
+          echo "✅ Tag validation passed"
+
+  # =========================================================================
+  # Step 2: Build RPM — copilot-shell
+  # =========================================================================
+  build-copilot-shell:
+    name: '📦 Build copilot-shell'
+    needs: validate
+    if: needs.validate.outputs.build_target == 'copilot-shell'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: src/copilot-shell/package-lock.json
+
+      - name: Install RPM build tools
+        run: sudo apt-get update && sudo apt-get install -y rpm
+
+      - name: Build RPM
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: ./scripts/rpm-build.sh copilot-shell
+
+      - name: Upload RPM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpm-release
+          path: scripts/rpmbuild/RPMS/**/*.rpm
+          if-no-files-found: error
+
+  # =========================================================================
+  # Step 2: Build RPM — agent-sec-core
+  # =========================================================================
+  build-agent-sec-core:
+    name: '📦 Build agent-sec-core'
+    needs: validate
+    if: needs.validate.outputs.build_target == 'agent-sec-core'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.93.0'
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/agent-sec-core/linux-sandbox
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm clang llvm libssl-dev libseccomp-dev
+
+      - name: Build RPM
+        run: ./scripts/rpm-build.sh agent-sec-core
+
+      - name: Upload RPM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpm-release
+          path: scripts/rpmbuild/RPMS/**/*.rpm
+          if-no-files-found: error
+
+  # =========================================================================
+  # Step 2: Build RPM — agentsight
+  # =========================================================================
+  build-agentsight:
+    name: '📦 Build agentsight'
+    needs: validate
+    if: needs.validate.outputs.build_target == 'agentsight'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/agentsight
+
+      - name: Install eBPF build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm clang llvm libbpf-dev libelf-dev elfutils libssl-dev zlib1g-dev pkg-config
+          sudo apt-get install -y perl perl-modules
+
+      - name: Build RPM
+        run: ./scripts/rpm-build.sh agentsight
+
+      - name: Upload RPM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpm-release
+          path: scripts/rpmbuild/RPMS/**/*.rpm
+          if-no-files-found: error
+
+  # =========================================================================
+  # Step 2: Build RPM — anolisa-skills (os-skills)
+  # =========================================================================
+  build-anolisa-skills:
+    name: '📦 Build os-skills'
+    needs: validate
+    if: needs.validate.outputs.build_target == 'anolisa-skills'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install RPM build tools
+        run: sudo apt-get update && sudo apt-get install -y rpm
+
+      - name: Build RPM
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: ./scripts/rpm-build.sh anolisa-skills
+
+      - name: Upload RPM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpm-release
+          path: scripts/rpmbuild/RPMS/**/*.rpm
+          if-no-files-found: error
+
+  # =========================================================================
+  # Step 3: Create GitHub Release
+  # =========================================================================
+  publish:
+    name: '🎉 Create GitHub Release'
+    needs:
+      - validate
+      - build-copilot-shell
+      - build-agent-sec-core
+      - build-agentsight
+      - build-anolisa-skills
+    # Run if validate succeeded AND at least one build succeeded
+    if: |
+      always() &&
+      needs.validate.result == 'success' &&
+      (needs.build-copilot-shell.result == 'success' ||
+       needs.build-agent-sec-core.result == 'success' ||
+       needs.build-agentsight.result == 'success' ||
+       needs.build-anolisa-skills.result == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download RPM artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: rpm-release
+          path: rpms/
+
+      - name: Extract tag message for release notes
+        id: notes
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          # Try to get annotated tag message
+          MESSAGE=$(git tag -l --format='%(contents)' "$TAG" 2>/dev/null || echo "")
+          if [ -z "$MESSAGE" ]; then
+            MESSAGE="Release $TAG"
+          fi
+          # Write to file for multiline support
+          echo "$MESSAGE" > /tmp/release-notes.md
+
+          echo "### 📦 RPM Artifacts" >> /tmp/release-notes.md
+          echo "" >> /tmp/release-notes.md
+          find rpms/ -name "*.rpm" -type f | while read -r f; do
+            echo "- \`$(basename "$f")\`" >> /tmp/release-notes.md
+          done
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "${{ needs.validate.outputs.scope }} v${{ needs.validate.outputs.version }}"
+          body_path: /tmp/release-notes.md
+          files: rpms/**/*.rpm
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

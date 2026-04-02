@@ -1,0 +1,70 @@
+# =============================================================================
+# git-cliff 公共配置 — ANOLISA 所有子项目共用
+# =============================================================================
+#
+# 使用方式（以 copilot-shell 为例）：
+#   git cliff cosh/v2.0.0..HEAD \
+#     --include-path "src/copilot-shell/**" \
+#     -o src/copilot-shell/CHANGELOG.md
+#
+# Commit Type → CHANGELOG Section 映射（依据开发规范）：
+#   feat              → Added
+#   fix               → Fixed
+#   refactor, perf    → Changed
+#   feat! / BREAKING  → Breaking Changes
+#   docs, chore, test, ci → 不出现
+# =============================================================================
+
+[changelog]
+header = """# Changelog\n
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).\n
+"""
+body = """
+{%- macro remote_url() -%}
+  https://github.com/alibaba/anolisa
+{%- endmacro -%}
+
+{% if version -%}
+## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else -%}
+## [Unreleased]
+{% endif -%}
+
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | upper_first }}
+{% for commit in commits %}
+- {% if commit.scope %}**{{ commit.scope }}**: {% endif %}{{ commit.message | upper_first }}\
+{% endfor %}
+{% endfor -%}
+"""
+footer = ""
+trim = true
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+split_commits = false
+
+commit_parsers = [
+  { message = "^feat", group = "Added" },
+  { message = "^fix", group = "Fixed" },
+  { message = "^refactor", group = "Changed" },
+  { message = "^perf", group = "Changed" },
+  # These types are excluded from CHANGELOG per spec
+  { message = "^doc", skip = true },
+  { message = "^docs", skip = true },
+  { message = "^chore", skip = true },
+  { message = "^test", skip = true },
+  { message = "^ci", skip = true },
+  { message = "^build", skip = true },
+  { message = "^style", skip = true },
+  { message = "^revert", group = "Reverted" },
+]
+
+protect_breaking_commits = true
+filter_commits = false
+tag_pattern = "**/v[0-9]*"
+sort_commits = "newest"
