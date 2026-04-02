@@ -80,7 +80,7 @@ Then run the build script. By default it installs dependencies, builds, and inst
 
 ### 3.2 Important Notes
 
-1. Node.js and Rust should be installed from upstream installers (nvm / rustup), not pinned to distro packages.
+1. The build script tries system packages first and falls back to upstream installers (nvm / rustup) when system versions don't meet requirements.
 2. os-skills are mostly static assets and do not require compilation.
 3. AgentSight is **optional** — it provides audit and observability capabilities but is not required for core functionality. It is excluded from default builds; use `--component sight` to include it.
 4. AgentSight system dependencies (clang/llvm/libbpf/kernel headers) should be installed through your distro package manager.
@@ -112,11 +112,14 @@ sudo dnf install -y nodejs npm make gcc-c++
 if command -v node &>/dev/null && node -v | grep -qE '^v(2[0-9]|[3-9][0-9])'; then
   echo "Node.js $(node -v) already installed, skipping"
 else
-  # Install nvm
-  curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+  # Install nvm (fallback to Gitee mirror if GitHub is unreachable)
+  curl -fsSL --connect-timeout 15 https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash \
+    || curl -fsSL https://gitee.com/mirrors/nvm/raw/v0.40.3/install.sh | bash
   source "$HOME/.$(basename "$SHELL")rc"
 
   # Install and activate Node.js 20+
+  # Use npmmirror.com if default download is slow
+  # export NVM_NODEJS_ORG_MIRROR=https://npmmirror.com/mirrors/node/
   nvm install 20
   nvm use 20
 fi
@@ -131,10 +134,11 @@ npm -v    # expected: 10.x.x or higher
 
 Required: agent-sec-core needs Rust >= 1.91.0; agentsight needs Rust >= 1.80.
 
-**Alinux 4 (verified)**
+**Alinux 4 (verified)** — the system `rust` package is below 1.91.0; use rustup instead (see below).
+Only install the build tools from dnf:
 
 ```bash
-sudo dnf install -y rust cargo gcc make
+sudo dnf install -y gcc make
 ```
 
 **Ubuntu 24.04 (verified)**
@@ -144,16 +148,20 @@ sudo apt install -y rustc-1.91 cargo-1.91 gcc make
 sudo update-alternatives --install /usr/bin/cargo cargo /usr/bin/cargo-1.91 100
 ```
 
-> The system `rust` package may be older than 1.93.0. If agent-sec-core build fails due to version mismatch, use rustup below instead.
+> The system `rust` package on some distros may be older than 1.91.0. If the build fails due to version mismatch, use rustup below.
 
-**Other distros: rustup**
+**Other distros / Alinux 4: rustup (recommended)**
 
 ```bash
 # Skip if Rust is already installed
 if command -v rustc &>/dev/null && command -v cargo &>/dev/null; then
   echo "Rust $(rustc --version) already installed, skipping"
 else
-  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+  # Install Rust (fallback: Aliyun internal → Aliyun public → rsproxy.cn)
+  curl --proto '=https' --tlsv1.2 -sSf --connect-timeout 15 https://sh.rustup.rs | sh -s -- -y \
+    || curl -sSf --connect-timeout 5 http://mirrors.cloud.aliyuncs.com/repo/rust/rustup-init.sh | sh -s -- -y \
+    || curl --proto '=https' --tlsv1.2 -sSf --connect-timeout 15 https://mirrors.aliyun.com/repo/rust/rustup-init.sh | sh -s -- -y \
+    || curl --proto '=https' --tlsv1.2 -sSf https://rsproxy.cn/rustup-init.sh | sh -s -- -y
   source "$HOME/.cargo/env"
 fi
 
@@ -163,6 +171,21 @@ cargo --version   # expected: cargo 1.91.0 or higher
 ```
 
 > The repository uses a pinned toolchain (`rust-toolchain.toml`) for agent-sec-core. If the system Rust version does not match, rustup will automatically download the correct version when building inside the repo.
+
+**Configure crates.io mirror (recommended for China users)**
+
+If `cargo build` is slow fetching dependencies, configure an Aliyun crates.io mirror.
+The build script (`build-all.sh`) configures this automatically regardless of how Rust is installed.
+For manual setup, add to `~/.cargo/config.toml`:
+
+```toml
+[source.crates-io]
+replace-with = 'aliyun'
+[source.aliyun]
+registry = "sparse+https://mirrors.aliyun.com/crates.io-index/"
+```
+
+> On Aliyun ECS (VPC), replace `mirrors.aliyun.com` with `mirrors.cloud.aliyuncs.com` for faster internal access. See [Aliyun Rustup Mirror](https://developer.aliyun.com/mirror/rustup) for details.
 
 ---
 
@@ -193,7 +216,9 @@ pipx install uv
 if command -v uv &>/dev/null; then
   echo "uv $(uv --version) already installed, skipping"
 else
-  curl -LsSf https://astral.sh/uv/install.sh | sh
+  # Install uv (fallback to GitHub mirror if astral.sh is unreachable)
+  curl -LsSf --connect-timeout 15 https://astral.sh/uv/install.sh | sh \
+    || curl -LsSf https://github.com/astral-sh/uv/releases/latest/download/uv-installer.sh | sh
   source "$HOME/.$(basename "$SHELL")rc"
 fi
 
