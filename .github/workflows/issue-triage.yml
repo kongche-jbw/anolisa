@@ -1,0 +1,222 @@
+###############################################################################
+# ANOLISA Issue 分诊 — 自动分配 + 邮件通知 + 钉钉通知
+#
+# 功能：
+#   当 Issue 被打上 component:xxx 标签后：
+#   1. 读取 .github/maintainers.yml 找到对应的维护者
+#   2. 自动将维护者 Assign 到 Issue
+#   3. 发表 Comment 通知维护者
+#   4. 通过邮件通知维护者（复用 daily-report 的邮件 Secrets）
+#   5. 通过钉钉 Webhook 推送通知到群
+#
+# 需要配置的 Secrets (Settings → Secrets → Actions):
+#   邮件（与 daily-community-report 共用）：
+#   - MAIL_SERVER        : SMTP 服务器
+#   - MAIL_PORT          : SMTP 端口
+#   - MAIL_USERNAME      : 邮箱账号
+#   - MAIL_PASSWORD      : 邮箱授权码
+#   - MAIL_TO            : 兜底收件人（维护者无 email 时使用）
+#   钉钉：
+#   - DINGTALK_WEBHOOK   : 钉钉机器人 Webhook 完整 URL
+#   - DINGTALK_SECRET    : 钉钉机器人加签密钥 (SEC...)
+###############################################################################
+
+name: 🔀 Issue Triage
+
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  assign-and-notify:
+    name: 📌 Assign & Notify Maintainers
+    runs-on: ubuntu-latest
+    # 仅在 component:xxx 标签触发时运行
+    if: startsWith(github.event.label.name, 'component:')
+
+    steps:
+      # ---------------------------------------------------------------
+      # 1. 检出仓库（获取 maintainers.yml）
+      # ---------------------------------------------------------------
+      - name: 📥 检出仓库
+        uses: actions/checkout@v4
+
+      # ---------------------------------------------------------------
+      # 2. 安装 yq（YAML 解析工具）
+      # ---------------------------------------------------------------
+      - name: 🔧 安装 yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq \
+            "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64"
+          sudo chmod +x /usr/local/bin/yq
+
+      # ---------------------------------------------------------------
+      # 3. 读取 maintainers.yml 解析对应维护者
+      # ---------------------------------------------------------------
+      - name: 🔍 解析维护者配置
+        id: config
+        run: |
+          LABEL="${{ github.event.label.name }}"
+          echo "🏷️ 触发标签: $LABEL"
+
+          # 从 maintainers.yml 中查找匹配 label 的 scope
+          MAINTAINERS=$(yq -r \
+            ".scopes[] | select(.label == \"$LABEL\") | .maintainers[].github" \
+            .github/maintainers.yml 2>/dev/null | tr '\n' ',' | sed 's/,$//')
+
+          # 如果没有匹配到，使用 default
+          if [ -z "$MAINTAINERS" ]; then
+            echo "⚠️ 未找到匹配，使用默认维护者"
+            MAINTAINERS=$(yq -r \
+              ".default.maintainers[].github" \
+              .github/maintainers.yml 2>/dev/null | tr '\n' ',' | sed 's/,$//')
+          fi
+
+          echo "👤 维护者: $MAINTAINERS"
+          echo "maintainers=$MAINTAINERS" >> "$GITHUB_OUTPUT"
+
+      # ---------------------------------------------------------------
+      # 4. 自动 Assign 维护者 + 留 Comment
+      # ---------------------------------------------------------------
+      - name: 📌 分配维护者
+        if: steps.config.outputs.maintainers != ''
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const maintainers = '${{ steps.config.outputs.maintainers }}'
+              .split(',')
+              .map(s => s.trim())
+              .filter(Boolean);
+
+            if (maintainers.length === 0) {
+              console.log('No maintainers to assign.');
+              return;
+            }
+
+            console.log(`Assigning: ${maintainers.join(', ')}`);
+
+            // Assign 维护者
+            await github.rest.issues.addAssignees({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              assignees: maintainers
+            });
+
+            // 发表 Comment 通知
+            const mentionList = maintainers.map(m => `@${m}`).join(' ');
+            const label = '${{ github.event.label.name }}';
+            const scopeName = label.replace('component:', '');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: [
+                `## 🔀 Issue Triage`,
+                ``,
+                `This issue has been automatically assigned to **${mentionList}** ` +
+                `as the maintainer(s) of \`${scopeName}\`.`,
+                ``,
+                `> Maintainers, please review and triage this issue. ` +
+                `Set a priority label and update the status as needed. Thanks! 🙏`
+              ].join('\n')
+            });
+
+      # ---------------------------------------------------------------
+      # 5. 邮件通知维护者
+      # ---------------------------------------------------------------
+      - name: 📧 发送邮件通知
+        if: steps.config.outputs.maintainers != ''
+        env:
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+          MAIL_SERVER: ${{ secrets.MAIL_SERVER }}
+        run: |
+          if [ -z "$MAIL_TO" ] || [ -z "$MAIL_SERVER" ]; then
+            echo "⏭️ 邮件 Secrets 未配置，跳过邮件通知"
+          else
+            echo "mail_configured=true" >> "$GITHUB_OUTPUT"
+          fi
+        id: mail-check
+
+      - name: 📧 执行邮件发送
+        if: steps.mail-check.outputs.mail_configured == 'true'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.MAIL_SERVER }}
+          server_port: ${{ secrets.MAIL_PORT }}
+          secure: true
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "🆕 [${{ github.event.label.name }}] Issue #${{ github.event.issue.number }}: ${{ github.event.issue.title }}"
+          to: ${{ secrets.MAIL_TO }}
+          from: "ANOLISA Bot <${{ secrets.MAIL_USERNAME }}>"
+          body: |
+            # 新 Issue 通知
+
+            **仓库**: ${{ github.repository }}
+            **Issue**: #${{ github.event.issue.number }}
+            **标题**: ${{ github.event.issue.title }}
+            **标签**: ${{ github.event.label.name }}
+            **分配给**: ${{ steps.config.outputs.maintainers }}
+            **提交者**: ${{ github.event.issue.user.login }}
+
+            ---
+
+            **链接**: ${{ github.event.issue.html_url }}
+
+            ---
+
+            > 此邮件由 ANOLISA Issue Triage Bot 自动发送。
+          convert_markdown: true
+
+      # ---------------------------------------------------------------
+      # 6. 钉钉 Webhook 通知（加签模式）
+      # ---------------------------------------------------------------
+      - name: 🔔 发送钉钉通知
+        if: steps.config.outputs.maintainers != ''
+        env:
+          DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
+          DINGTALK_SECRET: ${{ secrets.DINGTALK_SECRET }}
+        run: |
+          # 如果未配置钉钉 Webhook 则跳过
+          if [ -z "$DINGTALK_WEBHOOK" ] || [ -z "$DINGTALK_SECRET" ]; then
+            echo "⏭️ 钉钉 Webhook 未配置，跳过通知"
+            exit 0
+          fi
+          # ---- 计算加签签名 ----
+          TIMESTAMP=$(date +%s%3N)
+          STRING_TO_SIGN="${TIMESTAMP}\n${DINGTALK_SECRET}"
+          SIGN=$(echo -ne "$STRING_TO_SIGN" \
+            | openssl dgst -sha256 -hmac "$DINGTALK_SECRET" -binary \
+            | base64)
+          ENCODED_SIGN=$(python3 -c "import urllib.parse; print(urllib.parse.quote_plus('$SIGN'))")
+
+          WEBHOOK_URL="${DINGTALK_WEBHOOK}&timestamp=${TIMESTAMP}&sign=${ENCODED_SIGN}"
+
+          # ---- 构建消息体 ----
+          LABEL="${{ github.event.label.name }}"
+          SCOPE_NAME="${LABEL#component:}"
+          ISSUE_NUM="${{ github.event.issue.number }}"
+          ISSUE_TITLE="${{ github.event.issue.title }}"
+          ISSUE_URL="${{ github.event.issue.html_url }}"
+          ISSUE_USER="${{ github.event.issue.user.login }}"
+          MAINTAINERS="${{ steps.config.outputs.maintainers }}"
+
+          curl -s -X POST "$WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d @- <<EOF
+          {
+            "msgtype": "markdown",
+            "markdown": {
+              "title": "🆕 新 Issue #${ISSUE_NUM}",
+              "text": "## 🆕 ANOLISA 新 Issue 通知\n\n**Issue**: [#${ISSUE_NUM} ${ISSUE_TITLE}](${ISSUE_URL})\n\n**组件**: \`${SCOPE_NAME}\`\n\n**提交者**: ${ISSUE_USER}\n\n**已分配给**: ${MAINTAINERS}\n\n---\n\n> 🤖 由 ANOLISA Issue Triage Bot 自动发送"
+            }
+          }
+          EOF
+
+          echo "✅ 钉钉通知已发送"

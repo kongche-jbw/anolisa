@@ -1,0 +1,35 @@
+# =============================================================================
+# Advanced Issue Labeler — 标签映射配置
+# =============================================================================
+# 将 Issue Form 的 dropdown 选项映射到仓库标签。
+# 由 redhat-plumbers-in-action/advanced-issue-labeler Action 读取。
+#
+# 格式：
+#   policy:
+#     - section:
+#         - id: [<issue-form-field-id>]    # 注意：id 必须是数组
+#           label:
+#             - name: <label-to-apply>
+#               keys:
+#                 - <dropdown-option-text>
+# =============================================================================
+
+policy:
+
+  # ---------- Bug Report 模板 ----------
+  - section:
+      - id: [component]
+        label:
+          - name: "component:cosh"
+            keys:
+              - "copilot-shell (cosh)"
+          - name: "component:sec-core"
+            keys:
+              - "agent-sec-core"
+          - name: "component:skill"
+            keys:
+              - "os-skills"
+          - name: "component:sight"
+            keys:
+              - "agentsight"
+

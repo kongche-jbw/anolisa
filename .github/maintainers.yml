@@ -1,0 +1,37 @@
+# =============================================================================
+# ANOLISA 维护者映射配置
+# =============================================================================
+# 用于 Issue 自动分配 + 通知的中心化配置文件。
+# 各 workflow 通过读取此文件确定 scope 对应的维护者。
+#
+# label: Issue 上的标签名（与仓库 Labels 保持一致）
+# maintainers[].github: GitHub 用户名
+# maintainers[].email: 可选，用于邮件通知
+# =============================================================================
+
+scopes:
+  cosh:
+    label: "component:cosh"
+    maintainers:
+      - github: "kongche-jbw"
+      - github: "samchu-zsl"
+
+  agent-sec-core:
+    label: "component:sec-core"
+    maintainers:
+      - github: "1570005763"
+
+  os-skills:
+    label: "component:skill"
+    maintainers:
+      - github: "Ziqi002"
+
+  agentsight:
+    label: "component:sight"
+    maintainers:
+      - github: "chengshuyi"
+
+# Issue 未匹配到具体 scope 时的兜底分配
+default:
+  maintainers:
+    - github: "kongche-jbw"

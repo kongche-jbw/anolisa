@@ -1,0 +1,46 @@
+# =============================================================================
+# ANOLISA CODEOWNERS
+# =============================================================================
+# GitHub 会根据 PR 修改的文件路径自动将对应的用户添加为 Reviewer。
+# 配合 Branch Protection Rules 启用 "Require review from Code Owners" 可强制审核。
+#
+# 语法：<path-pattern>  @user1 @user2
+# 参考：https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+# =============================================================================
+
+# ---------------------
+# 全局兜底 — 项目维护者
+# ---------------------
+*                                @kongche-jbw
+
+# ---------------------
+# copilot-shell (cosh)
+# ---------------------
+/src/copilot-shell/              @kongche-jbw @samchu-zsl
+
+# ---------------------
+# agent-sec-core
+# ---------------------
+/src/agent-sec-core/             @1570005763
+
+# ---------------------
+# os-skills
+# ---------------------
+/src/os-skills/                  @Ziqi002
+
+# ---------------------
+# agentsight
+# ---------------------
+/src/agentsight/                 @chengshuyi
+
+# ---------------------
+# CI/CD & 项目治理
+# ---------------------
+/.github/                        @kongche-jbw
+/scripts/                        @kongche-jbw
+
+# ---------------------
+# 文档
+# ---------------------
+/docs/                           @kongche-jbw
+*.md                             @kongche-jbw
