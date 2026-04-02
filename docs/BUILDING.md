@@ -58,6 +58,9 @@ Then run the build script. By default it installs dependencies, builds, and inst
 
 # Install dependencies only (useful for CI or manual builds)
 ./scripts/build-all.sh --deps-only
+```
+
+d. Install dependencies and build selected components (without agentsight)
 
 # Build and install selected components only
 ./scripts/build-all.sh --component cosh --component sec-core
@@ -82,7 +85,7 @@ Then run the build script. By default it installs dependencies, builds, and inst
 
 1. The build script tries system packages first and falls back to upstream installers (nvm / rustup) when system versions don't meet requirements.
 2. os-skills are mostly static assets and do not require compilation.
-3. AgentSight is **optional** — it provides audit and observability capabilities but is not required for core functionality. It is excluded from default builds; use `--component sight` to include it.
+3. AgentSight is an optional component that provides audit and observability capabilities but is not required for core functionality. It is excluded from default builds; use `--component sight` to include it explicitly.
 4. AgentSight system dependencies (clang/llvm/libbpf/kernel headers) should be installed through your distro package manager.
 
 ---
@@ -99,13 +102,13 @@ If you prefer to set up each toolchain and build each component manually, follow
 
 Required: Node.js >= 20, npm >= 10.
 
-**Alinux 4 (verified)**
+a. Alinux 4 (verified)
 
 ```bash
 sudo dnf install -y nodejs npm make gcc-c++
 ```
 
-**Other distros: nvm**
+b. Other distros: nvm
 
 ```bash
 # Skip if Node.js >= 20 is already installed
@@ -128,6 +131,7 @@ fi
 node -v   # expected: v20.x.x or higher
 npm -v    # expected: 10.x.x or higher
 ```
+
 ---
 
 #### b) Rust (for agent-sec-core and agentsight)
@@ -141,7 +145,7 @@ Only install the build tools from dnf:
 sudo dnf install -y gcc make
 ```
 
-**Ubuntu 24.04 (verified)**
+b. Ubuntu 24.04 (verified)
 
 ```bash
 sudo apt install -y rustc-1.91 cargo-1.91 gcc make
@@ -193,14 +197,14 @@ registry = "sparse+https://mirrors.aliyun.com/crates.io-index/"
 
 Required: Python >= 3.12.
 
-**Alinux 4 (verified)**
+a. Alinux 4 (verified)
 
 ```bash
 pip3 install uv
 uv python install 3.12
 ```
 
-**Ubuntu 24.04 (verified)**
+b. Ubuntu 24.04 (verified)
 
 ```bash
 sudo apt install -y pipx
@@ -209,7 +213,7 @@ source "$HOME/.$(basename "$SHELL")rc"
 pipx install uv
 ```
 
-**Other distros: uv**
+c. Other distros: uv
 
 ```bash
 # Skip if uv is already installed
@@ -236,16 +240,16 @@ uv python find 3.12   # expected: path to python3.12 binary
 
 #### d) AgentSight System Dependencies (Optional, Package Manager Required)
 
-AgentSight is an **optional** component that provides eBPF-based audit and observability capabilities. It is not required for core ANOLISA functionality. If you choose to build it, the following system-level dependencies are needed:
+AgentSight is an optional component that provides eBPF-based audit and observability capabilities. It is not required for core ANOLISA functionality. If you choose to build it, the following system-level dependencies are needed:
 
-**dnf (Alinux / Anolis OS / Fedora / RHEL / CentOS / etc.)**
+a. dnf (Alinux / Anolis OS / Fedora / RHEL / CentOS / etc.)
 
 ```bash
 sudo dnf install -y clang llvm libbpf-devel elfutils-libelf-devel zlib-devel openssl-devel perl perl-IPC-Cmd
 sudo dnf install -y kernel-devel-$(uname -r)
 ```
 
-**apt (Debian / Ubuntu)**
+b. apt (Debian / Ubuntu)
 
 ```bash
 sudo apt-get update -y
@@ -254,7 +258,7 @@ sudo apt-get install -y clang llvm libbpf-dev libelf-dev zlib1g-dev libssl-dev p
 
 > Some distributions do not provide a separate perl-core package. That is expected.
 
-**Kernel Requirement**
+c. Kernel Requirement
 
 AgentSight requires Linux kernel >= 5.10 and BTF enabled (`CONFIG_DEBUG_INFO_BTF=y`).
 
@@ -284,15 +288,15 @@ make deps
 make build
 ```
 
-Artifact:
+Artifact: `dist/cli.js`
 
-- dist/cli.js
+Run options:
 
 **Run**
 
 ```bash
-# Run directly from the build directory
 node dist/cli.js
+```
 
 # Or install to system PATH (creates cosh/co/copilot commands)
 sudo make install PREFIX=/usr/local
@@ -301,11 +305,11 @@ cosh
 
 #### b) os-skills
 
-No compilation is required. Each skill is a directory containing a `SKILL.md` and optional supporting files (scripts, references, etc.). Deployment copies the entire skill directory to the target path.
+#### 4.2.2 os-skills
 
 **Install**
 
-Skills are discovered by Copilot Shell from one of three search paths:
+Skill search paths (Copilot Shell discovers skills in the following priority order):
 
 | Scope | Path |
 |-------|------|
@@ -313,13 +317,17 @@ Skills are discovered by Copilot Shell from one of three search paths:
 | User | `~/.copilot/skills/` |
 | System | `/usr/share/anolisa/skills/` |
 
-Manual deployment (user-level):
+Install options:
+
+a. Using the build script (automatic)
 
 ```bash
-# The build script copies skills automatically:
 ./scripts/build-all.sh --component skills
+```
 
-# Or manually:
+b. Manual deployment (user-level)
+
+```bash
 mkdir -p ~/.copilot/skills
 find src/os-skills -name 'SKILL.md' -exec sh -c \
 	'cp -rp "$(dirname "$1")" ~/.copilot/skills/' _ {} \;
@@ -328,7 +336,6 @@ find src/os-skills -name 'SKILL.md' -exec sh -c \
 **Verify**
 
 ```bash
-# Copilot Shell lists discovered skills
 co /skills
 ```
 
@@ -339,9 +346,7 @@ cd src/agent-sec-core
 make build-sandbox
 ```
 
-Artifact:
-
-- linux-sandbox/target/release/linux-sandbox
+Artifact: `linux-sandbox/target/release/linux-sandbox`
 
 **Install**
 
@@ -351,16 +356,14 @@ sudo make install
 
 #### d) agentsight (Optional, Linux only)
 
-> **Note:** AgentSight is optional. It provides eBPF-based audit and observability capabilities but is not required for core ANOLISA functionality.
+> Note: AgentSight is an optional component. It provides eBPF-based audit and observability capabilities but is not required for core ANOLISA functionality.
 
 ```bash
 cd src/agentsight
 make build
 ```
 
-Artifact:
-
-- target/release/agentsight
+Artifact: `target/release/agentsight`
 
 **Install**
 
@@ -413,12 +416,12 @@ rustup show
 
 ### 5.3 AgentSight missing libbpf / headers
 
-Install distro packages from the AgentSight dependency section above.
+Install distro packages from section 4.1.4 above.
 
 ### 5.4 AgentSight runtime permission denied
 
 ```bash
 sudo ./target/release/agentsight --help
-# or
+# or grant minimum capabilities
 sudo setcap cap_bpf,cap_perfmon=ep ./target/release/agentsight
 ```
