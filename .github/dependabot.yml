@@ -1,3 +1,8 @@
+# Dependabot Configuration
+# ========================
+# Toggle: set open-pull-requests-limit to 0 (off) or 1 (on) per ecosystem.
+# Strategy: minor + patch updates grouped into one PR; major updates get separate PRs.
+
 version: 2
 updates:
   # copilot-shell (npm)
@@ -5,38 +10,74 @@ updates:
     directory: "/src/copilot-shell"
     schedule:
       interval: "weekly"
+    target-branch: "main"
+    open-pull-requests-limit: 0   # ← Toggle: 0 = off, 1 = on
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    groups:
+      npm-minor-patch:
+        applies-to: "version-updates"
+        update-types:
+          - "minor"
+          - "patch"
     labels:
       - "deps"
       - "copilot-shell"
-    commit-message:
-      prefix: "chore(deps)"
 
   # agent-sec-core (cargo)
   - package-ecosystem: "cargo"
     directory: "/src/agent-sec-core"
     schedule:
       interval: "weekly"
+    target-branch: "main"
+    open-pull-requests-limit: 0   # ← Toggle: 0 = off, 1 = on
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    groups:
+      cargo-minor-patch:
+        applies-to: "version-updates"
+        update-types:
+          - "minor"
+          - "patch"
     labels:
       - "deps"
       - "agent-sec-core"
-    commit-message:
-      prefix: "chore(deps)"
 
   # agentsight (cargo)
   - package-ecosystem: "cargo"
     directory: "/src/agentsight"
     schedule:
       interval: "weekly"
+    target-branch: "main"
+    open-pull-requests-limit: 0   # ← Toggle: 0 = off, 1 = on
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    groups:
+      cargo-minor-patch:
+        applies-to: "version-updates"
+        update-types:
+          - "minor"
+          - "patch"
     labels:
       - "deps"
       - "agentsight"
-    commit-message:
-      prefix: "chore(deps)"
 
   # GitHub Actions
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    target-branch: "main"
+    open-pull-requests-limit: 0   # ← Toggle: 0 = off, 1 = on
     commit-message:
       prefix: "chore(ci)"
+      include: "scope"
+    groups:
+      actions-minor-patch:
+        applies-to: "version-updates"
+        update-types:
+          - "minor"
+          - "patch"

@@ -1,0 +1,271 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_copilot_shell:
+        description: 'Force run copilot-shell tests (ignore change detection)'
+        required: false
+        type: boolean
+        default: false
+      run_agent_sec:
+        description: 'Force run agent-sec-core tests (ignore change detection)'
+        required: false
+        type: boolean
+        default: false
+      run_agentsight:
+        description: 'Force run agentsight tests (ignore change detection)'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  # =========================================================================
+  # Step 1: Detect which components have changed
+  # =========================================================================
+  detect-changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      copilot_shell: ${{ steps.changes.outputs.copilot_shell }}
+      agent_sec_core: ${{ steps.changes.outputs.agent_sec_core }}
+      agentsight: ${{ steps.changes.outputs.agentsight }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Check which components changed
+        id: changes
+        run: |
+          set -e
+          echo "=== Detect Changes ==="
+
+          # Get changed files
+          if git rev-parse HEAD~1 >/dev/null 2>&1; then
+            CHANGED=$(git diff --name-only HEAD~1 HEAD || true)
+          else
+            CHANGED=$(git diff --name-only --diff-filter=ACMRT HEAD || true)
+          fi
+          echo "Changed files:"
+          echo "$CHANGED"
+
+          COPILOT_SHELL=false
+          AGENT_SEC=false
+          AGENTSIGHT=false
+
+          # Path-based detection
+          if echo "$CHANGED" | grep -q "^src/copilot-shell/"; then
+            COPILOT_SHELL=true
+          fi
+          if echo "$CHANGED" | grep -q "^src/agent-sec-core/"; then
+            AGENT_SEC=true
+          fi
+          if echo "$CHANGED" | grep -q "^src/agentsight/"; then
+            AGENTSIGHT=true
+          fi
+
+          # Manual override via workflow_dispatch
+          if [[ "${{ inputs.run_copilot_shell }}" == "true" ]]; then
+            COPILOT_SHELL=true
+          fi
+          if [[ "${{ inputs.run_agent_sec }}" == "true" ]]; then
+            AGENT_SEC=true
+          fi
+          if [[ "${{ inputs.run_agentsight }}" == "true" ]]; then
+            AGENTSIGHT=true
+          fi
+
+          echo "copilot_shell=$COPILOT_SHELL" >> $GITHUB_OUTPUT
+          echo "agent_sec_core=$AGENT_SEC" >> $GITHUB_OUTPUT
+          echo "agentsight=$AGENTSIGHT" >> $GITHUB_OUTPUT
+
+          echo "### Change Detection Results" >> $GITHUB_STEP_SUMMARY
+          echo "| Component | Changed |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|---------|" >> $GITHUB_STEP_SUMMARY
+          echo "| copilot-shell | $COPILOT_SHELL |" >> $GITHUB_STEP_SUMMARY
+          echo "| agent-sec-core | $AGENT_SEC |" >> $GITHUB_STEP_SUMMARY
+          echo "| agentsight | $AGENTSIGHT |" >> $GITHUB_STEP_SUMMARY
+
+  # =========================================================================
+  # Step 2: Build & Lint copilot-shell
+  # =========================================================================
+  build-copilot-shell:
+    name: Build copilot-shell
+    needs: detect-changes
+    if: needs.detect-changes.outputs.copilot_shell == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: src/copilot-shell/package-lock.json
+
+      - name: Install dependencies
+        run: cd src/copilot-shell && npm ci
+
+      - name: Check formatting
+        run: |
+          cd src/copilot-shell
+          npm run format
+          git diff --exit-code
+
+      - name: Lint
+        run: cd src/copilot-shell && npm run lint:ci
+
+      - name: Build
+        run: cd src/copilot-shell && npm run build
+
+      - name: Type check
+        run: cd src/copilot-shell && npm run typecheck
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-dist-nodejs20
+          path: |
+            src/copilot-shell/packages/*/dist/**/*
+            src/copilot-shell/package-lock.json
+          retention-days: 1
+
+  # =========================================================================
+  # Step 3: Test copilot-shell (cli + core in parallel)
+  # =========================================================================
+  test-copilot-shell-cli:
+    name: Test copilot-shell/cli
+    needs: [detect-changes, build-copilot-shell]
+    if: needs.detect-changes.outputs.copilot_shell == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: src/copilot-shell/package-lock.json
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: build-dist-nodejs20
+          path: '.'
+
+      - name: Install and build
+        run: |
+          cd src/copilot-shell
+          npm ci
+          npm run build
+
+      - name: Run cli tests
+        run: |
+          cd src/copilot-shell
+          NO_COLOR=true npm run test:ci --workspace=@copilot-shell/cli
+
+  test-copilot-shell-core:
+    name: Test copilot-shell/core
+    needs: [detect-changes, build-copilot-shell]
+    if: needs.detect-changes.outputs.copilot_shell == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: src/copilot-shell/package-lock.json
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: build-dist-nodejs20
+          path: '.'
+
+      - name: Install and build
+        run: |
+          cd src/copilot-shell
+          npm ci
+          npm run build
+
+      - name: Run core tests
+        run: |
+          cd src/copilot-shell
+          NO_COLOR=true npm run test:ci --workspace=@copilot-shell/core
+
+  # =========================================================================
+  # Step 4: Test agent-sec-core (Linux only)
+  # =========================================================================
+  test-agent-sec-core:
+    name: Test agent-sec-core
+    needs: detect-changes
+    if: needs.detect-changes.outputs.agent_sec_core == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.93.0'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/agent-sec-core/linux-sandbox
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm libssl-dev libseccomp-dev bubblewrap
+
+      - name: Run Python tests
+        run: |
+          pip install pytest
+          cd src/agent-sec-core
+          pytest tests/integration-test/ tests/unit-test/ -v
+
+      - name: Run Rust tests
+        run: |
+          cd src/agent-sec-core/linux-sandbox
+          # Skip bwrap_seccomp tests: GitHub Actions runners lack user namespace
+          # and privilege support required by bubblewrap sandbox
+          cargo test -- --skip bwrap_seccomp
+
+  # =========================================================================
+  # Step 5: Test agentsight (Linux only)
+  # =========================================================================
+  test-agentsight:
+    name: Test agentsight
+    needs: detect-changes
+    if: needs.detect-changes.outputs.agentsight == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/agentsight
+
+      - name: Install eBPF build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm libbpf-dev libelf-dev elfutils libssl-dev zlib1g-dev pkg-config
+          sudo apt-get install -y perl
+
+      - name: Run tests
+        run: |
+          cd src/agentsight
+          cargo test
