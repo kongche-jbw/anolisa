@@ -3,7 +3,7 @@
 //! This module mirrors the semantics used by the macOS Seatbelt sandbox:
 //! - the filesystem is read-only by default,
 //! - explicit writable roots are layered on top, and
-//! - sensitive subpaths such as `.git` and `.copilot` remain read-only even when
+//! - sensitive subpaths such as `.git` and `.copilot-shell` remain read-only even when
 //!   their parent root is writable.
 //!
 //! The overall Linux sandbox is composed of:
@@ -519,7 +519,7 @@ fn is_within_allowed_write_paths(path: &Path, allowed_write_paths: &[PathBuf]) -
 /// Find the first symlink along `target_path` that is also under a writable root.
 ///
 /// This blocks symlink replacement attacks where a protected path is a symlink
-/// inside a writable root (e.g., `.copilot -> ./decoy`). In that case we mount
+/// inside a writable root (e.g., `.copilot-shell -> ./decoy`). In that case we mount
 /// `/dev/null` on the symlink itself to prevent rewiring it.
 fn find_symlink_in_path(target_path: &Path, allowed_write_paths: &[PathBuf]) -> Option<PathBuf> {
     let mut current = PathBuf::new();

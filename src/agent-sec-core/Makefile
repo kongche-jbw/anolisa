@@ -23,6 +23,11 @@ build-sandbox: ## Build linux-sandbox binary
 PREFIX      ?= /usr/local
 SKILL_DIR   ?= /usr/share/anolisa/skills/agent-sec-core
 
+.PHONY: install-sandbox
+install-sandbox: ## Install linux-sandbox binary only
+	install -d -m 0755 $(DESTDIR)$(PREFIX)/bin
+	install -p -m 0755 linux-sandbox/target/release/linux-sandbox $(DESTDIR)$(PREFIX)/bin/
+
 .PHONY: install
 install: ## Install linux-sandbox binary, sign-skill.sh and skill files
 	install -d -m 0755 $(DESTDIR)$(PREFIX)/bin

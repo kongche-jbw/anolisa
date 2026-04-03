@@ -20,6 +20,11 @@ linux-sandbox (src/agent-sec-core/linux-sandbox/)
   Copyright 2025 OpenAI
   Licensed under the Apache License, Version 2.0
 
+agentsight (src/agentsight/)
+  Based on agentsight (https://github.com/eunomia-bpf/agentsight)
+  Copyright eunomia-bpf contributors
+  Licensed under the MIT License
+
 =========================================================================
 Third-Party Software
 =========================================================================

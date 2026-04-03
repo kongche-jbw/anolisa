@@ -54,9 +54,11 @@ cosh    # follow the on-screen prompts
 # API Key
 cosh --auth apikey
 
-# BaiLian / Custom Provider (OpenAI Compatible)
+# Custom Provider (OpenAI Compatible)
 cosh --auth openai
 ```
+
+> ** Note: ** Supports reusing openclaw model configurations.
 
 ## Architecture
 
@@ -85,6 +87,8 @@ make lint             # Lint with ESLint
 make format           # Format with Prettier
 ```
 
+> **Note:** `make install` (i.e. `npm install`) automatically sets up husky pre-commit hooks. Staged files will be checked with Prettier and ESLint before each commit. Use `git commit --no-verify` to bypass if needed.
+
 ### RPM Packaging
 
 ```bash
@@ -97,8 +101,8 @@ Copilot Shell uses a layered configuration system (highest priority first):
 
 1. Command-line arguments
 2. Environment variables
-3. Project settings (`.copilot/settings.json`)
-4. User settings (`~/.copilot/settings.json`)
+3. Project settings (`.copilot-shell/settings.json`)
+4. User settings (`~/.copilot-shell/settings.json`)
 5. System settings
 6. Defaults
 

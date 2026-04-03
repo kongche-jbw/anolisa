@@ -34,12 +34,12 @@ const getBuiltinLocalesDir = (): string => {
 };
 
 const getUserLocalesDir = (): string =>
-  path.join(homedir(), '.copilot', 'locales');
+  path.join(homedir(), '.copilot-shell', 'locales');
 
 /**
  * Get the path to the user's custom locales directory.
  * Users can place custom language packs (e.g., es.js, fr.js) in this directory.
- * @returns The path to ~/.copilot/locales
+ * @returns The path to ~/.copilot-shell/locales
  */
 export function getUserLocalesDirectory(): string {
   return getUserLocalesDir();

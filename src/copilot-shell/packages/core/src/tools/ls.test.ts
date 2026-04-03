@@ -31,7 +31,7 @@ describe('LSTool', () => {
       tempSecondaryDir,
     ]);
 
-    const userSkillsBase = path.join(os.homedir(), '.copilot', 'skills');
+    const userSkillsBase = path.join(os.homedir(), '.copilot-shell', 'skills');
 
     mockConfig = {
       getTargetDir: () => tempRootDir,
@@ -44,9 +44,9 @@ describe('LSTool', () => {
       storage: {
         getUserSkillsDir: () => userSkillsBase,
         getRemoteSkillsDir: () =>
-          path.join(tempRootDir, '.copilot', 'remote-skills'),
+          path.join(tempRootDir, '.copilot-shell', 'remote-skills'),
         getGlobalRemoteSkillsDir: () =>
-          path.join(os.homedir(), '.copilot', 'remote-skills'),
+          path.join(os.homedir(), '.copilot-shell', 'remote-skills'),
       },
     } as unknown as Config;
 

@@ -10,7 +10,10 @@ import * as os from 'node:os';
 import * as https from 'node:https';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { EXTENSIONS_CONFIG_FILENAME } from './variables.js';
+import {
+  EXTENSIONS_CONFIG_FILENAME,
+  COSH_EXTENSION_CONFIG_FILENAME,
+} from './variables.js';
 import * as tar from 'tar';
 import extract from 'extract-zip';
 import {
@@ -293,9 +296,17 @@ export async function downloadFromGitHubRelease(
     if (entries.length === 2) {
       const lonelyDir = entries.find((entry) => entry.isDirectory());
       if (lonelyDir) {
-        const hasQwenConfig = fs.existsSync(
-          path.join(destination, lonelyDir.name, EXTENSIONS_CONFIG_FILENAME),
-        );
+        const hasQwenConfig =
+          fs.existsSync(
+            path.join(destination, lonelyDir.name, EXTENSIONS_CONFIG_FILENAME),
+          ) ||
+          fs.existsSync(
+            path.join(
+              destination,
+              lonelyDir.name,
+              COSH_EXTENSION_CONFIG_FILENAME,
+            ),
+          );
         const hasGeminiConfig = fs.existsSync(
           path.join(destination, lonelyDir.name, 'gemini-extension.json'),
         );

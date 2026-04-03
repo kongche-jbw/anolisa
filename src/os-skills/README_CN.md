@@ -77,6 +77,32 @@ Markdown 内容，包含使用说明、前置条件和示例。
 
 ## 安装
 
+### 扩展安装（推荐）
+
+一键安装全部技能：
+
+```
+/extensions install https://github.com/alibaba/ANOLISA?path=src/os-skills
+```
+
+或按分类单独安装：
+
+```
+/extensions install https://github.com/alibaba/ANOLISA?path=src/os-skills/ai
+/extensions install https://github.com/alibaba/ANOLISA?path=src/os-skills/system-admin
+/extensions install https://github.com/alibaba/ANOLISA?path=src/os-skills/devops
+/extensions install https://github.com/alibaba/ANOLISA?path=src/os-skills/security
+/extensions install https://github.com/alibaba/ANOLISA?path=src/os-skills/aliyun
+```
+
+或从本地路径安装：
+
+```
+/extensions install /path/to/os-skills
+```
+
+> **注意：** 扩展安装方式目前仅支持 Copilot Shell（cosh）。
+
 ### RPM 安装
 
 ```bash
@@ -88,8 +114,8 @@ sudo yum install anolisa-skills
 ### 手动安装
 
 将技能目录复制到以下搜索路径之一：
-1. 项目级：`.copilot/skills/`
-2. 用户级：`~/.copilot/skills/`
+1. 项目级：`.copilot-shell/skills/`
+2. 用户级：`~/.copilot-shell/skills/`
 3. 系统级：`/usr/share/anolisa/skills/`
 
 ## 编写新技能

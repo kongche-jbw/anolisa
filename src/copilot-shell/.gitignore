@@ -51,6 +51,7 @@ packages/vscode-ide-companion/*.vsix
 
 # Copilot Shell Configs
 .copilot/
+.copilot-shell/
 logs/
 # GHA credentials
 gha-creds-*.json

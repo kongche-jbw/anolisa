@@ -17,13 +17,13 @@ interface LocationOption {
 const locationOptions: LocationOption[] = [
   {
     get label() {
-      return t('Project Level (.copilot/agents/)');
+      return t('Project Level (.copilot-shell/agents/)');
     },
     value: 'project',
   },
   {
     get label() {
-      return t('User Level (~/.copilot/agents/)');
+      return t('User Level (~/.copilot-shell/agents/)');
     },
     value: 'user',
   },

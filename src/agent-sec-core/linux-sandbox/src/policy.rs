@@ -331,8 +331,8 @@ fn default_read_only_subpaths_for_writable_root(
         subpaths.push(top_level_git);
     }
 
-    // Make .agents and .copilot read-only
-    for subdir in &[".agents", ".copilot"] {
+    // Make .agents and .copilot-shell read-only
+    for subdir in &[".agents", ".copilot-shell"] {
         #[allow(clippy::expect_used)]
         let top_level_copilot = writable_root.join(subdir).expect("valid relative path");
         if top_level_copilot.as_path().is_dir() {

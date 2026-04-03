@@ -9,8 +9,8 @@ import type { Content, FunctionDeclaration } from '@google/genai';
 /**
  * Represents the storage level for a subagent configuration.
  * - 'session': Session-level agents provided at runtime, read-only (highest priority)
- * - 'project': Stored in `.copilot/agents/` within the project directory
- * - 'user': Stored in `~/.copilot/agents/` in the user's home directory
+ * - 'project': Stored in `.copilot-shell/agents/` within the project directory
+ * - 'user': Stored in `~/.copilot-shell/agents/` in the user's home directory
  * - 'extension': Provided by an installed extension
  * - 'builtin': Built-in agents embedded in the codebase, always available (lowest priority)
  */

@@ -1601,7 +1601,7 @@ describe('Utility Functions', () => {
 
       const expectedPath = path.join(
         os.homedir(),
-        '.copilot',
+        '.copilot-shell',
         'oauth_creds.json',
       );
 

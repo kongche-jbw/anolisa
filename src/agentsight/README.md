@@ -139,7 +139,7 @@ agentsight discover --verbose
 | Component | Version |
 |-----------|---------|
 | Linux kernel | >= 5.8 (BTF support) |
-| Rust | >= 1.70 |
+| Rust | >= 1.80 |
 | clang / llvm | >= 11 (for eBPF compilation) |
 | libbpf | >= 0.8 |
 
@@ -190,6 +190,10 @@ Token parsing supports multiple LLM API formats:
 - Anthropic (Claude, including cache token handling)
 - Google Gemini
 - Qwen (with native chat template support)
+
+## Origins
+
+This project is derived from [https://github.com/eunomia-bpf/agentsight.git](https://github.com/eunomia-bpf/agentsight.git).
 
 ## License
 

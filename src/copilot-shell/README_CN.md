@@ -54,9 +54,11 @@ cosh    # 按照屏幕提示操作
 # API Key
 cosh --auth apikey
 
-# 百炼 / Custom Provider（OpenAI 兼容）
+# Custom Provider（OpenAI 兼容）
 cosh --auth openai
 ```
+
+> **注：** 支持复用openclaw的模型配置。
 
 ## 架构
 
@@ -85,6 +87,8 @@ make lint             # ESLint 检查
 make format           # Prettier 格式化
 ```
 
+> **注意：** `make install`（即 `npm install`）会自动初始化 husky pre-commit 钩子。每次提交时，暂存文件会自动执行 Prettier 格式化和 ESLint 检查。如需跳过，可使用 `git commit --no-verify`。
+
 ### RPM 打包
 
 ```bash
@@ -97,8 +101,8 @@ Copilot Shell 使用分层配置系统（按优先级从高到低）：
 
 1. 命令行参数
 2. 环境变量
-3. 项目配置（`.copilot/settings.json`）
-4. 用户配置（`~/.copilot/settings.json`）
+3. 项目配置（`.copilot-shell/settings.json`）
+4. 用户配置（`~/.copilot-shell/settings.json`）
 5. 系统配置
 6. 默认值
 

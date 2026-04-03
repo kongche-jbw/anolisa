@@ -25,7 +25,7 @@ import * as os from 'node:os';
 
 import { getErrorMessage } from '../utils/errors.js';
 import {
-  EXTENSIONS_CONFIG_FILENAME,
+  findExtensionConfigFilename,
   INSTALL_METADATA_FILENAME,
   recursivelyHydrateStrings,
 } from './variables.js';
@@ -193,6 +193,18 @@ function filterMcpConfig(original: MCPServerConfig): MCPServerConfig {
   return Object.freeze(rest);
 }
 
+function getSkillDirs(
+  config: ExtensionConfig,
+  extensionPath: string,
+): string[] {
+  const dirs = config.skills
+    ? Array.isArray(config.skills)
+      ? config.skills
+      : [config.skills]
+    : ['skills'];
+  return dirs.map((d) => path.join(extensionPath, d));
+}
+
 function getContextFileNames(config: ExtensionConfig): string[] {
   if (!config.contextFileName || config.contextFileName.length === 0) {
     return ['COPILOT.md'];
@@ -245,16 +257,19 @@ async function convertGeminiOrClaudeExtension(
   pluginName?: string,
 ) {
   let newExtensionDir = extensionDir;
-  const configFilePath = path.join(extensionDir, EXTENSIONS_CONFIG_FILENAME);
-  if (fs.existsSync(configFilePath)) {
-    newExtensionDir = extensionDir;
-  } else if (isGeminiExtensionConfig(extensionDir)) {
-    newExtensionDir = (await convertGeminiExtensionPackage(extensionDir))
-      .convertedDir;
-  } else if (pluginName) {
-    newExtensionDir = (
-      await convertClaudePluginPackage(extensionDir, pluginName)
-    ).convertedDir;
+  const configFilePath = path.join(
+    extensionDir,
+    findExtensionConfigFilename(extensionDir),
+  );
+  if (!fs.existsSync(configFilePath)) {
+    if (isGeminiExtensionConfig(extensionDir)) {
+      newExtensionDir = (await convertGeminiExtensionPackage(extensionDir))
+        .convertedDir;
+    } else if (pluginName) {
+      newExtensionDir = (
+        await convertClaudePluginPackage(extensionDir, pluginName)
+      ).convertedDir;
+    }
   }
   // Claude plugin conversion not yet implemented
   return newExtensionDir;
@@ -642,9 +657,11 @@ export class ExtensionManager {
         )
         .filter((contextFilePath) => fs.existsSync(contextFilePath));
 
-      extension.skills = await loadSkillsFromDir(
-        `${effectiveExtensionPath}/skills`,
-      );
+      extension.skills = (
+        await Promise.all(
+          getSkillDirs(config, effectiveExtensionPath).map(loadSkillsFromDir),
+        )
+      ).flat();
       extension.agents = await loadSubagentFromDir(
         `${effectiveExtensionPath}/agents`,
       );
@@ -675,7 +692,10 @@ export class ExtensionManager {
 
   loadExtensionConfig(context: LoadExtensionContext): ExtensionConfig {
     const { extensionDir, workspaceDir = this.workspaceDir } = context;
-    const configFilePath = path.join(extensionDir, EXTENSIONS_CONFIG_FILENAME);
+    const configFilePath = path.join(
+      extensionDir,
+      findExtensionConfigFilename(extensionDir),
+    );
     if (!fs.existsSync(configFilePath)) {
       throw new Error(`Configuration file not found at ${configFilePath}`);
     }
@@ -848,7 +868,13 @@ export class ExtensionManager {
         );
         const previousCommands = previous?.commands ?? [];
 
-        const skills = await loadSkillsFromDir(`${localSourcePath}/skills`);
+        const skills = (
+          await Promise.all(
+            getSkillDirs(newExtensionConfig!, localSourcePath).map(
+              loadSkillsFromDir,
+            ),
+          )
+        ).flat();
         const previousSkills = previous?.skills ?? [];
 
         const subagents = await loadSubagentFromDir(

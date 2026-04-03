@@ -19,7 +19,7 @@ export const summaryCommand: SlashCommand = {
   name: 'summary',
   get description() {
     return t(
-      'Generate a project summary and save it to .copilot/PROJECT_SUMMARY.md',
+      'Generate a project summary and save it to .copilot-shell/PROJECT_SUMMARY.md',
     );
   },
   kind: CommandKind.BUILT_IN,
@@ -131,9 +131,9 @@ export const summaryCommand: SlashCommand = {
       filePathForDisplay: string;
       fullPath: string;
     }> => {
-      // Ensure .copilot directory exists
+      // Ensure .copilot-shell directory exists
       const projectRoot = config.getProjectRoot();
-      const qwenDir = path.join(projectRoot, '.copilot');
+      const qwenDir = path.join(projectRoot, '.copilot-shell');
       try {
         await fsPromises.mkdir(qwenDir, { recursive: true });
       } catch (_err) {
@@ -153,7 +153,7 @@ export const summaryCommand: SlashCommand = {
       await fsPromises.writeFile(summaryPath, summaryContent, 'utf8');
 
       return {
-        filePathForDisplay: '.copilot/PROJECT_SUMMARY.md',
+        filePathForDisplay: '.copilot-shell/PROJECT_SUMMARY.md',
         fullPath: summaryPath,
       };
     };

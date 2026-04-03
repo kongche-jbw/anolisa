@@ -59,10 +59,10 @@ vi.mock('@copilot-shell/core', async (importOriginal) => {
   return {
     ...actual,
     Storage: {
-      getGlobalQwenDir: vi.fn().mockReturnValue('/mock/.copilot'),
+      getGlobalQwenDir: vi.fn().mockReturnValue('/mock/.copilot-shell'),
       getGlobalSettingsPath: vi
         .fn()
-        .mockReturnValue('/mock/.copilot/settings.json'),
+        .mockReturnValue('/mock/.copilot-shell/settings.json'),
     },
   };
 });

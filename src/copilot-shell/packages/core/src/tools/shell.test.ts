@@ -60,7 +60,9 @@ describe('ShellTool', () => {
         .fn()
         .mockReturnValue(createMockWorkspaceContext('/test/dir')),
       storage: {
-        getUserSkillsDir: vi.fn().mockReturnValue('/test/dir/.copilot/skills'),
+        getUserSkillsDir: vi
+          .fn()
+          .mockReturnValue('/test/dir/.copilot-shell/skills'),
       },
       getGeminiClient: vi.fn(),
       getGitCoAuthor: vi.fn().mockReturnValue({
@@ -149,7 +151,7 @@ describe('ShellTool', () => {
       expect(() =>
         shellTool.build({
           command: 'ls',
-          directory: '/test/dir/.copilot/skills/my-skill',
+          directory: '/test/dir/.copilot-shell/skills/my-skill',
           is_background: false,
         }),
       ).toThrow(
@@ -161,7 +163,7 @@ describe('ShellTool', () => {
       expect(() =>
         shellTool.build({
           command: 'ls',
-          directory: '/test/dir/.copilot/skills',
+          directory: '/test/dir/.copilot-shell/skills',
           is_background: false,
         }),
       ).toThrow(
@@ -173,7 +175,7 @@ describe('ShellTool', () => {
       expect(() =>
         shellTool.build({
           command: 'ls',
-          directory: '/test/dir/.copilot/skills/../skills/my-skill',
+          directory: '/test/dir/.copilot-shell/skills/../skills/my-skill',
           is_background: false,
         }),
       ).toThrow(

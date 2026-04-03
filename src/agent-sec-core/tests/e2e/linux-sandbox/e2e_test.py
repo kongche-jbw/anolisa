@@ -509,7 +509,7 @@ def main():
         print(f"\n{YELLOW}### 测试组 3: 敏感目录保护 ###{NC}")
 
         protected = os.path.join(test_base, "protected")
-        for subdir in [".git", ".copilot", ".agents"]:
+        for subdir in [".git", ".copilot-shell", ".agents"]:
             os.makedirs(os.path.join(protected, subdir))
             with open(os.path.join(protected, subdir, "config"), "w") as f:
                 f.write(f"{subdir}-config")
@@ -530,11 +530,11 @@ def main():
         )
 
         test_shell(
-            "敏感目录保护: .copilot 写入失败",
+            "敏感目录保护: .copilot-shell 写入失败",
             False,
             fs_protected,
             "restricted",
-            f"echo attack > {protected}/.copilot/config",
+            f"echo attack > {protected}/.copilot-shell/config",
             protected,
             expect_stderr_contains=FS_DENY_ERRORS,
         )

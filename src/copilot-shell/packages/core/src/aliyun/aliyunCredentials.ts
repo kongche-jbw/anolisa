@@ -8,7 +8,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { promises as fs } from 'node:fs';
 
-const QWEN_DIR = '.copilot';
+const QWEN_DIR = '.copilot-shell';
 const ALIYUN_CREDS_FILENAME = 'aliyun_creds.json';
 
 /**

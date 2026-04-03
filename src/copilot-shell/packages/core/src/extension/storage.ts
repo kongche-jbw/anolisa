@@ -3,7 +3,7 @@ import path from 'node:path';
 import * as os from 'node:os';
 import {
   EXTENSION_SETTINGS_FILENAME,
-  EXTENSIONS_CONFIG_FILENAME,
+  findExtensionConfigFilename,
 } from './variables.js';
 import * as fs from 'node:fs';
 
@@ -22,7 +22,10 @@ export class ExtensionStorage {
   }
 
   getConfigPath(): string {
-    return path.join(this.getExtensionDir(), EXTENSIONS_CONFIG_FILENAME);
+    return path.join(
+      this.getExtensionDir(),
+      findExtensionConfigFilename(this.getExtensionDir()),
+    );
   }
 
   getEnvFilePath(): string {
@@ -36,15 +39,15 @@ export class ExtensionStorage {
       const tmpDir = os.tmpdir();
       if (!tmpDir) {
         // Ultimate fallback when both os.homedir and os.tmpdir are mocked
-        return '/tmp/.copilot/extensions';
+        return '/tmp/.copilot-shell/extensions';
       }
-      return path.join(tmpDir, '.copilot', 'extensions');
+      return path.join(tmpDir, '.copilot-shell', 'extensions');
     }
     const storage = new Storage(homeDir);
     return storage.getExtensionsDir();
   }
 
   static async createTmpDir(): Promise<string> {
-    return await fs.promises.mkdtemp(path.join(os.tmpdir(), 'qwen-extension'));
+    return await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cosh-extension'));
   }
 }

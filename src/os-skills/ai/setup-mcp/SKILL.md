@@ -104,8 +104,8 @@ python3 __SKILL_DIR__/scripts/validate_mcp.py '<json>' --merge <config_path>
 
 配置文件位置：
 
-- 默认写项目级：`.copilot/settings.json`（当前工作目录下）
-- 用户说"全局"或"所有项目"时写用户级：`~/.copilot/settings.json`
+- 默认写项目级：`.copilot-shell/settings.json`（当前工作目录下）
+- 用户说"全局"或"所有项目"时写用户级：`~/.copilot-shell/settings.json`
 
 脚本会自动处理目录创建、已有配置保留和新条目合并。如果脚本报错，看错误信息自己修正 JSON 后重试，不要把错误丢给用户。
 

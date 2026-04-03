@@ -3,10 +3,11 @@
 # build-all.sh  –  ANOLISA unified build script
 #
 # Usage:
-#   ./scripts/build-all.sh --install-deps                     # install deps + build all
+#   ./scripts/build-all.sh                                    # install deps + build + install (default)
+#   ./scripts/build-all.sh --no-install                       # install deps + build, skip system install
+#   ./scripts/build-all.sh --ignore-deps                      # build + install, skip dep install
 #   ./scripts/build-all.sh --deps-only                        # install deps only
-#   ./scripts/build-all.sh --install-deps --component cosh    # deps + build copilot-shell
-#   ./scripts/build-all.sh --component sec-core --component sight   # build without dep install
+#   ./scripts/build-all.sh --component cosh                   # deps + build + install copilot-shell only
 #   ./scripts/build-all.sh --help
 #
 # Components (build order):
@@ -35,9 +36,9 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # ─── defaults ───
 
-INSTALL_DEPS=false
+INSTALL_DEPS=true
 DEPS_ONLY=false
-DO_INSTALL=false
+DO_INSTALL=true
 COMPONENTS=()        # empty = all
 
 # ─── artifact tracking ───
@@ -55,12 +56,13 @@ step()  { echo -e "\n${CYAN}${BOLD}==> $*${NC}"; }
 
 cmd_exists() { command -v "$1" &>/dev/null; }
 
-# Extract semver: "rustc 1.80.0 (abc 2024)" -> "1.80.0"
+# Extract first semver (X.Y.Z) from a string.
+# Examples: "rustc 1.91.0 (abc 2024)" -> "1.91.0", "v22.21.1" -> "22.21.1"
 extract_ver() {
-    echo "$1" | sed -n 's/.*\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -1
+    echo "$1" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1
 }
 
-# ver_gte "1.80.0" "1.75.0" -> true (actual >= required)
+# ver_gte "1.91.0" "1.80.0" -> true (actual >= required)
 ver_gte() {
     printf '%s\n%s' "$2" "$1" | sort -V -C
 }
@@ -69,28 +71,34 @@ die() { err "$@"; exit 1; }
 
 # ─── distro detection ───
 
-PKG_BASE=""  # rpm | deb
+DISTRO_ID=""        # alinux, ubuntu, fedora, centos, anolis, etc.
+DISTRO_VER=""       # 4, 24.04, 9, etc.
+DISTRO_VER_MAJOR="" # 4, 24, 9, etc.
+PKG_BASE=""         # rpm | deb
 PKG_INSTALL=""
 
 detect_distro() {
     [[ -f /etc/os-release ]] || die "Cannot detect distro (no /etc/os-release). Linux only."
     # shellcheck source=/dev/null
     source /etc/os-release
-    local id="${ID:-}" id_like="${ID_LIKE:-}"
+    DISTRO_ID="${ID:-}"
+    DISTRO_VER="${VERSION_ID:-}"
+    DISTRO_VER_MAJOR="${DISTRO_VER%%.*}"
+    local id_like="${ID_LIKE:-}"
 
-    if [[ "$id" =~ ^(fedora|rhel|centos|anolis|alinux)$ ]] || [[ "$id_like" =~ (fedora|rhel) ]]; then
+    if [[ "$DISTRO_ID" =~ ^(fedora|rhel|centos|anolis|alinux)$ ]] || [[ "$id_like" =~ (fedora|rhel) ]]; then
         PKG_BASE="rpm"
         if cmd_exists dnf; then PKG_INSTALL="dnf install -y"
         elif cmd_exists yum; then PKG_INSTALL="yum install -y"
         else die "Neither dnf nor yum found"; fi
-    elif [[ "$id" =~ ^(debian|ubuntu)$ ]] || [[ "$id_like" =~ debian ]]; then
+    elif [[ "$DISTRO_ID" =~ ^(debian|ubuntu)$ ]] || [[ "$id_like" =~ debian ]]; then
         PKG_BASE="deb"
         PKG_INSTALL="apt-get install -y"
     else
-        die "Unsupported distro: ${PRETTY_NAME:-$id}. Supported: Fedora/RHEL/CentOS/Anolis/Alinux, Debian/Ubuntu."
+        die "Unsupported distro: ${PRETTY_NAME:-$DISTRO_ID}. Supported: Fedora/RHEL/CentOS/Anolis/Alinux, Debian/Ubuntu."
     fi
 
-    ok "Distro: ${PRETTY_NAME:-$id} (${PKG_BASE})"
+    ok "Distro: ${PRETTY_NAME:-$DISTRO_ID} (${PKG_BASE}, id=${DISTRO_ID}, ver=${DISTRO_VER})"
 }
 
 # ─── component helpers ───
@@ -118,47 +126,118 @@ want_component() {
 
 # ─── dependency installation ───
 
-install_nvm_and_node() {
-    step "Node.js (for copilot-shell)"
+# Query the highest version of a package available in the configured system repositories.
+# Prints semver string (e.g. "20.18.0") or nothing if the package is not found.
+query_repo_ver() {
+    local pkg="$1"
+    if [[ "$PKG_BASE" == "rpm" ]]; then
+        # dnf list output example: "nodejs.x86_64    1:20.18.0-1.alnx4    appstream"
+        local raw
+        raw=$(dnf list "$pkg" 2>/dev/null | grep -E "^${pkg}\." | tail -1)
+        [[ -z "$raw" ]] && raw=$(yum list "$pkg" 2>/dev/null | grep -E "^${pkg}\." | tail -1)
+        if [[ -n "$raw" ]]; then
+            local nvr
+            nvr=$(echo "$raw" | awk '{print $2}')
+            nvr="${nvr#*:}"   # strip epoch (e.g. "1:20.18.0-1" → "20.18.0-1")
+            extract_ver "$nvr"
+            return
+        fi
+    elif [[ "$PKG_BASE" == "deb" ]]; then
+        # apt-cache policy output: "  Candidate: 18.19.0+dfsg-6ubuntu5"
+        local candidate
+        candidate=$(apt-cache policy "$pkg" 2>/dev/null | sed -n 's/.*Candidate: *//p')
+        if [[ -n "$candidate" && "$candidate" != "(none)" ]]; then
+            extract_ver "$candidate"
+            return
+        fi
+    fi
+}
 
-    if cmd_exists node; then
-        local ver
-        ver=$(extract_ver "$(node -v 2>/dev/null)" || echo "")
-        if [[ -n "$ver" ]] && ver_gte "$ver" "20.0.0"; then
-            ok "Node.js $(node -v) already installed, skipping"
+install_node() {
+    step "Node.js (for copilot-shell)"
+    local REQUIRED="20.0.0"
+
+    # Package name mapping — extend as needed for distros with non-standard names
+    local node_pkg="nodejs" npm_pkg="npm"
+    # case "$DISTRO_ID" in
+    #     some_distro) node_pkg="nodejs20"; npm_pkg="" ;;
+    # esac
+
+    # -- helper: check current node meets requirement --
+    _node_ver_ok() {
+        cmd_exists node || return 1
+        local v
+        v=$(extract_ver "$(node -v 2>/dev/null)" || echo "")
+        [[ -n "$v" ]] && ver_gte "$v" "$REQUIRED"
+    }
+
+    # -- helper: source nvm into current shell --
+    _source_nvm() {
+        export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+        # shellcheck source=/dev/null
+        if [[ -s "$NVM_DIR/nvm.sh" ]]; then source "$NVM_DIR/nvm.sh"; fi
+    }
+
+    _configure_npm_mirror
+
+    # 1. Already installed and version OK?
+    if _node_ver_ok; then
+        ok "Node.js $(node -v) already installed, skipping"
+        return 0
+    fi
+
+    # 2. Try system package manager (rpm / deb)
+    local repo_ver
+    repo_ver=$(query_repo_ver "$node_pkg")
+    if [[ -n "$repo_ver" ]] && ver_gte "$repo_ver" "$REQUIRED"; then
+        info "Repository provides $node_pkg $repo_ver (>= $REQUIRED), installing via $PKG_BASE ..."
+        if [[ "$PKG_BASE" == "deb" ]]; then sudo apt-get update -y 2>/dev/null || true; fi
+        sudo $PKG_INSTALL $node_pkg $npm_pkg 2>/dev/null || true
+        if _node_ver_ok; then
+            ok "Node.js $(node -v) installed via package manager"
             return 0
         fi
-        warn "Node.js $ver is too old (need >= 20), upgrading via nvm"
-    fi
-
-    # Ensure shell rc file exists
-    if [[ -f "$HOME/.zshrc" ]]; then
-        touch "$HOME/.zshrc"
+        warn "Package manager install did not satisfy version requirement"
     else
-        touch "$HOME/.bashrc"
+        info "Repository $node_pkg${repo_ver:+ $repo_ver} does not meet >= $REQUIRED"
     fi
 
+    # 3. Fallback: install via nvm
+    info "Installing Node.js via nvm ..."
+
+    # Ensure shell rc file exists (nvm installer appends to it)
+    if [[ "${SHELL}" == */zsh ]]; then touch "$HOME/.zshrc"; else touch "$HOME/.bashrc"; fi
+
+    # Source nvm if already present but not loaded
+    if ! cmd_exists nvm; then _source_nvm; fi
+
+    # Install nvm itself if still not available
     if ! cmd_exists nvm; then
         info "Installing nvm ..."
-        curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
-
-        export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
-        # shellcheck source=/dev/null
-        [[ -s "$NVM_DIR/nvm.sh" ]] && source "$NVM_DIR/nvm.sh"
+        curl -fsSL --connect-timeout 15 --max-time 60 \
+            https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash 2>/dev/null || true
+        _source_nvm
+        if ! cmd_exists nvm; then
+            warn "GitHub unreachable or timed out, trying Gitee mirror ..."
+            curl -fsSL --connect-timeout 15 --max-time 60 \
+                https://gitee.com/mirrors/nvm/raw/v0.40.3/install.sh | bash 2>/dev/null || true
+            _source_nvm
+        fi
     fi
+    cmd_exists nvm || die "Failed to install nvm"
 
-    # nvm is a shell function — try sourcing if not found
-    if ! cmd_exists nvm; then
-        export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
-        # shellcheck source=/dev/null
-        [[ -s "$NVM_DIR/nvm.sh" ]] && source "$NVM_DIR/nvm.sh"
-    fi
-
-    info "Installing Node.js 20 via nvm ..."
+    # Install Node.js 20 (NVM_NODEJS_ORG_MIRROR already set by _configure_npm_mirror)
     nvm install 20
     nvm use 20
 
-    ok "Node.js $(node -v), npm $(npm -v)"
+    _configure_npm_mirror  # npm is now available — configure registry
+
+    # Final check
+    if _node_ver_ok; then
+        ok "Node.js $(node -v), npm $(npm -v)"
+    else
+        die "Failed to install Node.js >= $REQUIRED"
+    fi
 }
 
 install_build_tools() {
@@ -186,47 +265,258 @@ install_build_tools() {
 
 install_rust() {
     step "Rust (for agent-sec-core, agentsight)"
+    local REQUIRED="1.91.0"
 
-    if cmd_exists rustc && cmd_exists cargo; then
-        local ver
-        ver=$(extract_ver "$(rustc --version 2>/dev/null)" || echo "")
-        if [[ -n "$ver" ]] && ver_gte "$ver" "1.80.0"; then
-            ok "Rust $ver already installed, skipping"
-            return 0
-        fi
-        warn "Rust $ver is too old (need >= 1.80), updating"
-        if cmd_exists rustup; then
-            rustup update stable
-            ok "Rust updated to $(extract_ver "$(rustc --version)")"
+    # Package name mapping (DEB uses "rustc"/"cargo", RPM uses "rust"/"cargo")
+    local rust_pkg="rust" cargo_pkg="cargo"
+    if [[ "$PKG_BASE" == "deb" ]]; then rust_pkg="rustc"; fi
+
+    # -- helper: source cargo env --
+    _source_cargo() {
+        # shellcheck source=/dev/null
+        if [[ -f "$HOME/.cargo/env" ]]; then source "$HOME/.cargo/env"; fi
+    }
+
+    # -- helper: check current rust meets requirement --
+    _rust_ver_ok() {
+        cmd_exists rustc && cmd_exists cargo || return 1
+        local v
+        v=$(extract_ver "$(rustc --version 2>/dev/null)" || echo "")
+        [[ -n "$v" ]] && ver_gte "$v" "$REQUIRED"
+    }
+
+    # Source cargo env (rustup installs to ~/.cargo)
+    _source_cargo
+    _configure_cargo_mirror  # Configure mirror upfront (idempotent)
+
+    # 1. Already installed and version OK?
+    if _rust_ver_ok; then
+        ok "Rust $(extract_ver "$(rustc --version)") already installed, skipping"
+        return 0
+    fi
+
+    # If rustc exists but too old and rustup is available, try updating first
+    if cmd_exists rustup; then
+        info "Updating via rustup ..."
+        rustup update stable
+        _source_cargo
+        if _rust_ver_ok; then
+            ok "Rust updated to $(extract_ver "$(rustc --version)") via rustup"
             return 0
         fi
     fi
 
-    info "Installing rustup + stable toolchain ..."
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-    source "$HOME/.cargo/env"
+    # 2. Try system package manager
+    local repo_ver=""
+    repo_ver=$(query_repo_ver "$rust_pkg")
 
-    ok "Rust $(extract_ver "$(rustc --version)"), cargo $(extract_ver "$(cargo --version)")"
+    # DEB repos may ship versioned packages (rustc-1.XX) — pick the best one
+    if [[ "$PKG_BASE" == "deb" ]]; then
+        if [[ -z "$repo_ver" ]] || ! ver_gte "$repo_ver" "$REQUIRED"; then
+            local best_pkg="" best_ver="" p pv
+            while IFS= read -r p; do
+                [[ -z "$p" ]] && continue
+                pv=$(query_repo_ver "$p")
+                [[ -z "$pv" ]] && continue
+                if ver_gte "$pv" "$REQUIRED"; then
+                    if [[ -z "$best_ver" ]] || ver_gte "$pv" "$best_ver"; then
+                        best_pkg="$p"; best_ver="$pv"
+                    fi
+                fi
+            done < <(apt-cache search '^rustc-[0-9]' 2>/dev/null | awk '{print $1}' | sort -V)
+            if [[ -n "$best_pkg" ]]; then
+                rust_pkg="$best_pkg"
+                cargo_pkg="${best_pkg/rustc/cargo}"
+                repo_ver="$best_ver"
+            fi
+        fi
+    fi
+
+    if [[ -n "$repo_ver" ]] && ver_gte "$repo_ver" "$REQUIRED"; then
+        info "Repository provides $rust_pkg $repo_ver (>= $REQUIRED), installing via $PKG_BASE ..."
+        sudo $PKG_INSTALL "$rust_pkg" "$cargo_pkg" gcc make || true
+
+        # For versioned DEB packages (e.g. rustc-1.91), set up alternatives
+        if [[ "$PKG_BASE" == "deb" && "$rust_pkg" != "rustc" ]]; then
+            local suffix="${rust_pkg#rustc-}"
+            if cmd_exists update-alternatives; then
+                sudo update-alternatives --install /usr/bin/cargo cargo "/usr/bin/cargo-${suffix}" 100 2>/dev/null || true
+            fi
+        fi
+
+        if _rust_ver_ok; then
+            ok "Rust $(extract_ver "$(rustc --version)") installed via package manager"
+            info "Note: agent-sec-core pins Rust 1.93.0 via rust-toolchain.toml; rustup will auto-download if needed"
+            return 0
+        fi
+        warn "Package manager install did not satisfy version requirement"
+    else
+        info "Repository ${rust_pkg}${repo_ver:+ $repo_ver} does not meet >= $REQUIRED"
+    fi
+
+    # 3. Fallback: install via rustup
+    info "Installing Rust via rustup ..."
+    sudo $PKG_INSTALL gcc make 2>/dev/null || true
+
+    # Multi-level mirror fallback: official → Aliyun internal → Aliyun public → rsproxy.cn
+    curl --proto '=https' --tlsv1.2 -sSf --connect-timeout 15 --max-time 120 \
+        https://sh.rustup.rs | sh -s -- -y 2>/dev/null || true
+    _source_cargo
+    if ! cmd_exists rustc; then
+        warn "rustup.rs unreachable, trying China mirrors ..."
+        curl -sSf --connect-timeout 15 --max-time 60 \
+            http://mirrors.cloud.aliyuncs.com/repo/rust/rustup-init.sh | sh -s -- -y 2>/dev/null || true
+        _source_cargo
+    fi
+    if ! cmd_exists rustc; then
+        curl --proto '=https' --tlsv1.2 -sSf --connect-timeout 15 --max-time 120 \
+            https://mirrors.aliyun.com/repo/rust/rustup-init.sh | sh -s -- -y 2>/dev/null || true
+        _source_cargo
+    fi
+    if ! cmd_exists rustc; then
+        curl --proto '=https' --tlsv1.2 -sSf --connect-timeout 15 --max-time 120 \
+            https://rsproxy.cn/rustup-init.sh | sh -s -- -y 2>/dev/null || true
+        _source_cargo
+    fi
+
+    # Final check
+    if _rust_ver_ok; then
+        ok "Rust $(extract_ver "$(rustc --version)"), cargo $(extract_ver "$(cargo --version)")"
+    else
+        die "Failed to install Rust >= $REQUIRED"
+    fi
+}
+
+_configure_npm_mirror() {
+    # 1. NVM_NODEJS_ORG_MIRROR — used by nvm to download Node.js binaries
+    if [[ -z "${NVM_NODEJS_ORG_MIRROR:-}" ]]; then
+        export NVM_NODEJS_ORG_MIRROR="https://npmmirror.com/mirrors/node/"
+    fi
+
+    # 2. npm registry — used by npm install for package downloads
+    if ! cmd_exists npm; then return 0; fi
+    local current
+    current=$(npm config get registry 2>/dev/null || echo "")
+    # Already using npmmirror → skip
+    if [[ "$current" == "https://registry.npmmirror.com/" ]]; then return 0; fi
+    # User has custom (non-default) registry → skip
+    if [[ -n "$current" && "$current" != "https://registry.npmjs.org/" ]]; then
+        info "Existing npm registry config found ($current), skipping mirror setup"
+        return 0
+    fi
+    npm config set registry https://registry.npmmirror.com/
+    ok "npm registry mirror configured: https://registry.npmmirror.com/"
+}
+
+_configure_cargo_mirror() {
+    # Detect network: Aliyun internal (ECS VPC) vs public internet
+    local _aliyun_internal=false
+    if curl -sSf --connect-timeout 3 http://mirrors.cloud.aliyuncs.com/ &>/dev/null; then
+        _aliyun_internal=true
+    fi
+
+    # ── 1. Rustup toolchain distribution mirror ──
+    # Ensures rustup downloads from a reachable mirror (e.g. when
+    # rust-toolchain.toml triggers an auto-install of a pinned version).
+    if [[ -z "${RUSTUP_DIST_SERVER:-}" ]]; then
+        export RUSTUP_DIST_SERVER="https://rsproxy.cn"
+        export RUSTUP_UPDATE_ROOT="https://rsproxy.cn/rustup"
+        info "RUSTUP_DIST_SERVER=${RUSTUP_DIST_SERVER}"
+    fi
+
+    # ── 2. crates.io registry mirror ──
+    local cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+    local cargo_config="$cargo_home/config.toml"
+    local cargo_config_legacy="$cargo_home/config"
+    # Skip if user already has a custom registry configured
+    if [[ -f "$cargo_config" ]] && grep -q '\[source\.' "$cargo_config" 2>/dev/null; then
+        info "Existing cargo registry config found, skipping crates.io mirror setup"
+        return 0
+    fi
+    if [[ -f "$cargo_config_legacy" ]] && grep -q '\[source\.' "$cargo_config_legacy" 2>/dev/null; then
+        info "Existing cargo registry config found, skipping crates.io mirror setup"
+        return 0
+    fi
+
+    local mirror_url
+    if $_aliyun_internal; then
+        mirror_url="sparse+http://mirrors.cloud.aliyuncs.com/crates.io-index/"
+        info "Using Aliyun internal crates.io mirror"
+    else
+        mirror_url="sparse+https://mirrors.aliyun.com/crates.io-index/"
+        info "Using Aliyun public crates.io mirror"
+    fi
+
+    mkdir -p "$cargo_home"
+    cat >> "$cargo_config" <<EOF
+
+[source.crates-io]
+replace-with = 'aliyun'
+[source.aliyun]
+registry = "$mirror_url"
+EOF
+    ok "crates.io mirror configured in $cargo_config"
 }
 
 install_uv() {
     step "uv (Python package manager, for agent-sec-core)"
 
+    # 1. Already installed?
     if cmd_exists uv; then
         ok "uv $(extract_ver "$(uv --version 2>/dev/null)") already installed, skipping"
         return 0
     fi
 
-    info "Installing uv ..."
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-    # Source the env so uv is available in current session
+    # 2. Try pip3 / pipx
+    if cmd_exists pip3; then
+        info "Trying: pip3 install uv ..."
+        pip3 install uv 2>/dev/null || true
+        if cmd_exists uv; then
+            ok "uv $(extract_ver "$(uv --version 2>/dev/null)") installed via pip3"
+            return 0
+        fi
+    fi
+
+    if ! cmd_exists pipx; then
+        info "Trying to install pipx via package manager ..."
+        sudo $PKG_INSTALL pipx 2>/dev/null || true
+    fi
+    if cmd_exists pipx; then
+        info "Trying: pipx install uv ..."
+        pipx ensurepath 2>/dev/null || true
+        export PATH="$HOME/.local/bin:$PATH"
+        pipx install uv 2>/dev/null || true
+        if cmd_exists uv; then
+            ok "uv $(extract_ver "$(uv --version 2>/dev/null)") installed via pipx"
+            return 0
+        fi
+    fi
+
+    # 3. Fallback: upstream installer (astral.sh → GitHub)
+    info "Installing uv via upstream installer ..."
+    curl -LsSf --connect-timeout 15 --max-time 60 \
+        https://astral.sh/uv/install.sh | sh 2>/dev/null || true
     if [[ -f "$HOME/.local/bin/env" ]]; then
         # shellcheck source=/dev/null
         source "$HOME/.local/bin/env"
     fi
     export PATH="$HOME/.local/bin:$PATH"
+    if ! cmd_exists uv; then
+        warn "astral.sh unreachable, trying GitHub mirror ..."
+        curl -LsSf --connect-timeout 15 --max-time 60 \
+            https://github.com/astral-sh/uv/releases/latest/download/uv-installer.sh | sh 2>/dev/null || true
+        if [[ -f "$HOME/.local/bin/env" ]]; then
+            # shellcheck source=/dev/null
+            source "$HOME/.local/bin/env"
+        fi
+    fi
 
-    ok "uv $(extract_ver "$(uv --version 2>/dev/null)")"
+    # Final check
+    if cmd_exists uv; then
+        ok "uv $(extract_ver "$(uv --version 2>/dev/null)")"
+    else
+        die "Failed to install uv"
+    fi
 }
 
 check_ebpf_deps() {
@@ -307,7 +597,7 @@ do_install_deps() {
     detect_distro
 
     if want_component cosh; then
-        install_nvm_and_node
+        install_node
         install_build_tools
     fi
 
@@ -335,14 +625,11 @@ build_cosh() {
     [[ -d "$dir" ]] || die "Directory not found: $dir"
     cd "$dir"
 
-    info "npm install ..."
-    npm install
+    info "make deps ..."
+    make deps
 
-    info "npm run build ..."
-    npm run build
-
-    info "npm run bundle ..."
-    npm run bundle
+    info "make build ..."
+    make build
 
     if [[ -f dist/cli.js ]]; then
         ARTIFACT_NAMES+=("copilot-shell")
@@ -366,7 +653,7 @@ build_skills() {
     info "Found ${count} skill definitions"
 
     # Deploy to user-level skill path
-    local target="$HOME/.copilot/skills"
+    local target="$HOME/.copilot-shell/skills"
     mkdir -p "$target"
 
     info "Copying skills to $target ..."
@@ -374,7 +661,7 @@ build_skills() {
         'cp -rp "$(dirname "$1")" "'"$target"'/"' _ {} \;
 
     ARTIFACT_NAMES+=("os-skills")
-    ARTIFACT_PATHS+=("~/.copilot/skills/ (${count} skills installed)")
+    ARTIFACT_PATHS+=("~/.copilot-shell/skills/ (${count} skills installed)")
     ok "os-skills: ${count} skills deployed to $target"
 }
 
@@ -435,13 +722,15 @@ do_build() {
 # ─── install functions ───
 
 install_cosh() {
-    step "Installing copilot-shell (create aliases)"
+    step "Installing copilot-shell"
     local dir="$PROJECT_ROOT/src/copilot-shell"
     [[ -d "$dir" ]] || die "Directory not found: $dir"
     cd "$dir"
 
-    make create-alias
-    ok "copilot-shell aliases configured"
+    # System-level install: PREFIX/bin/{cosh,co,copilot}
+    info "sudo make install PREFIX=/usr/local ..."
+    sudo make install PREFIX=/usr/local
+    ok "copilot-shell installed to /usr/local/bin/{cosh,co,copilot}"
 }
 
 install_sec_core() {
@@ -450,9 +739,9 @@ install_sec_core() {
     [[ -d "$dir" ]] || die "Directory not found: $dir"
     cd "$dir"
 
-    info "sudo make install ..."
-    sudo make install
-    ok "agent-sec-core installed to /usr/local/bin/"
+    info "sudo make install-sandbox ..."
+    sudo make install-sandbox
+    ok "agent-sec-core (linux-sandbox) installed to /usr/local/bin/"
 }
 
 install_sight() {
@@ -501,9 +790,9 @@ $(echo -e "${BOLD}Usage:${NC}")
   $0 [OPTIONS]
 
 $(echo -e "${BOLD}Options:${NC}")
-  --install-deps          Install required toolchains and libraries before building
+  --no-install            Skip installing built components to system paths
+  --ignore-deps           Skip dependency installation
   --deps-only             Install dependencies only, do not build
-  --install               Install built components to system paths after building
   --component <name>      Build specific component (can be repeated).
                           Valid names: cosh, skills, sec-core, sight
                           Default (no --component): cosh, skills, sec-core
@@ -511,13 +800,13 @@ $(echo -e "${BOLD}Options:${NC}")
   -h, --help              Show this help
 
 $(echo -e "${BOLD}Examples:${NC}")
-  $0 --install-deps                              # Install deps + build default components
-  $0 --install-deps --install                     # Install deps + build + install to system
+  $0                                             # Install deps + build + install to system
+  $0 --no-install                                # Install deps + build (skip system install)
+  $0 --ignore-deps                               # Build + install (skip dep install)
   $0 --deps-only                                 # Install deps only
-  $0 --install-deps --component cosh             # Install deps + build copilot-shell
-  $0 --component sec-core --component sight            # Build sec-core + sight (no dep install)
-  $0 --install-deps --component cosh --component skills --component sec-core --component sight
-                                                 # Build all including optional sight
+  $0 --component cosh                            # Install deps + build + install copilot-shell
+  $0 --ignore-deps --component sec-core --component sight
+                                                 # Build + install sec-core and sight (no dep install)
 
 $(echo -e "${BOLD}Components:${NC}")
   cosh     copilot-shell      Node.js / TypeScript AI terminal assistant       [default]
@@ -526,12 +815,13 @@ $(echo -e "${BOLD}Components:${NC}")
   sight    agentsight         eBPF observability/audit agent (Linux only)        [optional]
 
 $(echo -e "${BOLD}What this script does:${NC}")
-  1. Detects which toolchains are already installed and skips them if present
-  2. Installs missing toolchains from upstream: nvm for Node.js, rustup for Rust, uv for Python
-  3. Builds default components in order: cosh -> skills -> sec-core
+  1. Detects installed toolchains and queries system repositories for available versions
+  2. Installs via system package manager (dnf/yum/apt) when repository versions meet requirements
+  3. Falls back to upstream installers (nvm, rustup, uv) when system packages don't suffice
+  4. Builds default components in order: cosh -> skills -> sec-core
      (sight is optional — add --component sight to include it)
-  4. Installs components to system paths (if --install is specified)
-  5. Reports artifact locations at the end
+  5. Installs components to system paths (use --no-install to skip)
+  6. Reports artifact locations at the end
 
 $(echo -e "${BOLD}Note:${NC}")
   For agentsight eBPF probes, clang and libbpf headers must be installed via your
@@ -545,17 +835,17 @@ EOF
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --install-deps)
-                INSTALL_DEPS=true
+            --no-install)
+                DO_INSTALL=false
+                shift
+                ;;
+            --ignore-deps)
+                INSTALL_DEPS=false
                 shift
                 ;;
             --deps-only)
                 DEPS_ONLY=true
                 INSTALL_DEPS=true
-                shift
-                ;;
-            --install)
-                DO_INSTALL=true
                 shift
                 ;;
             --component)
@@ -575,9 +865,9 @@ parse_args() {
         esac
     done
 
-    # No flags at all -> show help
-    if ! $INSTALL_DEPS && [[ ${#COMPONENTS[@]} -eq 0 ]]; then
-        usage
+    # --deps-only implies INSTALL_DEPS regardless of --ignore-deps
+    if $DEPS_ONLY; then
+        INSTALL_DEPS=true
     fi
 }
 
@@ -602,10 +892,8 @@ main() {
     fi
 
     # 3. Build
-    if $INSTALL_DEPS || [[ ${#COMPONENTS[@]} -gt 0 ]]; then
-        do_build
-        print_artifacts
-    fi
+    do_build
+    print_artifacts
 
     # 4. Install to system paths if requested
     if $DO_INSTALL; then

@@ -101,7 +101,7 @@ describe('MemoryTool', () => {
     beforeEach(() => {
       testFilePath = path.join(
         os.homedir(),
-        '.copilot',
+        '.copilot-shell',
         DEFAULT_CONTEXT_FILENAME,
       );
     });
@@ -224,7 +224,7 @@ describe('MemoryTool', () => {
       // Use getCurrentGeminiMdFilename for the default expectation before any setGeminiMdFilename calls in a test
       const expectedFilePath = path.join(
         os.homedir(),
-        '.copilot',
+        '.copilot-shell',
         getCurrentGeminiMdFilename(), // This will be DEFAULT_CONTEXT_FILENAME unless changed by a test
       );
 
@@ -342,12 +342,12 @@ describe('MemoryTool', () => {
       expect(result).not.toBe(false);
 
       if (result && result.type === 'edit') {
-        const expectedPath = path.join('~', '.copilot', 'COPILOT.md');
+        const expectedPath = path.join('~', '.copilot-shell', 'COPILOT.md');
         expect(result.title).toBe(
           `Confirm Memory Save: ${expectedPath} (global)`,
         );
         expect(result.fileName).toContain(
-          path.join('mock', 'home', '.copilot'),
+          path.join('mock', 'home', '.copilot-shell'),
         );
         expect(result.fileName).toContain('COPILOT.md');
         expect(result.fileDiff).toContain('Index: COPILOT.md');
@@ -386,7 +386,7 @@ describe('MemoryTool', () => {
       const params = { fact: 'Test fact', scope: 'global' as const };
       const memoryFilePath = path.join(
         os.homedir(),
-        '.copilot',
+        '.copilot-shell',
         getCurrentGeminiMdFilename(),
       );
 
@@ -423,7 +423,7 @@ describe('MemoryTool', () => {
       const params = { fact: 'Test fact', scope: 'global' as const };
       const memoryFilePath = path.join(
         os.homedir(),
-        '.copilot',
+        '.copilot-shell',
         getCurrentGeminiMdFilename(),
       );
 
@@ -478,7 +478,7 @@ describe('MemoryTool', () => {
       const params = { fact: 'Test fact', scope: 'global' as const };
       const memoryFilePath = path.join(
         os.homedir(),
-        '.copilot',
+        '.copilot-shell',
         getCurrentGeminiMdFilename(),
       );
 
@@ -515,7 +515,7 @@ describe('MemoryTool', () => {
       expect(result).not.toBe(false);
 
       if (result && result.type === 'edit') {
-        const expectedPath = path.join('~', '.copilot', 'COPILOT.md');
+        const expectedPath = path.join('~', '.copilot-shell', 'COPILOT.md');
         expect(result.title).toBe(
           `Confirm Memory Save: ${expectedPath} (global)`,
         );
@@ -558,7 +558,7 @@ describe('MemoryTool', () => {
       expect(result).not.toBe(false);
 
       if (result && result.type === 'edit') {
-        const globalPath = path.join('~', '.copilot', 'COPILOT.md');
+        const globalPath = path.join('~', '.copilot-shell', 'COPILOT.md');
         const projectPath = path.join(process.cwd(), 'COPILOT.md');
 
         expect(result.fileDiff).toContain(`Global: ${globalPath}`);
@@ -581,7 +581,7 @@ describe('MemoryTool', () => {
       const invocation = memoryTool.build(params);
       const description = invocation.getDescription();
 
-      const expectedPath = path.join('~', '.copilot', 'COPILOT.md');
+      const expectedPath = path.join('~', '.copilot-shell', 'COPILOT.md');
       expect(description).toBe(`${expectedPath} (global)`);
     });
 
@@ -599,7 +599,7 @@ describe('MemoryTool', () => {
       const invocation = memoryTool.build(params);
       const description = invocation.getDescription();
 
-      const globalPath = path.join('~', '.copilot', 'COPILOT.md');
+      const globalPath = path.join('~', '.copilot-shell', 'COPILOT.md');
       const projectPath = path.join(process.cwd(), 'COPILOT.md');
       expect(description).toBe(
         `CHOOSE: ${globalPath} (global) OR ${projectPath} (project)`,

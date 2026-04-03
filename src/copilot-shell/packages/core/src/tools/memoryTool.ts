@@ -40,7 +40,7 @@ const memoryToolSchemaData: FunctionDeclaration = {
       scope: {
         type: 'string',
         description:
-          'Where to save the memory: "global" saves to user-level ~/.copilot/COPILOT.md (shared across all projects), "project" saves to current project\'s COPILOT.md (project-specific). If not specified, will prompt user to choose.',
+          'Where to save the memory: "global" saves to user-level ~/.copilot-shell/COPILOT.md (shared across all projects), "project" saves to current project\'s COPILOT.md (project-specific). If not specified, will prompt user to choose.',
         enum: ['global', 'project'],
       },
     },
@@ -66,12 +66,12 @@ Do NOT use this tool:
 
 - \`fact\` (string, required): The specific fact or piece of information to remember. This should be a clear, self-contained statement. For example, if the user says "My favorite color is blue", the fact would be "My favorite color is blue".
 - \`scope\` (string, optional): Where to save the memory:
-  - "global": Saves to user-level ~/.copilot/COPILOT.md (shared across all projects)
+  - "global": Saves to user-level ~/.copilot-shell/COPILOT.md (shared across all projects)
   - "project": Saves to current project's COPILOT.md (project-specific)
   - If not specified, the tool will ask the user where they want to save the memory.
 `;
 
-export const QWEN_CONFIG_DIR = '.copilot';
+export const QWEN_CONFIG_DIR = '.copilot-shell';
 export const DEFAULT_CONTEXT_FILENAME = 'COPILOT.md';
 export const MEMORY_SECTION_HEADER = '## Qwen Added Memories';
 

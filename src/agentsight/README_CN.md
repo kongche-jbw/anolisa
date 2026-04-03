@@ -139,7 +139,7 @@ agentsight discover --verbose
 | 组件 | 版本 |
 |------|------|
 | Linux 内核 | >= 5.8（需要 BTF 支持） |
-| Rust | >= 1.70 |
+| Rust | >= 1.80 |
 | clang / llvm | >= 11（用于 eBPF 编译） |
 | libbpf | >= 0.8 |
 
@@ -190,6 +190,10 @@ Token 解析支持多种 LLM API 格式：
 - Anthropic（Claude，包括缓存 Token 处理）
 - Google Gemini
 - 通义千问 Qwen（支持原生 Chat Template）
+
+## 项目起源
+
+本项目源于 [https://github.com/eunomia-bpf/agentsight.git](https://github.com/eunomia-bpf/agentsight.git)。
 
 ## 许可证
 

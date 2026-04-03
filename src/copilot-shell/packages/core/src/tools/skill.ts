@@ -93,7 +93,7 @@ export class SkillTool extends BaseDeclarativeTool<SkillParams, ToolResult> {
     let skillDescriptions = '';
     if (this.availableSkills.length === 0) {
       skillDescriptions =
-        'No skills are currently configured. Skills can be created by adding directories with SKILL.md files to .copilot/skills/ or ~/.copilot/skills/.';
+        'No skills are currently configured. Skills can be created by adding directories with SKILL.md files to .copilot-shell/skills/ or ~/.copilot-shell/skills/.';
     } else {
       skillDescriptions = this.availableSkills
         .map(
@@ -125,8 +125,8 @@ How to invoke:
   - \`{"skill": "ms-office-suite:pdf"}\` - invoke using fully qualified name
 
 When asked to install:
-- Skills can be installed by adding directories with SKILL.md files to ~/.copilot/skills/
-- When users clarify to install in the project, make sure the directory with SKILL.md is added to .copilot/skills/
+- Skills can be installed by adding directories with SKILL.md files to ~/.copilot-shell/skills/
+- When users clarify to install in the project, make sure the directory with SKILL.md is added to .copilot-shell/skills/
 - If the given URL of a skill looks like a GitHub repo, clone the whole repository and copy the specific skill directory
 - Any temporary files should be located in /tmp, and make sure they are removed after use
 

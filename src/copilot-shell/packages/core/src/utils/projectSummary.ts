@@ -27,7 +27,7 @@ export interface ProjectSummaryInfo {
 export async function getProjectSummaryInfo(): Promise<ProjectSummaryInfo> {
   const summaryPath = path.join(
     process.cwd(),
-    '.copilot',
+    '.copilot-shell',
     'PROJECT_SUMMARY.md',
   );
 

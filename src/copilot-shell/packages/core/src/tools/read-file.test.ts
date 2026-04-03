@@ -40,11 +40,12 @@ describe('ReadFileTool', () => {
       getWorkspaceContext: () => createMockWorkspaceContext(tempRootDir),
       storage: {
         getProjectTempDir: () => path.join(tempRootDir, '.temp'),
-        getUserSkillsDir: () => path.join(os.homedir(), '.copilot', 'skills'),
+        getUserSkillsDir: () =>
+          path.join(os.homedir(), '.copilot-shell', 'skills'),
         getRemoteSkillsDir: () =>
-          path.join(tempRootDir, '.copilot', 'remote-skills'),
+          path.join(tempRootDir, '.copilot-shell', 'remote-skills'),
         getGlobalRemoteSkillsDir: () =>
-          path.join(os.homedir(), '.copilot', 'remote-skills'),
+          path.join(os.homedir(), '.copilot-shell', 'remote-skills'),
       },
       getTruncateToolOutputThreshold: () => 2500,
       getTruncateToolOutputLines: () => 500,
