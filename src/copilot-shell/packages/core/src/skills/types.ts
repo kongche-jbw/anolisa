@@ -6,8 +6,8 @@
 
 /**
  * Represents the storage level for a skill configuration.
- * - 'project': Stored in `.copilot/skills/` within the project directory
- * - 'user': Stored in `~/.copilot/skills/` in the user's home directory
+ * - 'project': Stored in `.copilot-shell/skills/` within the project directory
+ * - 'user': Stored in `~/.copilot-shell/skills/` in the user's home directory
  * - 'extension': Provided by an installed extension
  */
 export type SkillLevel = 'project' | 'user' | 'extension' | 'system';

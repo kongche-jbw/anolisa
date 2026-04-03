@@ -5,7 +5,11 @@
  */
 
 import type { Config } from '@copilot-shell/core';
-import { InputFormat, logUserPrompt } from '@copilot-shell/core';
+import {
+  InputFormat,
+  logUserPrompt,
+  migrateConfigDirIfNeeded,
+} from '@copilot-shell/core';
 import { render } from 'ink';
 import { spawn } from 'node:child_process';
 import dns from 'node:dns';
@@ -333,6 +337,14 @@ export async function main() {
     });
   }
 
+  // Migrate config directory from ~/.copilot to ~/.copilot-shell BEFORE loading
+  // settings, so that loadSettings() can read from the new path immediately.
+  // Pass the warning through an env var so the child process (after relaunch) can show it.
+  const migrationWarning = await migrateConfigDirIfNeeded();
+  if (migrationWarning) {
+    process.env['COSH_MIGRATION_WARNING'] = migrationWarning;
+  }
+
   const settings = loadSettings();
   await cleanupCheckpoints();
 
@@ -455,8 +467,14 @@ export async function main() {
     }
 
     let input = config.getQuestion();
+    // In the child process, migrationWarning from migrateConfigDirIfNeeded() is null
+    // (migration already done by parent). Read it from the env var set by parent instead.
+    const effectiveMigrationWarning =
+      migrationWarning ?? process.env['COSH_MIGRATION_WARNING'] ?? null;
+    delete process.env['COSH_MIGRATION_WARNING'];
     const startupWarnings = [
       ...new Set([
+        ...(effectiveMigrationWarning ? [effectiveMigrationWarning] : []),
         ...(await getStartupWarnings()),
         ...(await getUserStartupWarnings({
           workspaceRoot: process.cwd(),

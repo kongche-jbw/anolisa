@@ -230,7 +230,7 @@ linux-sandbox \
 
 - 阻止对敏感目录的写入（如 `/etc`, `/usr`, `/bin` 等）
 - 保护版本控制目录（`.git`, `.svn` 等）
-- 保护 Agent 配置目录（`.copilot`, `.agents` 等）
+- 保护 Agent 配置目录（`.copilot-shell`, `.agents` 等）
 
 ### 完整磁盘访问
 

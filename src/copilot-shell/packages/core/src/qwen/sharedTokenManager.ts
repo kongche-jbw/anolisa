@@ -19,7 +19,7 @@ import {
 } from './qwenOAuth2.js';
 
 // File System Configuration
-const QWEN_DIR = '.copilot';
+const QWEN_DIR = '.copilot-shell';
 const QWEN_CREDENTIAL_FILENAME = 'oauth_creds.json';
 const QWEN_LOCK_FILENAME = 'oauth_creds.lock';
 

@@ -51,14 +51,14 @@ describe('TaskTool', () => {
       description: 'Specialized agent for searching and analyzing files',
       systemPrompt: 'You are a file search specialist.',
       level: 'project',
-      filePath: '/project/.copilot/agents/file-search.md',
+      filePath: '/project/.copilot-shell/agents/file-search.md',
     },
     {
       name: 'code-review',
       description: 'Agent for reviewing code quality and best practices',
       systemPrompt: 'You are a code review specialist.',
       level: 'user',
-      filePath: '/home/user/.copilot/agents/code-review.md',
+      filePath: '/home/user/.copilot-shell/agents/code-review.md',
     },
   ];
 
@@ -256,7 +256,7 @@ describe('TaskTool', () => {
           description: 'A brand new agent',
           systemPrompt: 'Do new things.',
           level: 'project',
-          filePath: '/project/.copilot/agents/new-agent.md',
+          filePath: '/project/.copilot-shell/agents/new-agent.md',
         },
       ];
 
@@ -281,7 +281,7 @@ describe('TaskTool', () => {
           description: 'A test agent',
           systemPrompt: 'Test prompt',
           level: 'project',
-          filePath: '/project/.copilot/agents/test-agent.md',
+          filePath: '/project/.copilot-shell/agents/test-agent.md',
         },
       ];
 

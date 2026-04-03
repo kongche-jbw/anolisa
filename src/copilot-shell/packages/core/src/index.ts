@@ -52,6 +52,7 @@ export * from './aliyun/aliyunCredentials.js';
 
 // Export utilities
 export * from './utils/paths.js';
+export { migrateConfigDirIfNeeded } from './utils/configDirMigration.js';
 export * from './utils/schemaValidator.js';
 export * from './utils/errors.js';
 export * from './utils/getFolderStructure.js';

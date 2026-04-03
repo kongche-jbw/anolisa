@@ -528,7 +528,7 @@ describe('FileCommandLoader', () => {
       ).getProjectCommandsDir();
       const extensionDir = path.join(
         process.cwd(),
-        '.copilot/extensions/test-ext',
+        '.copilot-shell/extensions/test-ext',
       );
 
       mock({
@@ -581,7 +581,7 @@ describe('FileCommandLoader', () => {
       ).getProjectCommandsDir();
       const extensionDir = path.join(
         process.cwd(),
-        '.copilot/extensions/test-ext',
+        '.copilot-shell/extensions/test-ext',
       );
 
       mock({
@@ -677,11 +677,11 @@ describe('FileCommandLoader', () => {
     it('only loads commands from active extensions', async () => {
       const extensionDir1 = path.join(
         process.cwd(),
-        '.copilot/extensions/active-ext',
+        '.copilot-shell/extensions/active-ext',
       );
       const extensionDir2 = path.join(
         process.cwd(),
-        '.copilot/extensions/inactive-ext',
+        '.copilot-shell/extensions/inactive-ext',
       );
 
       mock({
@@ -736,7 +736,7 @@ describe('FileCommandLoader', () => {
     it('handles missing extension commands directory gracefully', async () => {
       const extensionDir = path.join(
         process.cwd(),
-        '.copilot/extensions/no-commands',
+        '.copilot-shell/extensions/no-commands',
       );
 
       mock({
@@ -768,7 +768,10 @@ describe('FileCommandLoader', () => {
     });
 
     it('handles nested command structure in extensions', async () => {
-      const extensionDir = path.join(process.cwd(), '.copilot/extensions/a');
+      const extensionDir = path.join(
+        process.cwd(),
+        '.copilot-shell/extensions/a',
+      );
 
       mock({
         [extensionDir]: {

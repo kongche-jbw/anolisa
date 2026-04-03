@@ -85,7 +85,7 @@ describe('SkillManager', () => {
     name: 'test-skill',
     description: 'A test skill',
     level: 'project',
-    filePath: '/test/project/.copilot/skills/test-skill/SKILL.md',
+    filePath: '/test/project/.copilot-shell/skills/test-skill/SKILL.md',
     body: 'You are a helpful assistant with this skill.',
   };
 
@@ -190,8 +190,9 @@ You are a helpful assistant with this skill.
     });
 
     it('should determine level from file path', () => {
-      const projectPath = '/test/project/.copilot/skills/test-skill/SKILL.md';
-      const userPath = '/home/user/.copilot/skills/test-skill/SKILL.md';
+      const projectPath =
+        '/test/project/.copilot-shell/skills/test-skill/SKILL.md';
+      const userPath = '/home/user/.copilot-shell/skills/test-skill/SKILL.md';
 
       const projectConfig = manager.parseSkillContent(
         validMarkdown,
@@ -463,13 +464,15 @@ Skill 3 content`);
     it('should return project-level base dir', () => {
       const baseDir = manager.getSkillsBaseDir('project');
 
-      expect(baseDir).toBe(path.join('/test/project', '.copilot', 'skills'));
+      expect(baseDir).toBe(
+        path.join('/test/project', '.copilot-shell', 'skills'),
+      );
     });
 
     it('should return user-level base dir', () => {
       const baseDir = manager.getSkillsBaseDir('user');
 
-      expect(baseDir).toBe(path.join('/home/user', '.copilot', 'skills'));
+      expect(baseDir).toBe(path.join('/home/user', '.copilot-shell', 'skills'));
     });
 
     it('should return system-level base dir', () => {

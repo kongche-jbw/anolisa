@@ -119,7 +119,7 @@ vi.mock('../tools/memoryTool', () => ({
   setGeminiMdFilename: vi.fn(),
   getCurrentGeminiMdFilename: vi.fn(() => 'COPILOT.md'), // Mock the original filename
   DEFAULT_CONTEXT_FILENAME: 'COPILOT.md',
-  QWEN_CONFIG_DIR: '.copilot',
+  QWEN_CONFIG_DIR: '.copilot-shell',
 }));
 
 vi.mock('../core/contentGenerator.js');

@@ -25,7 +25,7 @@ import {
   remoteEntryToSkillConfig,
 } from './remote-skill-registry.js';
 
-const COPILOT_CONFIG_DIR = '.copilot';
+const COPILOT_CONFIG_DIR = '.copilot-shell';
 const SKILLS_CONFIG_DIR = 'skills';
 const SKILL_MANIFEST_FILE = 'SKILL.md';
 

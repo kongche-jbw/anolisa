@@ -37,7 +37,7 @@ vi.mock('../i18n/index.js', () => ({
 // Mock @copilot-shell/core
 vi.mock('@copilot-shell/core', () => ({
   Storage: {
-    getGlobalQwenDir: vi.fn(() => '/mock/home/.copilot'),
+    getGlobalQwenDir: vi.fn(() => '/mock/home/.copilot-shell'),
   },
 }));
 
@@ -173,7 +173,7 @@ describe('languageUtils', () => {
     it('should create directory and write file', () => {
       writeOutputLanguageFile('Chinese');
 
-      const globalDir = '/mock/home/.copilot';
+      const globalDir = '/mock/home/.copilot-shell';
       const expectedDir = path.join(globalDir);
       const expectedFilePath = path.join(globalDir, 'output-language.md');
 

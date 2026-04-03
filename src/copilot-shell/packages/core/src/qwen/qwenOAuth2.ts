@@ -33,7 +33,7 @@ const QWEN_OAUTH_SCOPE = 'openid profile email model.completion';
 const QWEN_OAUTH_GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:device_code';
 
 // File System Configuration
-const QWEN_DIR = '.copilot';
+const QWEN_DIR = '.copilot-shell';
 const QWEN_CREDENTIAL_FILENAME = 'oauth_creds.json';
 
 /**

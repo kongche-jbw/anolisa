@@ -6,7 +6,7 @@
 
 /**
  * Utilities for managing the LLM output language rule file.
- * This file handles the creation and maintenance of ~/.copilot/output-language.md
+ * This file handles the creation and maintenance of ~/.copilot-shell/output-language.md
  * which instructs the LLM to respond in the user's preferred language.
  */
 
@@ -61,7 +61,7 @@ export function resolveOutputLanguage(
 }
 
 /**
- * Returns the path to the LLM output language rule file (~/.copilot/output-language.md).
+ * Returns the path to the LLM output language rule file (~/.copilot-shell/output-language.md).
  */
 function getOutputLanguageFilePath(): string {
   return path.join(

@@ -101,8 +101,8 @@ Copilot Shell 使用分层配置系统（按优先级从高到低）：
 
 1. 命令行参数
 2. 环境变量
-3. 项目配置（`.copilot/settings.json`）
-4. 用户配置（`~/.copilot/settings.json`）
+3. 项目配置（`.copilot-shell/settings.json`）
+4. 用户配置（`~/.copilot-shell/settings.json`）
 5. 系统配置
 6. 默认值
 

@@ -107,7 +107,7 @@ describe('IdeClient', () => {
       await ideClient.connect();
 
       expect(fs.promises.readFile).toHaveBeenCalledWith(
-        path.join('/home/test', '.copilot', 'ide', '8080.lock'),
+        path.join('/home/test', '.copilot-shell', 'ide', '8080.lock'),
         'utf8',
       );
       expect(StreamableHTTPClientTransport).toHaveBeenCalledWith(
@@ -271,7 +271,7 @@ describe('IdeClient', () => {
 
       expect(result).toEqual(config);
       expect(fs.promises.readFile).toHaveBeenCalledWith(
-        path.join('/home/test', '.copilot', 'ide', '1234.lock'),
+        path.join('/home/test', '.copilot-shell', 'ide', '1234.lock'),
         'utf8',
       );
       delete process.env['QWEN_CODE_IDE_SERVER_PORT'];
@@ -318,7 +318,7 @@ describe('IdeClient', () => {
       process.env['QWEN_CODE_IDE_SERVER_PORT'] = '2222';
       const config2 = { port: '2222', workspacePath: '/test/workspace2' };
       vi.mocked(fs.promises.readFile)
-        .mockRejectedValueOnce(new Error('not found')) // ~/.copilot/ide/<port>.lock
+        .mockRejectedValueOnce(new Error('not found')) // ~/.copilot-shell/ide/<port>.lock
         .mockRejectedValueOnce(new Error('not found')) // legacy pid file
         .mockResolvedValueOnce(JSON.stringify(config2));
 

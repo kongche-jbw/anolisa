@@ -308,8 +308,8 @@ cosh
 
 | 范围 | 路径 |
 |------|------|
-| 项目级 | `.copilot/skills/` |
-| 用户级 | `~/.copilot/skills/` |
+| 项目级 | `.copilot-shell/skills/` |
+| 用户级 | `~/.copilot-shell/skills/` |
 | 系统级 | `/usr/share/anolisa/skills/` |
 
 安装方式：
@@ -323,9 +323,9 @@ cosh
 - **手动部署（用户级）**
 
 ```bash
-mkdir -p ~/.copilot/skills
+mkdir -p ~/.copilot-shell/skills
 find src/os-skills -name 'SKILL.md' -exec sh -c \
-	'cp -rp "$(dirname "$1")" ~/.copilot/skills/' _ {} \;
+	'cp -rp "$(dirname "$1")" ~/.copilot-shell/skills/' _ {} \;
 ```
 
 **验证**

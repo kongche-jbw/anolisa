@@ -284,7 +284,7 @@ export const useAuthCommand = (
               throw new Error('Access Key ID and Secret cannot be empty');
             }
 
-            // Save credentials to ~/.copilot/aliyun_creds.json
+            // Save credentials to ~/.copilot-shell/aliyun_creds.json
             await saveAliyunCredentials({
               accessKeyId: credentials.accessKeyId.trim(),
               accessKeySecret: credentials.accessKeySecret.trim(),

@@ -653,7 +653,7 @@ build_skills() {
     info "Found ${count} skill definitions"
 
     # Deploy to user-level skill path
-    local target="$HOME/.copilot/skills"
+    local target="$HOME/.copilot-shell/skills"
     mkdir -p "$target"
 
     info "Copying skills to $target ..."
@@ -661,7 +661,7 @@ build_skills() {
         'cp -rp "$(dirname "$1")" "'"$target"'/"' _ {} \;
 
     ARTIFACT_NAMES+=("os-skills")
-    ARTIFACT_PATHS+=("~/.copilot/skills/ (${count} skills installed)")
+    ARTIFACT_PATHS+=("~/.copilot-shell/skills/ (${count} skills installed)")
     ok "os-skills: ${count} skills deployed to $target"
 }
 

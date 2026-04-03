@@ -209,7 +209,7 @@ const SETTINGS_SCHEMA = {
         description:
           'The language for the user interface. Use "auto" to detect from system settings. ' +
           'You can also use custom language codes (e.g., "es", "fr") by placing JS language files ' +
-          'in ~/.copilot/locales/ (e.g., ~/.copilot/locales/es.js).',
+          'in ~/.copilot-shell/locales/ (e.g., ~/.copilot-shell/locales/es.js).',
         showInDialog: true,
         options: [] as readonly SettingEnumOption[],
       },

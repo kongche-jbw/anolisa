@@ -89,7 +89,7 @@ describe('restoreCommand', () => {
       ).toEqual({
         type: 'message',
         messageType: 'error',
-        content: 'Could not determine the .copilot directory path.',
+        content: 'Could not determine the .copilot-shell directory path.',
       });
     });
 

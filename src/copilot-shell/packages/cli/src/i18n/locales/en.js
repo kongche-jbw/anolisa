@@ -198,8 +198,10 @@ export default {
   // ============================================================================
   // Agents - Creation Wizard
   // ============================================================================
-  'Project Level (.copilot/agents/)': 'Project Level (.copilot/agents/)',
-  'User Level (~/.copilot/agents/)': 'User Level (~/.copilot/agents/)',
+  'Project Level (.copilot-shell/agents/)':
+    'Project Level (.copilot-shell/agents/)',
+  'User Level (~/.copilot-shell/agents/)':
+    'User Level (~/.copilot-shell/agents/)',
   '✅ Subagent Created Successfully!': '✅ Subagent Created Successfully!',
   'Subagent "{{name}}" has been saved to {{level}} level.':
     'Subagent "{{name}}" has been saved to {{level}} level.',
@@ -798,8 +800,8 @@ export default {
   // ============================================================================
   // Commands - Summary
   // ============================================================================
-  'Generate a project summary and save it to .copilot/PROJECT_SUMMARY.md':
-    'Generate a project summary and save it to .copilot/PROJECT_SUMMARY.md',
+  'Generate a project summary and save it to .copilot-shell/PROJECT_SUMMARY.md':
+    'Generate a project summary and save it to .copilot-shell/PROJECT_SUMMARY.md',
   'No chat client available to generate summary.':
     'No chat client available to generate summary.',
   'Already generating summary, wait for previous request to complete':

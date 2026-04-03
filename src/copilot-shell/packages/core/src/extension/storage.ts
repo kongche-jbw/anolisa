@@ -39,9 +39,9 @@ export class ExtensionStorage {
       const tmpDir = os.tmpdir();
       if (!tmpDir) {
         // Ultimate fallback when both os.homedir and os.tmpdir are mocked
-        return '/tmp/.copilot/extensions';
+        return '/tmp/.copilot-shell/extensions';
       }
-      return path.join(tmpDir, '.copilot', 'extensions');
+      return path.join(tmpDir, '.copilot-shell', 'extensions');
     }
     const storage = new Storage(homeDir);
     return storage.getExtensionsDir();

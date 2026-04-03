@@ -53,14 +53,14 @@ describe('SkillTool', () => {
       name: 'code-review',
       description: 'Specialized skill for reviewing code quality',
       level: 'project',
-      filePath: '/project/.copilot/skills/code-review/SKILL.md',
+      filePath: '/project/.copilot-shell/skills/code-review/SKILL.md',
       body: 'Review code for quality and best practices.',
     },
     {
       name: 'testing',
       description: 'Skill for writing and running tests',
       level: 'user',
-      filePath: '/home/user/.copilot/skills/testing/SKILL.md',
+      filePath: '/home/user/.copilot-shell/skills/testing/SKILL.md',
       body: 'Help write comprehensive tests.',
       allowedTools: ['read_file', 'write_file', 'shell'],
     },
@@ -254,7 +254,7 @@ describe('SkillTool', () => {
           name: 'new-skill',
           description: 'A brand new skill',
           level: 'project',
-          filePath: '/project/.copilot/skills/new-skill/SKILL.md',
+          filePath: '/project/.copilot-shell/skills/new-skill/SKILL.md',
           body: 'New skill content.',
         },
       ];
@@ -277,7 +277,7 @@ describe('SkillTool', () => {
           name: 'test-skill',
           description: 'A test skill',
           level: 'project',
-          filePath: '/project/.copilot/skills/test-skill/SKILL.md',
+          filePath: '/project/.copilot-shell/skills/test-skill/SKILL.md',
           body: 'Test content.',
         },
       ];
@@ -318,7 +318,7 @@ describe('SkillTool', () => {
 
       const llmText = partToString(result.llmContent);
       expect(llmText).toContain(
-        'Base directory for this skill: /project/.copilot/skills/code-review',
+        'Base directory for this skill: /project/.copilot-shell/skills/code-review',
       );
       expect(llmText.trim()).toContain(
         'Review code for quality and best practices.',

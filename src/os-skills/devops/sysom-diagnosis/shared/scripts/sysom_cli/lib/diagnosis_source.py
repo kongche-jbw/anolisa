@@ -22,7 +22,7 @@ LEGACY_DIAGNOSIS_SOURCE_KEYS: Tuple[str, ...] = ("$diagnosis_source",)
 # 当前目录下存在这些子目录/文件时命中（优先级高于路径段）。
 DIR_MARKERS: Tuple[Tuple[str, str], ...] = (
     (".claude", "claude"),
-    (".copilot", "cosh"),
+    (".copilot-shell", "cosh"),
 )
 
 # 向上遍历时，若当前路径的**最后一段**为下列名称则命中（如 /usr/share/anolisa/skills/...）。
@@ -51,7 +51,7 @@ def infer_diagnosis_source_from_cwd(
 ) -> Optional[str]:
     """
     从 start（默认 Path.cwd()）逐级向父目录查找：
-    1) 是否存在 DIR_MARKERS 中的子目录/文件（如 ``.claude`` / ``.copilot``）；
+    1) 是否存在 DIR_MARKERS 中的子目录/文件（如 ``.claude`` / ``.copilot-shell``）；
     2) 否则当前路径最后一段是否匹配 PATH_SEGMENT_MARKERS（如 ``anolisa``，常见于 ``/usr/share/anolisa/skills``）。
     命中即返回对应来源标识；同一层内 DIR_MARKERS 优先于路径段。
     """

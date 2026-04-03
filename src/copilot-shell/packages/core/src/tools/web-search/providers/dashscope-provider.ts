@@ -59,7 +59,7 @@ interface DashScopeSearchResponse {
 }
 
 // File System Configuration
-const QWEN_DIR = '.copilot';
+const QWEN_DIR = '.copilot-shell';
 const QWEN_CREDENTIAL_FILENAME = 'oauth_creds.json';
 
 /**

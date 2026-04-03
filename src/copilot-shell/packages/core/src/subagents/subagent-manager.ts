@@ -31,7 +31,7 @@ import type { Config } from '../config/config.js';
 import { BuiltinAgentRegistry } from './builtin-agents.js';
 import { ToolDisplayNamesMigration } from '../tools/tool-names.js';
 
-const COPILOT_CONFIG_DIR = '.copilot';
+const COPILOT_CONFIG_DIR = '.copilot-shell';
 const AGENT_CONFIG_DIR = 'agents';
 
 /**

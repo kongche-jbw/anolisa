@@ -114,8 +114,8 @@ sudo yum install anolisa-skills
 ### 手动安装
 
 将技能目录复制到以下搜索路径之一：
-1. 项目级：`.copilot/skills/`
-2. 用户级：`~/.copilot/skills/`
+1. 项目级：`.copilot-shell/skills/`
+2. 用户级：`~/.copilot-shell/skills/`
 3. 系统级：`/usr/share/anolisa/skills/`
 
 ## 编写新技能

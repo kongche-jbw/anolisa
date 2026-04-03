@@ -195,8 +195,8 @@ export default {
   // ============================================================================
   // Agents - Creation Wizard
   // ============================================================================
-  'Project Level (.copilot/agents/)': '项目级 (.copilot/agents/)',
-  'User Level (~/.copilot/agents/)': '用户级 (~/.copilot/agents/)',
+  'Project Level (.copilot-shell/agents/)': '项目级 (.copilot-shell/agents/)',
+  'User Level (~/.copilot-shell/agents/)': '用户级 (~/.copilot-shell/agents/)',
   '✅ Subagent Created Successfully!': '✅ 子代理创建成功！',
   'Subagent "{{name}}" has been saved to {{level}} level.':
     '子代理 "{{name}}" 已保存到 {{level}} 级别。',
@@ -754,8 +754,8 @@ export default {
   // ============================================================================
   // Commands - Summary
   // ============================================================================
-  'Generate a project summary and save it to .copilot/PROJECT_SUMMARY.md':
-    '生成项目摘要并保存到 .copilot/PROJECT_SUMMARY.md',
+  'Generate a project summary and save it to .copilot-shell/PROJECT_SUMMARY.md':
+    '生成项目摘要并保存到 .copilot-shell/PROJECT_SUMMARY.md',
   'No chat client available to generate summary.':
     '没有可用的聊天客户端来生成摘要',
   'Already generating summary, wait for previous request to complete':

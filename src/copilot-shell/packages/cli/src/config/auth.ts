@@ -221,7 +221,7 @@ export function validateAuthMethod(
 
   if (authMethod === AuthType.USE_ALIYUN) {
     // Aliyun AK/SK auth doesn't require environment variables
-    // The credentials are stored in ~/.copilot/aliyun_creds.json
+    // The credentials are stored in ~/.copilot-shell/aliyun_creds.json
     return null;
   }
 

@@ -114,8 +114,8 @@ Skills are installed to `/usr/share/anolisa/skills/` and auto-discovered by Copi
 ### Manual
 
 Copy any skill directory to one of the skill search paths:
-1. Project: `.copilot/skills/`
-2. User: `~/.copilot/skills/`
+1. Project: `.copilot-shell/skills/`
+2. User: `~/.copilot-shell/skills/`
 3. System: `/usr/share/anolisa/skills/`
 
 ## Writing a New Skill

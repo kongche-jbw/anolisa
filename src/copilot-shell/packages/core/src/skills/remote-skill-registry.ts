@@ -71,7 +71,7 @@ interface IndexCache {
 
 const DEFAULT_CACHE_TTL = 3600000; // 1 hour
 const DEFAULT_TIMEOUT = 30000; // 30 seconds
-const COPILOT_CONFIG_DIR = '.copilot';
+const COPILOT_CONFIG_DIR = '.copilot-shell';
 const REMOTE_SKILLS_DIR = 'remote-skills';
 const INDEX_CACHE_FILE = 'index.json';
 

@@ -307,8 +307,8 @@ Skill search paths (Copilot Shell discovers skills in the following priority ord
 
 | Scope | Path |
 |-------|------|
-| Project | `.copilot/skills/` |
-| User | `~/.copilot/skills/` |
+| Project | `.copilot-shell/skills/` |
+| User | `~/.copilot-shell/skills/` |
 | System | `/usr/share/anolisa/skills/` |
 
 Install options:
@@ -322,9 +322,9 @@ Install options:
 - **Manual deployment (user-level)**
 
 ```bash
-mkdir -p ~/.copilot/skills
+mkdir -p ~/.copilot-shell/skills
 find src/os-skills -name 'SKILL.md' -exec sh -c \
-	'cp -rp "$(dirname "$1")" ~/.copilot/skills/' _ {} \;
+	'cp -rp "$(dirname "$1")" ~/.copilot-shell/skills/' _ {} \;
 ```
 
 **Verify**

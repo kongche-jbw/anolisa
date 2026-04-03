@@ -101,8 +101,8 @@ Copilot Shell uses a layered configuration system (highest priority first):
 
 1. Command-line arguments
 2. Environment variables
-3. Project settings (`.copilot/settings.json`)
-4. User settings (`~/.copilot/settings.json`)
+3. Project settings (`.copilot-shell/settings.json`)
+4. User settings (`~/.copilot-shell/settings.json`)
 5. System settings
 6. Defaults
 
