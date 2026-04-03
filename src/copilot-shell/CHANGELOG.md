@@ -1,32 +1,30 @@
 # Changelog
 
-## 2.0.1
+All notable changes to this project will be documented in this file.
 
-- Renamed OpenAI authentication label to "BaiLian (OpenAI Compatible)" for clarity.
-- Fixed login shell stdin drain to prevent unwanted input echo.
-- Removed ripgrep unavailable warning message.
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## 2.0.0
+## [Unreleased]
 
-- Synced upstream `qwen-code` to v0.9.0 and rebranded to **Copilot Shell**.
-- Bumped version directly to 2.0.0 (skipping 1.x, which was used by a previous `OS Copilot` release).
-- Integrated Skill-OS online remote skill discovery with priority-based fallback (Project > User > Extension > Remote).
-- Added `/skills remote` and `/skills cache clear` commands for remote skill management.
-- Added `/bash` interactive shell mode
-- Added `-c` argument support for inline bash commands.
-- Added PTY mode for `sudo` command support.
-- Added hooks system with PreToolUse event for intercepting tool calls before execution.
-- Added new model provider named Aliyun
-- Added nested startup detection warning banner.
-- Added system-wide skill path (`/usr/share`) support.
-- Removed original Gemini sandbox.
-- Fixed skill frontmatter parsing for YAML special characters (`|`, `&`, `>`).
-- Fixed login escaped character echo issue in ECS workbench.
-- Fixed Linux headless environment browser open failure when auth with Qwen OAuth.
-- Fixed Qwen OAuth authentication, replay, and UI rendering issues.
-- Fixed exception handling when adding workspace directories.
-- Fixed user query start with unix path being misidentified as command.
-- Fixed API key display explicitly.
-- Fixed Chinese i18n for `/resume` command.
-- Improved `?` hint visibility — hidden while user is typing.
-- Miscellaneous UI, branding, CI, and build improvements.
+### Added
+
+- **cosh**: Migrate config directory from ~/.copilot to ~/.copilot-shell
+- **cosh**: Add nvm-aware Node.js detection in cosh wrapper
+- **cosh**: Install files per FHS directory layout
+- **cosh**: Support loading skills from extension (#55)
+- **cosh**: Add system-level install via Makefile and align spec
+- **cosh**: Add cosh-extension.json compatibility
+- **cosh**: Add built-in cd command support for changing directory (#19)
+- **cosh**: Detect OpenClaw configured api-key on bootstrap
+- **cosh**: Add session renaming command
+- **cosh**: Register cosh and copilot aliases in create_alias.sh
+- **cosh**: Support multiple custom providers
+
+### Fixed
+
+- **cosh**: Reduce TUI flicker on Qwen OAuth page in limited-height terminals
+- **cosh**: Allow left arrow to wrap from line start to previous line end
+- **cosh**: Add 30s auto-accept timeout to create_alias.sh interactive prompt
+- **cosh**: Lock package for avoiding lint failure
+
