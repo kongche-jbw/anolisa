@@ -1,0 +1,69 @@
+###############################################################################
+# Issue Automation — Parse Issue Form and apply component label
+#
+# Triggered when a new issue is opened.
+# Reads the "Component" dropdown from the Issue Form body and maps it to a
+# component:xxx label. The label addition then triggers issue-triage.yml,
+# which handles assignee routing and notifications.
+###############################################################################
+
+name: 🤖 Issue Automation
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  issues: write
+
+jobs:
+  auto-label:
+    name: 🏷️ Auto Label
+    runs-on: ubuntu-22.04
+
+    steps:
+      # -----------------------------------------------------------------------
+      # Parse Issue Form body → map Component dropdown value to a label
+      # -----------------------------------------------------------------------
+      - name: 🔍 Parse component and apply label
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.issue.body || '';
+
+            // Skip if a component label is already present (e.g. applied via API or Issue Form)
+            const existingLabels = context.payload.issue.labels.map(l => l.name);
+            const alreadyLabeled = existingLabels.some(l => l.startsWith('component:'));
+            if (alreadyLabeled) {
+              console.log(`Issue already has a component label: ${existingLabels.filter(l => l.startsWith('component:')).join(', ')} — skipping.`);
+              return;
+            }
+
+            // Issue Form renders dropdown fields as: "### FieldName\n\nValue"
+            const componentMatch = body.match(/###\s*Component\s*\n\n(.+)/i);
+            const component = componentMatch ? componentMatch[1].trim() : '';
+
+            console.log(`Parsed component: "${component}"`);
+
+            // Map dropdown display value → label name
+            const labelMap = {
+              'copilot-shell (cosh)': 'component:cosh',
+              'agent-sec-core':       'component:sec-core',
+              'os-skills':            'component:skill',
+              'agentsight':           'component:sight',
+            };
+
+            const label = labelMap[component];
+            if (!label) {
+              console.log('No matching component label found — skipping.');
+              return;
+            }
+
+            console.log(`Applying label: ${label}`);
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: [label],
+            });
+            // Label addition will trigger issue-triage.yml for assign + notify

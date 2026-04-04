@@ -1,0 +1,46 @@
+{
+    "scopes": [
+        {
+            "label": "component:cosh",
+            "maintainers": [
+                {
+                    "github": "kongche-jbw"
+                },
+                {
+                    "github": "samchu-zsl"
+                }
+            ]
+        },
+        {
+            "label": "component:sec-core",
+            "maintainers": [
+                {
+                    "github": "1570005763"
+                }
+            ]
+        },
+        {
+            "label": "component:skill",
+            "maintainers": [
+                {
+                    "github": "Ziqi002"
+                }
+            ]
+        },
+        {
+            "label": "component:sight",
+            "maintainers": [
+                {
+                    "github": "chengshuyi"
+                }
+            ]
+        }
+    ],
+    "default": {
+        "maintainers": [
+            {
+                "github": "kongche-jbw"
+            }
+        ]
+    }
+}
