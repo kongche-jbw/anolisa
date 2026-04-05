@@ -51,6 +51,12 @@ export * from './qwen/qwenOAuth2.js';
 export * from './aliyun/aliyunCredentials.js';
 
 // Export utilities
+export {
+  redactSecrets,
+  redactPartListUnion,
+  redactAnsiOutput,
+  containsSecrets,
+} from './utils/secretRedactor.js';
 export * from './utils/paths.js';
 export { migrateConfigDirIfNeeded } from './utils/configDirMigration.js';
 export * from './utils/schemaValidator.js';

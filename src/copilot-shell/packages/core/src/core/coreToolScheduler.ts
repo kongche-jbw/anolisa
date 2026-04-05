@@ -51,6 +51,11 @@ import { doesToolInvocationMatch } from '../utils/tool-utils.js';
 import levenshtein from 'fast-levenshtein';
 import { getPlanModeSystemReminder } from './prompts.js';
 import { ShellToolInvocation } from '../tools/shell.js';
+import {
+  redactSecrets,
+  redactPartListUnion,
+  redactAnsiOutput,
+} from '../utils/secretRedactor.js';
 
 export type ValidatingToolCall = {
   status: 'validating';
@@ -1207,6 +1212,22 @@ export class CoreToolScheduler {
 
         try {
           const toolResult: ToolResult = await promise;
+
+          // Redact secrets from tool result before further processing
+          toolResult.llmContent = redactPartListUnion(toolResult.llmContent);
+          if (typeof toolResult.returnDisplay === 'string') {
+            toolResult.returnDisplay = redactSecrets(toolResult.returnDisplay);
+          } else if (
+            toolResult.returnDisplay &&
+            typeof toolResult.returnDisplay === 'object' &&
+            'ansiOutput' in toolResult.returnDisplay
+          ) {
+            const ansiDisplay = toolResult.returnDisplay as {
+              ansiOutput: import('../utils/terminalSerializer.js').AnsiOutput;
+            };
+            ansiDisplay.ansiOutput = redactAnsiOutput(ansiDisplay.ansiOutput);
+          }
+
           if (signal.aborted) {
             this.setStatusInternal(
               callId,

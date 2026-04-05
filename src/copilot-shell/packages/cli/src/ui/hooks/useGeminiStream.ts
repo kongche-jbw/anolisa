@@ -34,6 +34,7 @@ import {
   ToolConfirmationOutcome,
   logApiCancel,
   ApiCancelEvent,
+  redactSecrets,
 } from '@copilot-shell/core';
 import { type Part, type PartListUnion, FinishReason } from '@google/genai';
 import type {
@@ -118,6 +119,13 @@ export const useGeminiStream = (
   const abortControllerRef = useRef<AbortController | null>(null);
   const turnCancelledRef = useRef(false);
   const isSubmittingQueryRef = useRef(false);
+  // Raw (unredacted) content accumulated for the current streaming turn.
+  // Kept separate so that secrets spanning multiple stream chunks can be
+  // detected and masked in their entirety rather than chunk-by-chunk.
+  const rawTurnContentRef = useRef('');
+  // Byte offset into the fully-redacted turn content that has already been
+  // committed to static history items (via addItem / split logic).
+  const committedStaticLengthRef = useRef(0);
   const [isResponding, setIsResponding] = useState<boolean>(false);
   const [thought, setThought] = useState<ThoughtSummary | null>(null);
   const [pendingHistoryItem, pendingHistoryItemRef, setPendingHistoryItem] =
@@ -453,7 +461,15 @@ export const useGeminiStream = (
         // Prevents additional output after a user initiated cancel.
         return '';
       }
-      let newGeminiMessageBuffer = currentGeminiMessageBuffer + eventValue;
+      // Accumulate raw (unredacted) content for this turn so that secrets
+      // spanning multiple stream chunks are detected as a whole.
+      rawTurnContentRef.current += eventValue;
+      // Redact the full accumulated raw content, then slice off the portion
+      // that has already been committed to static history items.
+      const fullyRedacted = redactSecrets(rawTurnContentRef.current);
+      let newGeminiMessageBuffer = fullyRedacted.slice(
+        committedStaticLengthRef.current,
+      );
       if (
         pendingHistoryItemRef.current?.type !== 'gemini' &&
         pendingHistoryItemRef.current?.type !== 'gemini_content'
@@ -462,7 +478,9 @@ export const useGeminiStream = (
           addItem(pendingHistoryItemRef.current, userMessageTimestamp);
         }
         setPendingHistoryItem({ type: 'gemini', text: '' });
-        newGeminiMessageBuffer = eventValue;
+        newGeminiMessageBuffer = fullyRedacted.slice(
+          committedStaticLengthRef.current,
+        );
       }
       // Split large messages for better rendering performance. Ideally,
       // we should maximize the amount of output sent to <Static />.
@@ -494,6 +512,9 @@ export const useGeminiStream = (
           userMessageTimestamp,
         );
         setPendingHistoryItem({ type: 'gemini_content', text: afterText });
+        // Track how much of the redacted content is now in static items so
+        // that subsequent chunks can derive the correct pending slice.
+        committedStaticLengthRef.current += splitPoint;
         newGeminiMessageBuffer = afterText;
       }
       return newGeminiMessageBuffer;
@@ -800,6 +821,9 @@ export const useGeminiStream = (
       signal: AbortSignal,
     ): Promise<StreamProcessingStatus> => {
       let geminiMessageBuffer = '';
+      // Reset per-turn raw buffer and committed-length tracker.
+      rawTurnContentRef.current = '';
+      committedStaticLengthRef.current = 0;
       let thoughtBuffer = '';
       const toolCallRequests: ToolCallRequestInfo[] = [];
       for await (const event of stream) {
