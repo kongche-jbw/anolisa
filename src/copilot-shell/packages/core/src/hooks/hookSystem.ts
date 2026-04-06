@@ -12,8 +12,14 @@ import { HookPlanner } from './hookPlanner.js';
 import { HookEventHandler } from './hookEventHandler.js';
 import type { HookRegistryEntry } from './hookRegistry.js';
 import { createDebugLogger } from '../utils/debugLogger.js';
-import type { DefaultHookOutput, PreToolUseHookOutput } from './types.js';
-import { createHookOutput } from './types.js';
+import type {
+  DefaultHookOutput,
+  PreToolUseHookOutput,
+  PostToolUseFailureHookOutput,
+  HookEventName,
+  HookConfig,
+} from './types.js';
+import { createHookOutput, HooksConfigSource } from './types.js';
 
 const debugLogger = createDebugLogger('TRUSTED_HOOKS');
 
@@ -115,5 +121,39 @@ export class HookSystem {
     return result.finalOutput
       ? createHookOutput('Stop', result.finalOutput)
       : undefined;
+  }
+
+  async firePostToolUseFailureEvent(
+    toolUseId: string,
+    toolName: string,
+    toolInput: Record<string, unknown>,
+    error: string,
+    errorType?: string,
+  ): Promise<PostToolUseFailureHookOutput | undefined> {
+    const result = await this.hookEventHandler.firePostToolUseFailureEvent(
+      toolUseId,
+      toolName,
+      toolInput,
+      error,
+      errorType,
+    );
+    return result.finalOutput
+      ? (createHookOutput(
+          'PostToolUseFailure',
+          result.finalOutput,
+        ) as PostToolUseFailureHookOutput)
+      : undefined;
+  }
+
+  /**
+   * Dynamically register a hook for the current session.
+   * Used by /hooks install to activate hooks immediately without restart.
+   */
+  registerHook(
+    eventName: HookEventName,
+    hookConfig: HookConfig,
+    source: HooksConfigSource = HooksConfigSource.User,
+  ): void {
+    this.hookRegistry.registerHook(eventName, hookConfig, source);
   }
 }

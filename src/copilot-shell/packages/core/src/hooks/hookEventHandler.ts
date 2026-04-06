@@ -16,6 +16,7 @@ import type {
   UserPromptSubmitInput,
   StopInput,
   PreToolUseInput,
+  PostToolUseFailureInput,
 } from './types.js';
 import { createDebugLogger } from '../utils/debugLogger.js';
 
@@ -89,6 +90,29 @@ export class HookEventHandler {
     };
 
     return this.executeHooks(HookEventName.Stop, input);
+  }
+
+  /**
+   * Fire a PostToolUseFailure event
+   * Called after a tool execution fails, allowing hooks to react and request bypasses
+   */
+  async firePostToolUseFailureEvent(
+    toolUseId: string,
+    toolName: string,
+    toolInput: Record<string, unknown>,
+    error: string,
+    errorType?: string,
+  ): Promise<AggregatedHookResult> {
+    const input: PostToolUseFailureInput = {
+      ...this.createBaseInput(HookEventName.PostToolUseFailure),
+      tool_use_id: toolUseId,
+      tool_name: toolName,
+      tool_input: toolInput,
+      error,
+      error_type: errorType,
+    };
+
+    return this.executeHooks(HookEventName.PostToolUseFailure, input);
   }
 
   /**

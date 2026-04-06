@@ -169,6 +169,22 @@ export const DialogManager = ({
       />
     );
   }
+  if (uiState.sandboxBypassRequest) {
+    const { original_command, reason, onComplete } =
+      uiState.sandboxBypassRequest;
+    return (
+      <ConsentPrompt
+        prompt={
+          `**沙箱执行失败 — 是否允许直接运行？**\n\n` +
+          `命令：\`${original_command}\`\n\n` +
+          `原因：${reason}\n\n` +
+          `确认后将临时禁用沙箱防护，执行完毕后自动恢复。`
+        }
+        onConfirm={onComplete}
+        terminalWidth={terminalWidth}
+      />
+    );
+  }
   if (uiState.confirmationRequest) {
     return (
       <ConsentPrompt

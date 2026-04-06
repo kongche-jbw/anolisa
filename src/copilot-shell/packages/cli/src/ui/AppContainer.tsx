@@ -705,6 +705,7 @@ export const AppContainer = (props: AppContainerProps) => {
     handleApprovalModeChange,
     activePtyId,
     loopDetectionConfirmationRequest,
+    sandboxBypassRequest,
   } = useGeminiStream(
     config.getGeminiClient(),
     historyManager.history,
@@ -1356,6 +1357,7 @@ export const AppContainer = (props: AppContainerProps) => {
     settingInputRequests.length > 0 ||
     pluginChoiceRequests.length > 0 ||
     !!loopDetectionConfirmationRequest ||
+    !!sandboxBypassRequest ||
     isThemeDialogOpen ||
     isSettingsDialogOpen ||
     isModelDialogOpen ||
@@ -1420,6 +1422,7 @@ export const AppContainer = (props: AppContainerProps) => {
       settingInputRequests,
       pluginChoiceRequests,
       loopDetectionConfirmationRequest,
+      sandboxBypassRequest,
       geminiMdFileCount,
       streamingState,
       initError,
@@ -1513,6 +1516,7 @@ export const AppContainer = (props: AppContainerProps) => {
       settingInputRequests,
       pluginChoiceRequests,
       loopDetectionConfirmationRequest,
+      sandboxBypassRequest,
       geminiMdFileCount,
       streamingState,
       initError,

@@ -129,6 +129,8 @@ export function createHookOutput(
       return new StopHookOutput(data);
     case HookEventName.PermissionRequest:
       return new PermissionRequestHookOutput(data);
+    case HookEventName.PostToolUseFailure:
+      return new PostToolUseFailureHookOutput(data);
     default:
       return new DefaultHookOutput(data);
   }
@@ -438,6 +440,17 @@ export interface PostToolUseFailureInput extends HookInput {
 }
 
 /**
+ * Sandbox bypass approval request
+ * Emitted by sandbox-failure-handler hook when a sandbox execution fails
+ */
+export interface SandboxBypassApprovalRequest {
+  /** The original command to run without sandbox wrapping */
+  original_command: string;
+  /** Human-readable reason why bypass is being requested */
+  reason: string;
+}
+
+/**
  * PostToolUseFailure hook output
  * Supports all three hook types: command, prompt, and agent
  */
@@ -445,7 +458,35 @@ export interface PostToolUseFailureOutput extends HookOutput {
   hookSpecificOutput?: {
     hookEventName: 'PostToolUseFailure';
     additionalContext?: string;
+    /** If present, the hook requests a sandbox bypass approval dialog */
+    sandbox_bypass_request?: SandboxBypassApprovalRequest;
   };
+}
+
+/**
+ * Specific hook output class for PostToolUseFailure events.
+ */
+export class PostToolUseFailureHookOutput extends DefaultHookOutput {
+  /**
+   * Get sandbox bypass request if provided by hook
+   */
+  getSandboxBypassRequest(): SandboxBypassApprovalRequest | undefined {
+    if (
+      this.hookSpecificOutput &&
+      'sandbox_bypass_request' in this.hookSpecificOutput
+    ) {
+      const req = this.hookSpecificOutput['sandbox_bypass_request'];
+      if (
+        typeof req === 'object' &&
+        req !== null &&
+        'original_command' in req &&
+        'reason' in req
+      ) {
+        return req as SandboxBypassApprovalRequest;
+      }
+    }
+    return undefined;
+  }
 }
 
 /**

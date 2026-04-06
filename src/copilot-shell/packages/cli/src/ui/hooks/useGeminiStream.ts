@@ -16,6 +16,7 @@ import type {
   ThoughtSummary,
   ToolCallRequestInfo,
   GeminiErrorEventValue,
+  SandboxBypassApprovalRequest,
 } from '@copilot-shell/core';
 import {
   GeminiEventType as ServerGeminiEventType,
@@ -42,6 +43,7 @@ import type {
   HistoryItemWithoutId,
   HistoryItemToolGroup,
   SlashCommandProcessorResult,
+  SandboxBypassRequest,
 } from '../types.js';
 import { StreamingState, MessageType, ToolCallStatus } from '../types.js';
 import { isAtCommand, isSlashCommand } from '../utils/commandUtils.js';
@@ -149,6 +151,24 @@ export const useGeminiStream = (
     setShellInputFocused(true);
   }, [setShellInputFocused]);
 
+  const [sandboxBypassRequest, setSandboxBypassRequest] =
+    useState<SandboxBypassRequest | null>(null);
+
+  const handleSandboxBypassRequested = useCallback(
+    (request: SandboxBypassApprovalRequest): Promise<boolean> =>
+      new Promise<boolean>((resolve) => {
+        setSandboxBypassRequest({
+          original_command: request.original_command,
+          reason: request.reason,
+          onComplete: (approved: boolean) => {
+            setSandboxBypassRequest(null);
+            resolve(approved);
+          },
+        });
+      }),
+    [],
+  );
+
   const [toolCalls, scheduleToolCalls, markToolsAsSubmitted] =
     useReactToolScheduler(
       async (completedToolCallsFromScheduler) => {
@@ -172,6 +192,7 @@ export const useGeminiStream = (
       getPreferredEditor,
       onEditorClose,
       handlePasswordPrompt,
+      handleSandboxBypassRequested,
     );
 
   const pendingToolCallGroupDisplay = useMemo(
@@ -1392,5 +1413,6 @@ export const useGeminiStream = (
     handleApprovalModeChange,
     activePtyId,
     loopDetectionConfirmationRequest,
+    sandboxBypassRequest,
   };
 };
