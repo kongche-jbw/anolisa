@@ -56,6 +56,7 @@ import {
   redactPartListUnion,
   redactAnsiOutput,
 } from '../utils/secretRedactor.js';
+import type { FileDiff } from '../tools/tools.js';
 
 export type ValidatingToolCall = {
   status: 'validating';
@@ -1226,6 +1227,20 @@ export class CoreToolScheduler {
               ansiOutput: import('../utils/terminalSerializer.js').AnsiOutput;
             };
             ansiDisplay.ansiOutput = redactAnsiOutput(ansiDisplay.ansiOutput);
+          } else if (
+            toolResult.returnDisplay &&
+            typeof toolResult.returnDisplay === 'object' &&
+            'fileDiff' in toolResult.returnDisplay
+          ) {
+            // Redact secrets from FileDiff display (WriteFile / EditFile results)
+            const diffDisplay = toolResult.returnDisplay as FileDiff;
+            diffDisplay.fileDiff = redactSecrets(diffDisplay.fileDiff);
+            diffDisplay.newContent = redactSecrets(diffDisplay.newContent);
+            if (diffDisplay.originalContent !== null) {
+              diffDisplay.originalContent = redactSecrets(
+                diffDisplay.originalContent,
+              );
+            }
           }
 
           if (signal.aborted) {
