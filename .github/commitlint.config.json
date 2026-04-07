@@ -4,13 +4,13 @@
   ],
   "rules": {
     "scope-enum": [
-      2,
+      1,
       "always",
       [
         "cosh",
-        "agent-sec-core",
-        "os-skills",
-        "agentsight",
+        "sec-core",
+        "skill",
+        "sight",
         "deps",
         "ci",
         "docs",

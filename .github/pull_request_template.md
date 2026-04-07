@@ -35,9 +35,9 @@ closes #
 <!-- Which sub-project does this PR affect? -->
 
 - [ ] `cosh` (copilot-shell)
-- [ ] `agent-sec-core`
-- [ ] `os-skills`
-- [ ] `agentsight`
+- [ ] `sec-core` (agent-sec-core)
+- [ ] `skill` (os-skills)
+- [ ] `sight` (agentsight)
 - [ ] Multiple / Project-wide
 
 ## Checklist
@@ -49,9 +49,10 @@ closes #
 - [ ] I have added tests that prove my fix is effective or that my feature works
 - [ ] I have updated the documentation accordingly
 - [ ] For `cosh`: Lint passes, type check passes, and tests pass
-- [ ] For `agent-sec-core` (Rust): `cargo clippy -- -D warnings` and `cargo fmt --check` pass
-- [ ] For `agent-sec-core` (Python): Ruff format and pytest pass
-- [ ] For `os-skills`: Skill directory structure is valid and shell scripts pass syntax check
+- [ ] For `sec-core` (Rust): `cargo clippy -- -D warnings` and `cargo fmt --check` pass
+- [ ] For `sec-core` (Python): Ruff format and pytest pass
+- [ ] For `skill`: Skill directory structure is valid and shell scripts pass syntax check
+- [ ] For `sight`: `cargo clippy -- -D warnings` and `cargo fmt --check` pass
 - [ ] Lock files are up to date (`package-lock.json` / `Cargo.lock`)
 
 ## Testing
