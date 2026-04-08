@@ -23,12 +23,18 @@ export interface AgentKeyConfig {
 export const AGENT_KEY_AUTO_REDIRECT_MS = 2000;
 
 /**
- * 匹配顺序：子域名必须在父域名前，否则 coding.dashscope... 会被 dashscope 提前命中。
+ * 匹配顺序：子域名必须在父域名前，否则 coding.dashscope等 会被 dashscope 提前命中。
  * 此顺序独立于 OPENAI_PROVIDERS 的数组顺序。
  */
 const PROVIDER_MATCH_ORDER = [
-  'dashscope-coding-plan',
-  'dashscope',
+  // DashScope Coding Plan 必须在所有 dashscope 之前（coding.子域名）
+  'dashscope-coding-plan-intl', // coding.dashscope-intl
+  'dashscope-coding-plan', // coding.dashscope
+  // DashScope 地区站：cn-hongkong/dashscope-us/dashscope-intl 必须在通用 dashscope 之前
+  'dashscope-hk', // cn-hongkong.dashscope
+  'dashscope-us', // dashscope-us
+  'dashscope-sg', // dashscope-intl
+  'dashscope', // dashscope通用
   'deepseek',
   'kimi',
   'glm',
@@ -51,6 +57,38 @@ export function hasOpenClawConfigDir(): boolean {
  */
 export function hasQwenCodeConfigDir(): boolean {
   return existsSync(join(homedir(), '.qwen'));
+}
+
+/**
+ * 按 PROVIDER_MATCH_ORDER 顺序（子域名先于父域名）在 OPENAI_PROVIDERS（含 subProviders）
+ * 中查找与给定 baseUrl 匹配的 provider 名称。
+ * 子 provider 返回 "顶层名 · 子区域名" 格式，未匹配返回 undefined。
+ */
+function resolveProviderName(baseUrl: string): string | undefined {
+  for (const id of PROVIDER_MATCH_ORDER) {
+    // 先在顶层查找
+    const top = OPENAI_PROVIDERS.find((p) => p.id === id);
+    if (top?.baseUrl) {
+      try {
+        if (baseUrl.includes(new URL(top.baseUrl).hostname)) return top.name;
+      } catch {
+        // ignore invalid URL
+      }
+    }
+    // 再在 subProviders 中查找
+    for (const p of OPENAI_PROVIDERS) {
+      const sub = p.subProviders?.find((s) => s.id === id);
+      if (sub?.baseUrl) {
+        try {
+          if (baseUrl.includes(new URL(sub.baseUrl).hostname))
+            return `${p.name} · ${sub.name}`;
+        } catch {
+          // ignore invalid URL
+        }
+      }
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -93,21 +131,16 @@ export function readOpenClawConfig(): AgentKeyConfig | null {
 
     if (candidates.length === 0) return null;
 
-    // 按指定顺序（子域名先于父域名）匹配 OPENAI_PROVIDERS
-    for (const id of PROVIDER_MATCH_ORDER) {
-      const preset = OPENAI_PROVIDERS.find((p) => p.id === id);
-      if (!preset) continue;
-      const found = candidates.find((c) =>
-        c.baseUrl.includes(new URL(preset.baseUrl).hostname),
-      );
-      if (found) {
+    // 按指定顺序（子域名先于父域名）匹配 OPENAI_PROVIDERS（含 subProviders）
+    for (const candidate of candidates) {
+      const matched = resolveProviderName(candidate.baseUrl);
+      if (matched)
         return {
-          apiKey: found.apiKey,
-          baseUrl: found.baseUrl,
-          model: found.model,
-          providerName: preset.name,
+          apiKey: candidate.apiKey,
+          baseUrl: candidate.baseUrl,
+          model: candidate.model,
+          providerName: matched,
         };
-      }
     }
 
     // 兜底：取第一个有效 provider
@@ -147,15 +180,12 @@ export function readQwenCodeConfig(): AgentKeyConfig | null {
         | undefined) ?? '';
     if (!apiKey || !baseUrl) return null;
 
-    // 尝试匹配已知 provider
-    const preset = OPENAI_PROVIDERS.find((p) =>
-      baseUrl.includes(new URL(p.baseUrl).hostname),
-    );
+    // 尝试匹配已知 provider（含 subProviders），按 PROVIDER_MATCH_ORDER 顺序匹配以避免父域名提前命中
     return {
       apiKey,
       baseUrl,
       model,
-      providerName: preset?.name ?? 'Qwen Code',
+      providerName: resolveProviderName(baseUrl) ?? 'Qwen Code',
     };
   } catch {
     return null;

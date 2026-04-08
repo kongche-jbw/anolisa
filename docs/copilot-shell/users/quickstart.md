@@ -47,11 +47,11 @@ Use the `/auth` command inside the session to choose your provider:
 
 ### Supported providers
 
-| Provider | Command | Description |
-|----------|---------|-------------|
-| Qwen OAuth | `cosh` | Free tier with 2,000 requests/day — follow on-screen prompts |
-| API Key | `cosh --auth apikey` | Direct API key for Qwen models |
-| Custom Provider | `cosh --auth openai` | Any OpenAI-compatible endpoint — DashScope, DeepSeek, Kimi, GLM, MiniMax, or your own |
+| Provider | Description |
+|----------|-------------|
+| Qwen OAuth | Free tier with 1,000 requests/day — follow on-screen prompts |
+| Custom Provider | Any OpenAI-compatible endpoint — DashScope, DashScope Coding Plan, DeepSeek, Kimi, GLM, MiniMax, or your own |
+| Aliyun AK/SK    | Free, Using Aliyun AK/SK for Authentication  |
 
 > [!tip]
 >

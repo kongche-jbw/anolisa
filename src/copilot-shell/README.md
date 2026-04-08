@@ -13,7 +13,7 @@ An AI-powered terminal assistant for code understanding, task automation, and sy
 - **Skill System** — Local + remote skill discovery with priority-based fallback (Project > User > Extension > Remote).
 - **Hooks System** — PreToolUse events for intercepting tool calls before execution.
 - **Git Workflow Automation** — Automate commits, branch creation, conflict resolution, and release notes.
-- **Multi-Provider Support** — Qwen OAuth, Aliyun (BaiLian), Custom Provider (DashScope, DeepSeek, Kimi, GLM, MiniMax, or any OpenAI-compatible endpoint).
+- **Multi-Provider Support** — Qwen OAuth, Custom Provider (DashScope, DeepSeek, Kimi, GLM, MiniMax, or any OpenAI-compatible endpoint), Aliyun AK/SK.
 - **PTY Mode** — Full pseudo-terminal support including `sudo` commands.
 - **Extensible** — Extend capabilities via MCP servers and custom skills.
 
