@@ -72,6 +72,26 @@ You'll see the welcome screen with your session information and recent conversat
 >
 > You can also use the aliases `co` or `copilot` instead of `cosh`.
 
+## Step 4: Enable sandbox hooks (recommended)
+
+Copilot Shell ships with built-in sandbox-guard hooks that intercept tool calls and enforce security policies — preventing unauthorized file system access or dangerous operations. These hooks are not active until you install them.
+
+Inside Copilot Shell, run:
+
+```
+/hooks install
+```
+
+This command copies the bundled `sandbox-guard.py` script to `~/.copilot-shell/hooks/` and registers it in your user settings. You only need to run this once — the configuration is saved and persists across sessions.
+
+> [!note]
+>
+> This step requires `agent-sec-core` (linux-sandbox) to be installed at `/usr/local/bin/linux-sandbox`. When a dangerous command is detected, `sandbox-guard.py` wraps it inside the `linux-sandbox` binary for execution. If you built ANOLISA using the default `./scripts/build-all.sh`, `agent-sec-core` is included and installed automatically.
+
+> [!tip]
+>
+> To verify the hooks are active, run `/hooks list` inside Copilot Shell. You should see `sandbox-guard` and `sandbox-failure-handler` listed as enabled.
+
 ## Chat with Copilot Shell
 
 ### Ask your first question
@@ -213,9 +233,11 @@ review my changes and suggest improvements
 Here are the most important commands for daily use:
 
 | Command | What it does | Example |
-|---------|--------------|---------|
+|---------|--------------|----------|
 | `cosh` | Start Copilot Shell | `cosh` |
 | `/auth` | Change authentication method | `/auth` |
+| `/hooks install` | Install sandbox-guard hooks (run once after install) | `/hooks install` |
+| `/hooks list` | Show all registered hooks and their status | `/hooks list` |
 | `/help` | Display help for available commands | `/help` or `/?` |
 | `/bash` | Drop into an interactive shell | `/bash` |
 | `/model` | Switch between configured models | `/model` |
