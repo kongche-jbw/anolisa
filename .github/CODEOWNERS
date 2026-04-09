@@ -5,21 +5,31 @@
 # the matched path. Combined with Branch Protection "Require review from
 # Code Owners", this enforces sub-project ownership.
 #
-# Syntax: <pattern>  <@github-user> ...
+# Syntax: <pattern>  <@github-user> ...  # auto-label: <label>
 # Patterns are evaluated top-to-bottom; the LAST matching rule wins.
+# The "# auto-label:" annotation is parsed by .github/actions/codeowners-labels
+# to drive automatic PR/Issue labeling. Adding a new component here is
+# sufficient — no workflow changes are required.
 # =============================================================================
 
 # Global fallback — catches anything not matched below
-*                               @casparant
+*                                       @casparant
 
-# Sub-project owners
-/src/copilot-shell/                 @kongche-jbw @samchu-zsl
-/src/agent-sec-core/                @edonyzpc @kid9
-/src/agent-sec-core/linux-sandbox   @yanrong-hsr
-/src/os-skills/                     @Ziqi002
-/src/agentsight/                    @chengshuyi
+# ---------------------------------------------------------------------------
+# Component paths
+# ---------------------------------------------------------------------------
+/src/copilot-shell/                     @kongche-jbw @samchu-zsl    # auto-label: component:cosh
+/src/agentsight/                        @chengshuyi                 # auto-label: component:sight
+/src/agent-sec-core/                    @edonyzpc @kid9             # auto-label: component:sec-core
+/src/agent-sec-core/linux-sandbox/      @yanrong-hsr                # auto-label: component:sec-core
+/src/os-skills/                         @Ziqi002                    # auto-label: component:skill
+/src/osbase/                            @casparant                  # auto-label: component:osbase
 
-# CI / project-wide config — always require lead review
-/.github/                           @kongche-jbw
-/cliff.toml                         @samchu-zsl
-/Makefile                           @samchu-zsl
+# ---------------------------------------------------------------------------
+# Scope paths
+# ---------------------------------------------------------------------------
+/.github/                               @kongche-jbw                # auto-label: scope:ci
+/docs/                                  @casparant                  # auto-label: scope:documentation
+/scripts/                               @samchu-zsl                 # auto-label: scope:scripts
+/cliff.toml                             @samchu-zsl                 # auto-label: scope:ci
+/Makefile                               @casparant                  # auto-label: scope:scripts
