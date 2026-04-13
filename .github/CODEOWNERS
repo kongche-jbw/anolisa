@@ -30,6 +30,8 @@
 # ---------------------------------------------------------------------------
 /.github/                               @kongche-jbw                # auto-label: scope:ci
 /docs/                                  @casparant                  # auto-label: scope:documentation
+*.md                                    @casparant                  # auto-label: scope:documentation
+/NOTICE                                 @casparant                  # auto-label: scope:documentation
 /scripts/                               @samchu-zsl                 # auto-label: scope:scripts
 /cliff.toml                             @samchu-zsl                 # auto-label: scope:ci
 /Makefile                               @casparant                  # auto-label: scope:scripts
