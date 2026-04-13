@@ -214,13 +214,22 @@ install_node() {
     # Install nvm itself if still not available
     if ! cmd_exists nvm; then
         info "Installing nvm ..."
+        local _nvm_script
+        _nvm_script=$(mktemp /tmp/nvm-install-XXXXXX.sh)
         curl -fsSL --connect-timeout 15 --max-time 60 \
-            https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash 2>/dev/null || true
+            https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh \
+            -o "$_nvm_script" 2>/dev/null || true
+        [[ -s "$_nvm_script" ]] && bash "$_nvm_script" 2>/dev/null || true
+        rm -f "$_nvm_script"
         _source_nvm
         if ! cmd_exists nvm; then
             warn "GitHub unreachable or timed out, trying Gitee mirror ..."
+            _nvm_script=$(mktemp /tmp/nvm-install-XXXXXX.sh)
             curl -fsSL --connect-timeout 15 --max-time 60 \
-                https://gitee.com/mirrors/nvm/raw/v0.40.3/install.sh | bash 2>/dev/null || true
+                https://gitee.com/mirrors/nvm/raw/v0.40.3/install.sh \
+                -o "$_nvm_script" 2>/dev/null || true
+            [[ -s "$_nvm_script" ]] && bash "$_nvm_script" 2>/dev/null || true
+            rm -f "$_nvm_script"
             _source_nvm
         fi
     fi
@@ -359,23 +368,40 @@ install_rust() {
     sudo $PKG_INSTALL gcc make 2>/dev/null || true
 
     # Multi-level mirror fallback: official → Aliyun internal → Aliyun public → rsproxy.cn
+    local _rustup_script
+    _rustup_script=$(mktemp /tmp/rustup-init-XXXXXX.sh)
     curl --proto '=https' --tlsv1.2 -sSf --connect-timeout 15 --max-time 120 \
-        https://sh.rustup.rs | sh -s -- -y 2>/dev/null || true
+        https://sh.rustup.rs \
+        -o "$_rustup_script" 2>/dev/null || true
+    [[ -s "$_rustup_script" ]] && sh "$_rustup_script" -s -- -y 2>/dev/null || true
+    rm -f "$_rustup_script"
     _source_cargo
     if ! cmd_exists rustc; then
         warn "rustup.rs unreachable, trying China mirrors ..."
+        _rustup_script=$(mktemp /tmp/rustup-init-XXXXXX.sh)
         curl -sSf --connect-timeout 15 --max-time 60 \
-            http://mirrors.cloud.aliyuncs.com/repo/rust/rustup-init.sh | sh -s -- -y 2>/dev/null || true
+            http://mirrors.cloud.aliyuncs.com/repo/rust/rustup-init.sh \
+            -o "$_rustup_script" 2>/dev/null || true
+        [[ -s "$_rustup_script" ]] && sh "$_rustup_script" -s -- -y 2>/dev/null || true
+        rm -f "$_rustup_script"
         _source_cargo
     fi
     if ! cmd_exists rustc; then
+        _rustup_script=$(mktemp /tmp/rustup-init-XXXXXX.sh)
         curl --proto '=https' --tlsv1.2 -sSf --connect-timeout 15 --max-time 120 \
-            https://mirrors.aliyun.com/repo/rust/rustup-init.sh | sh -s -- -y 2>/dev/null || true
+            https://mirrors.aliyun.com/repo/rust/rustup-init.sh \
+            -o "$_rustup_script" 2>/dev/null || true
+        [[ -s "$_rustup_script" ]] && sh "$_rustup_script" -s -- -y 2>/dev/null || true
+        rm -f "$_rustup_script"
         _source_cargo
     fi
     if ! cmd_exists rustc; then
+        _rustup_script=$(mktemp /tmp/rustup-init-XXXXXX.sh)
         curl --proto '=https' --tlsv1.2 -sSf --connect-timeout 15 --max-time 120 \
-            https://rsproxy.cn/rustup-init.sh | sh -s -- -y 2>/dev/null || true
+            https://rsproxy.cn/rustup-init.sh \
+            -o "$_rustup_script" 2>/dev/null || true
+        [[ -s "$_rustup_script" ]] && sh "$_rustup_script" -s -- -y 2>/dev/null || true
+        rm -f "$_rustup_script"
         _source_cargo
     fi
 
@@ -494,8 +520,13 @@ install_uv() {
 
     # 3. Fallback: upstream installer (astral.sh → GitHub)
     info "Installing uv via upstream installer ..."
+    local _uv_script
+    _uv_script=$(mktemp /tmp/uv-install-XXXXXX.sh)
     curl -LsSf --connect-timeout 15 --max-time 60 \
-        https://astral.sh/uv/install.sh | sh 2>/dev/null || true
+        https://astral.sh/uv/install.sh \
+        -o "$_uv_script" 2>/dev/null || true
+    [[ -s "$_uv_script" ]] && sh "$_uv_script" 2>/dev/null || true
+    rm -f "$_uv_script"
     if [[ -f "$HOME/.local/bin/env" ]]; then
         # shellcheck source=/dev/null
         source "$HOME/.local/bin/env"
@@ -503,8 +534,12 @@ install_uv() {
     export PATH="$HOME/.local/bin:$PATH"
     if ! cmd_exists uv; then
         warn "astral.sh unreachable, trying GitHub mirror ..."
+        _uv_script=$(mktemp /tmp/uv-install-XXXXXX.sh)
         curl -LsSf --connect-timeout 15 --max-time 60 \
-            https://github.com/astral-sh/uv/releases/latest/download/uv-installer.sh | sh 2>/dev/null || true
+            https://github.com/astral-sh/uv/releases/latest/download/uv-installer.sh \
+            -o "$_uv_script" 2>/dev/null || true
+        [[ -s "$_uv_script" ]] && sh "$_uv_script" 2>/dev/null || true
+        rm -f "$_uv_script"
         if [[ -f "$HOME/.local/bin/env" ]]; then
             # shellcheck source=/dev/null
             source "$HOME/.local/bin/env"
