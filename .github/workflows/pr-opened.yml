@@ -40,10 +40,13 @@ jobs:
               if (!line || line.startsWith('#')) continue;
               const m = line.match(/#\s*auto-label:\s*(\S+)/);
               if (!m) continue;
-              const prefix = line.split(/\s+/)[0].replace(/^\//, '');
-              const label  = m[1];
-              const type   = label.startsWith('component:') ? 'component' : 'scope';
-              rules.push({ prefix, label, type });
+              const rawPrefix = line.split(/\s+/)[0];
+              // Detect glob patterns like *.md (suffix match), otherwise prefix match
+              const isGlob  = rawPrefix.startsWith('*');
+              const prefix  = isGlob ? rawPrefix.slice(1) : rawPrefix.replace(/^\//, '');
+              const label   = m[1];
+              const type    = label.startsWith('component:') ? 'component' : 'scope';
+              rules.push({ prefix, label, type, isGlob });
             }
 
             // ── Fetch changed files (paginate up to 300) ──────────────────
@@ -63,8 +66,9 @@ jobs:
             for (const fn of filenames) {
               let componentMatch = null, componentPrefix = null;
               let scopeMatch     = null, scopePrefix     = null;
-              for (const { prefix, label, type } of rules) {
-                if (fn.startsWith(prefix)) {
+              for (const { prefix, label, type, isGlob } of rules) {
+                const matched = isGlob ? fn.endsWith(prefix) : fn.startsWith(prefix);
+                if (matched) {
                   if (type === 'component') { componentMatch = label; componentPrefix = prefix; }
                   else                      { scopeMatch     = label; scopePrefix     = prefix; }
                 }
@@ -81,9 +85,10 @@ jobs:
                 scopeHit.add(scopeMatch);
               }
             }
-            if (scopeHit.size === 0) {
+            const hasComponent = Array.from(labels).some(l => l.startsWith('component:'));
+            if (scopeHit.size === 0 && !hasComponent) {
               labels.add('scope:chore');
-              reasons['scope:chore'] = 'no file matched any scope rule (fallback)';
+              reasons['scope:chore'] = 'no component or scope matched (fallback)';
             }
 
             if (labels.size > 0) {
