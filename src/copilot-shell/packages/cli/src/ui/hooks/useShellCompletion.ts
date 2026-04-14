@@ -4,10 +4,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useCallback, useMemo, useEffect } from 'react';
+import { useCallback, useMemo, useEffect, useRef } from 'react';
 import * as fs from 'node:fs';
+import * as fsAsync from 'node:fs/promises';
 import * as nodePath from 'node:path';
 import * as os from 'node:os';
+import { AsyncFzf } from 'fzf';
 import type { Suggestion } from '../components/SuggestionsDisplay.js';
 import type { TextBuffer } from '../components/shared/text-buffer.js';
 import { logicalPosToOffset } from '../components/shared/text-buffer.js';
@@ -109,15 +111,27 @@ function parseTokenAtCursor(line: string, cursorCol: number): ShellToken {
 /** Maximum number of suggestions to return for any completion type */
 const MAX_SHELL_SUGGESTIONS = 100;
 
-function getPathCompletions(partial: string, cwd: string): Suggestion[] {
+export function getPathCompletions(partial: string, cwd: string): Suggestion[] {
   // Expand ~ prefix
   let expanded = partial;
   if (partial === '~' || partial.startsWith('~/')) {
     expanded = os.homedir() + partial.slice(1);
   }
 
-  const dirPart = nodePath.dirname(expanded);
-  const basePart = nodePath.basename(expanded);
+  // Detect trailing slash: user wants to list directory contents, not filter
+  const hasTrailingSlash = expanded.endsWith('/') && expanded.length > 1;
+  let dirPart: string;
+  let basePart: string;
+
+  if (hasTrailingSlash) {
+    // '/home/' -> scan '/home', basePart='' (list all entries)
+    dirPart = expanded.slice(0, -1);
+    basePart = '';
+  } else {
+    dirPart = nodePath.dirname(expanded);
+    basePart = nodePath.basename(expanded);
+  }
+
   const isAbsolute = nodePath.isAbsolute(expanded);
 
   // Resolve the directory to scan
@@ -148,7 +162,7 @@ function getPathCompletions(partial: string, cwd: string): Suggestion[] {
     const isDir =
       entry.isDirectory() ||
       (entry.isSymbolicLink() &&
-        isSymlinkToDir(nodePath.join(resolvedDir, entry.name)));
+        isSymlinkToDirSync(nodePath.join(resolvedDir, entry.name)));
     const displayName = isDir ? entry.name + '/' : entry.name;
 
     // Build the completion value (same format as what the user typed)
@@ -184,12 +198,129 @@ function getPathCompletions(partial: string, cwd: string): Suggestion[] {
   });
 }
 
-function isSymlinkToDir(p: string): boolean {
+function isSymlinkToDirSync(p: string): boolean {
   try {
     return fs.statSync(p).isDirectory();
   } catch {
     return false;
   }
+}
+
+async function isSymlinkToDirAsync(p: string): Promise<boolean> {
+  try {
+    return (await fsAsync.stat(p)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+async function getPathCompletionsAsync(
+  partial: string,
+  cwd: string,
+  signal?: AbortSignal,
+): Promise<Suggestion[]> {
+  // Expand ~ prefix
+  let expanded = partial;
+  if (partial === '~' || partial.startsWith('~/')) {
+    expanded = os.homedir() + partial.slice(1);
+  }
+
+  // Detect trailing slash: user wants to list directory contents, not filter
+  const hasTrailingSlash = expanded.endsWith('/') && expanded.length > 1;
+  let dirPart: string;
+  let basePart: string;
+
+  if (hasTrailingSlash) {
+    dirPart = expanded.slice(0, -1);
+    basePart = '';
+  } else {
+    dirPart = nodePath.dirname(expanded);
+    basePart = nodePath.basename(expanded);
+  }
+
+  const isAbsolute = nodePath.isAbsolute(expanded);
+
+  // Resolve the directory to scan
+  let resolvedDir: string;
+  if (isAbsolute) {
+    resolvedDir = dirPart;
+  } else if (dirPart === '.') {
+    resolvedDir = cwd;
+  } else {
+    resolvedDir = nodePath.resolve(cwd, dirPart);
+  }
+
+  let entries: fs.Dirent[];
+  try {
+    entries = await fsAsync.readdir(resolvedDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  if (signal?.aborted) return [];
+
+  const showHidden = basePart.startsWith('.');
+
+  // Collect candidate entries, filtering hidden files first
+  const candidates: fs.Dirent[] = [];
+  for (const entry of entries) {
+    if (!showHidden && entry.name.startsWith('.')) continue;
+    candidates.push(entry);
+  }
+
+  // Use fuzzy matching when there's a non-empty prefix
+  let matchedNames: string[];
+  if (basePart.length > 0 && candidates.length > 0) {
+    const names = candidates.map((e) => e.name);
+    const fzf = new AsyncFzf(names, { fuzzy: 'v1' });
+    const results = await fzf.find(basePart);
+    if (signal?.aborted) return [];
+    matchedNames = results.map((r: { item: string }) => r.item);
+  } else {
+    matchedNames = candidates.map((e) => e.name);
+  }
+
+  const suggestions: Suggestion[] = [];
+  for (const name of matchedNames) {
+    if (suggestions.length >= MAX_SHELL_SUGGESTIONS) break;
+
+    const entry = candidates.find((e) => e.name === name);
+    if (!entry) continue;
+
+    const isDir =
+      entry.isDirectory() ||
+      (entry.isSymbolicLink() &&
+        (await isSymlinkToDirAsync(nodePath.join(resolvedDir, entry.name))));
+    const displayName = isDir ? entry.name + '/' : entry.name;
+
+    let completionValue: string;
+    if (dirPart === '.') {
+      completionValue = displayName;
+    } else if (partial.startsWith('~/')) {
+      completionValue =
+        '~/' +
+        (dirPart === os.homedir()
+          ? ''
+          : nodePath.relative(os.homedir(), dirPart) + '/') +
+        displayName;
+    } else {
+      completionValue = nodePath.join(dirPart, displayName);
+      if (isDir && !completionValue.endsWith('/')) {
+        completionValue += '/';
+      }
+    }
+
+    suggestions.push({ label: displayName, value: completionValue });
+  }
+
+  // Sort: directories first, then alphabetical (fzf results are already
+  // relevance-sorted, but we apply a consistent order for usability)
+  return suggestions.sort((a, b) => {
+    const aIsDir = a.label.endsWith('/');
+    const bIsDir = b.label.endsWith('/');
+    if (aIsDir !== bIsDir) return aIsDir ? -1 : 1;
+    return a.label.localeCompare(b.label);
+  });
 }
 
 // ─── Command completions ──────────────────────────────────────────────────
@@ -235,6 +366,7 @@ export function useShellCompletion(
     setShowSuggestions,
     setActiveSuggestionIndex,
     setVisibleStartIndex,
+    setIsLoadingSuggestions,
     resetCompletionState,
     navigateUp,
     navigateDown,
@@ -250,36 +382,55 @@ export function useShellCompletion(
     [currentLine, cursorCol],
   );
 
-  // Compute new suggestions whenever the token changes.
-  const newSuggestions = useMemo((): Suggestion[] => {
-    if (!enabled || !active) return [];
-    if (token.value === '' && token.isFirstToken) return [];
+  // Abort controller for cancelling in-flight async completions
+  const abortRef = useRef<AbortController | null>(null);
 
-    if (token.isFirstToken) {
-      return getCommandCompletions(token.value);
-    }
-    return getPathCompletions(token.value, cwd);
-  }, [enabled, active, token, cwd]);
-
-  // Sync computed suggestions into completion state.
+  // Compute suggestions asynchronously whenever token changes.
   useEffect(() => {
     if (!enabled || !active) {
       resetCompletionState();
       return;
     }
-    setSuggestions(newSuggestions);
-    setShowSuggestions(newSuggestions.length > 0);
-    setActiveSuggestionIndex(newSuggestions.length > 0 ? 0 : -1);
-    setVisibleStartIndex(0);
+    if (token.value === '' && token.isFirstToken) {
+      resetCompletionState();
+      return;
+    }
+
+    // Cancel any in-flight async work
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    setIsLoadingSuggestions(true);
+
+    (async () => {
+      const results = token.isFirstToken
+        ? getCommandCompletions(token.value)
+        : await getPathCompletionsAsync(token.value, cwd, controller.signal);
+
+      if (controller.signal.aborted) return;
+
+      setSuggestions(results);
+      setShowSuggestions(results.length > 0);
+      setActiveSuggestionIndex(results.length > 0 ? 0 : -1);
+      setVisibleStartIndex(0);
+      setIsLoadingSuggestions(false);
+    })();
+
+    return () => {
+      controller.abort();
+    };
   }, [
     enabled,
     active,
-    newSuggestions,
+    token,
+    cwd,
+    resetCompletionState,
     setSuggestions,
     setShowSuggestions,
     setActiveSuggestionIndex,
     setVisibleStartIndex,
-    resetCompletionState,
+    setIsLoadingSuggestions,
   ]);
 
   // Apply the selected suggestion to the buffer.
