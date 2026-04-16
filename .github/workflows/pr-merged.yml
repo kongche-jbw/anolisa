@@ -1,6 +1,6 @@
 # PR Merged Notification
 # ======================
-# Sends a DingTalk notification when a pull request is merged into main.
+# Sends a DingTalk notification when a pull request is merged into main or release branches.
 # Requires secrets: DINGTALK_WEBHOOK, DINGTALK_SECRET
 
 name: PR Merged Notification
@@ -8,7 +8,7 @@ name: PR Merged Notification
 on:
   pull_request_target:
     types: [closed]
-    branches: [main]
+    branches: [main, 'release/**']
 
 permissions:
   contents: read
@@ -31,6 +31,7 @@ jobs:
           PR_URL: ${{ github.event.pull_request.html_url }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           PR_BRANCH: ${{ github.event.pull_request.head.ref }}
+          PR_TARGET: ${{ github.event.pull_request.base.ref }}
         run: |
           python3 << 'PYEOF'
           import hmac, hashlib, base64, urllib.parse, time, os, subprocess, json
@@ -47,11 +48,12 @@ jobs:
           pr_url    = os.environ.get('PR_URL', '')
           pr_author = os.environ.get('PR_AUTHOR', '')
           pr_branch = os.environ.get('PR_BRANCH', '')
+          pr_target = os.environ.get('PR_TARGET', 'main')
 
           text = (
             f"## ✅ ANOLISA PR Merged\n\n"
             f"**PR**: [#{pr_number} {pr_title}]({pr_url})\n\n"
-            f"**Branch**: `{pr_branch}` → `main`\n\n"
+            f"**Branch**: `{pr_branch}` → `{pr_target}`\n\n"
             f"**Author**: {pr_author}\n\n"
             f"> 🤖 ANOLISA CI Bot"
           )
