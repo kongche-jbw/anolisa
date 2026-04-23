@@ -126,7 +126,7 @@ runs:
           # Replace example keys in trusted-keys with the real GPG public key
           # so the packaged archive ships the production key.
           if [ -n "$GPG_PUBLIC_KEY" ]; then
-            TRUSTED_KEYS_DIR="/tmp/build/${ARCHIVE_NAME}/skill/scripts/asset-verify/trusted-keys"
+            TRUSTED_KEYS_DIR="/tmp/build/${ARCHIVE_NAME}/agent-sec-cli/src/agent_sec_cli/asset_verify/trusted-keys"
             rm -f "${TRUSTED_KEYS_DIR}"/*.asc
             echo "$GPG_PUBLIC_KEY" > "${TRUSTED_KEYS_DIR}/agent-sec.asc"
           fi
@@ -183,7 +183,7 @@ runs:
       env:
         GPG_PRIVATE_KEY: ${{ inputs.skill-sign-private-key }}
       run: |
-        bash src/agent-sec-core/tools/sign-skill.sh --skill-name agent-sec-core /tmp/build/${ARCHIVE_NAME}/skill
+        bash src/agent-sec-core/tools/sign-skill.sh --batch /tmp/build/${ARCHIVE_NAME}/skills
 
         tar -czf "/tmp/archives/${ARCHIVE_FILE}" \
           -C /tmp/build "${ARCHIVE_NAME}"

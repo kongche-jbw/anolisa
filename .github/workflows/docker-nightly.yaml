@@ -219,21 +219,20 @@ jobs:
   #     vendor-artifact: "agentsight-vendor-${{ needs.versions.outputs.sight-version }}.nightly"
   #     artifact-suffix: ".nightly"
 
-  # TODO: uncomment when agent-sec-core RPM build is ready
-  # rpm-sec-core:
-  #   name: "RPM: agent-sec-core (${{ matrix.arch }})"
-  #   needs: [versions, package-sec-core]
-  #   if: needs.versions.outputs.sec-core-ref != ''
-  #   strategy:
-  #     matrix:
-  #       arch: [amd64, arm64]
-  #   uses: ./.github/workflows/_rpm-build.yaml
-  #   with:
-  #     component: agent-sec-core
-  #     version: ${{ needs.versions.outputs.sec-core-version }}
-  #     arch: ${{ matrix.arch }}
-  #     source-artifact: "agent-sec-core-${{ needs.versions.outputs.sec-core-version }}.nightly"
-  #     artifact-suffix: ".nightly"
+  rpm-sec-core:
+    name: "RPM: agent-sec-core (${{ matrix.arch }})"
+    needs: [versions, package-sec-core]
+    if: needs.versions.outputs.sec-core-ref != ''
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    uses: ./.github/workflows/_rpm-build.yaml
+    with:
+      component: agent-sec-core
+      version: ${{ needs.versions.outputs.sec-core-version }}
+      arch: ${{ matrix.arch }}
+      source-artifact: "agent-sec-core-${{ needs.versions.outputs.sec-core-version }}.nightly"
+      artifact-suffix: ".nightly"
 
   # ===========================================================================
   # Job 4: Build and push Docker image
@@ -245,8 +244,8 @@ jobs:
       - versions
       - rpm-cosh
       - rpm-skill
-      # TODO: uncomment when agent-sec-core/agentsight are integrated
-      # - rpm-sec-core
+      - rpm-sec-core
+      # TODO: uncomment when agentsight is integrated
       # - rpm-sight
     steps:
       - uses: actions/checkout@v4
