@@ -943,22 +943,29 @@ export class CoreToolScheduler {
             const askPrompt =
               hookAskMessage ||
               'A hook has requested confirmation before executing this tool.';
-            if (confirmationDetails) {
-              // Augment: spread original details to preserve type discriminant
-              // and onConfirm; only override the title to surface the hook msg.
-              effectiveConfirmationDetails = {
-                ...confirmationDetails,
-                title: `${confirmationDetails.title} — ⚠️ Hook: ${askPrompt}`,
-              } as ToolCallConfirmationDetails;
-            } else {
-              // No native confirmation: synthesize a minimal info dialog.
-              effectiveConfirmationDetails = {
-                type: 'info',
-                title: 'Hook Requires Confirmation',
-                prompt: askPrompt,
-                onConfirm: async () => {},
-              };
-            }
+            // Always synthesize an 'info' dialog so the hook message is shown
+            // prominently in the prompt body rather than buried in the title.
+            // If the tool has a native confirmation, forward its onConfirm so
+            // side-effects (e.g. allowlisting via ProceedAlways) are preserved.
+            // For 'edit'-type confirmations, also copy fileName/fileDiff so the
+            // UI can render a diff preview below the hook message.
+            effectiveConfirmationDetails = {
+              type: 'info',
+              title: 'Hook Requires Confirmation',
+              prompt: askPrompt,
+              ...(confirmationDetails && confirmationDetails.type === 'edit'
+                ? {
+                    fileName: confirmationDetails.fileName,
+                    fileDiff: confirmationDetails.fileDiff,
+                  }
+                : {}),
+              onConfirm: confirmationDetails
+                ? (
+                    outcome: ToolConfirmationOutcome,
+                    payload?: ToolConfirmationPayload,
+                  ) => confirmationDetails.onConfirm(outcome, payload)
+                : async () => {},
+            };
           }
 
           if (!effectiveConfirmationDetails) {

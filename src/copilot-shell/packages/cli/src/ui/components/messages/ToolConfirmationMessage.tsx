@@ -343,6 +343,17 @@ export const ToolConfirmationMessage: React.FC<
             ))}
           </Box>
         )}
+        {infoProps.fileDiff && (
+          <Box marginTop={1}>
+            <DiffRenderer
+              diffContent={infoProps.fileDiff}
+              filename={infoProps.fileName ?? ''}
+              availableTerminalHeight={availableBodyContentHeight()}
+              contentWidth={contentWidth}
+              settings={settings}
+            />
+          </Box>
+        )}
       </Box>
     );
   } else {

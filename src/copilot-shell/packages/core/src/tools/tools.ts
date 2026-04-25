@@ -560,9 +560,19 @@ export interface ToolMcpConfirmationDetails {
 export interface ToolInfoConfirmationDetails {
   type: 'info';
   title: string;
-  onConfirm: (outcome: ToolConfirmationOutcome) => Promise<void>;
+  onConfirm: (
+    outcome: ToolConfirmationOutcome,
+    payload?: ToolConfirmationPayload,
+  ) => Promise<void>;
   prompt: string;
   urls?: string[];
+  /**
+   * Optional diff preview — populated when the hook wraps a native 'edit'
+   * confirmation, allowing the info dialog to show the proposed change
+   * alongside the hook message.
+   */
+  fileName?: string;
+  fileDiff?: string;
 }
 
 export type ToolCallConfirmationDetails =

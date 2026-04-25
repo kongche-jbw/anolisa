@@ -2326,11 +2326,12 @@ describe('CoreToolScheduler Sequential Execution', () => {
   });
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Regression: Bug 2 — hookForceAsk must AUGMENT native confirmationDetails
-  //   (preserve type + original onConfirm side-effects), not replace them
-  //   with a bare info dialog.
+  // Regression: hookForceAsk must always synthesize an 'info' dialog that
+  //   shows the hook message in the prompt body (not just the title), while
+  //   still forwarding the original onConfirm so native side-effects
+  //   (e.g. setApprovalMode, allowlisting) are preserved.
   // ─────────────────────────────────────────────────────────────────────────
-  it('hookForceAsk should augment native confirmationDetails, preserving original onConfirm side-effects', async () => {
+  it('hookForceAsk should synthesize an info dialog with hook message in prompt, preserving original onConfirm side-effects', async () => {
     let approvalMode = ApprovalMode.DEFAULT;
 
     // Hook always returns 'ask'
@@ -2439,18 +2440,19 @@ describe('CoreToolScheduler Sequential Execution', () => {
       expect(capturedWaitingCall).toBeDefined();
     });
 
-    // ── Key regression assertions ─────────────────────────────────────────
-    // 1. Confirmation type must still be 'edit' — NOT replaced with 'info'.
-    //    This proves the original confirmationDetails were augmented, not
-    //    discarded, so the IDE diff path and edit semantics remain intact.
-    expect(capturedWaitingCall!.confirmationDetails.type).toBe('edit');
+    // ── Key assertions ──────────────────────────────────────────────────────
+    // 1. Confirmation type must be 'info' — hook message shown in prompt body,
+    //    not buried in a title augmented onto the native 'edit' dialog.
+    expect(capturedWaitingCall!.confirmationDetails.type).toBe('info');
 
-    // 2. The hook warning must appear in the title alongside the native title.
-    expect(capturedWaitingCall!.confirmationDetails.title).toContain(
-      'Confirm Test Tool augment-test',
-    );
-    expect(capturedWaitingCall!.confirmationDetails.title).toContain(
-      'Hook inspection required',
+    // 2. The hook warning must appear in the prompt (not just the title).
+    expect(
+      (capturedWaitingCall!.confirmationDetails as { prompt?: string }).prompt,
+    ).toContain('Hook inspection required');
+
+    // 3. The title should be the generic hook header.
+    expect(capturedWaitingCall!.confirmationDetails.title).toBe(
+      'Hook Requires Confirmation',
     );
 
     // Trigger ProceedAlways through the wrapped onConfirm stored in the call.
@@ -2458,13 +2460,13 @@ describe('CoreToolScheduler Sequential Execution', () => {
       ToolConfirmationOutcome.ProceedAlways,
     );
 
-    // 3. The original tool onConfirm side-effect must have run:
+    // 4. The original tool onConfirm side-effect must have run:
     //    TestApprovalTool.onConfirm sets config.setApprovalMode(AUTO_EDIT)
     //    on ProceedAlways — if it was replaced by an empty onConfirm this
     //    would remain DEFAULT.
     expect(approvalMode).toBe(ApprovalMode.AUTO_EDIT);
 
-    // 4. Execution should complete successfully.
+    // 5. Execution should complete successfully.
     await vi.waitFor(() => {
       expect(onAllToolCallsCompleteAugment).toHaveBeenCalled();
       const completedCalls = onAllToolCallsCompleteAugment.mock
