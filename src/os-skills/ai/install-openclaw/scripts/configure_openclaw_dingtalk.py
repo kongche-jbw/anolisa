@@ -1,221 +1,371 @@
 #!/usr/bin/env python3
 """
-OpenClaw 配置脚本 — 钉钉频道 + 百炼 Qwen 模型
-自动写入 ~/.openclaw/openclaw.json
+OpenClaw 4.26 configuration helper.
+
+Writes ~/.openclaw/openclaw.json for:
+- Qwen built-in provider compatible defaults
+- Standard or Coding Plan endpoint alignment
+- DingTalk connector channel
 """
 
-import json
 import argparse
+import json
 import os
+import sys
+from pathlib import Path
 
 
-# ─── 工具函数 ───────────────────────────────────────────────
+DEFAULT_CONFIG_PATH = Path("~/.openclaw/openclaw.json").expanduser()
 
-CONFIG_PATH = os.path.expanduser("~/.openclaw/openclaw.json")
+ENDPOINTS = {
+    ("standard", "china"): {
+        "auth_choice": "qwen-standard-api-key-cn",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    },
+    ("standard", "global"): {
+        "auth_choice": "qwen-standard-api-key",
+        "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    },
+    ("coding", "china"): {
+        "auth_choice": "qwen-api-key-cn",
+        "base_url": "https://coding.dashscope.aliyuncs.com/v1",
+    },
+    ("coding", "global"): {
+        "auth_choice": "qwen-api-key",
+        "base_url": "https://coding-intl.dashscope.aliyuncs.com/v1",
+    },
+}
 
 
 def deep_merge(base, override):
-    """深度合并两个字典，override 优先，base 中独有的字段保留"""
     result = dict(base)
-    for key, val in override.items():
-        if key in result and isinstance(result[key], dict) and isinstance(val, dict):
-            result[key] = deep_merge(result[key], val)
+    for key, value in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = deep_merge(result[key], value)
         else:
-            result[key] = val
+            result[key] = value
     return result
 
 
-# ─── 配置构建 ───────────────────────────────────────────────
+def merge_plugin_allow(existing, merged):
+    existing_allow = existing.get("plugins", {}).get("allow", [])
+    merged_allow = merged.get("plugins", {}).get("allow")
+    if merged_allow is None:
+        return merged
+
+    combined = []
+    for plugin_id in [*existing_allow, *merged_allow]:
+        if plugin_id and plugin_id not in combined:
+            combined.append(plugin_id)
+
+    merged.setdefault("plugins", {})["allow"] = combined
+    return merged
+
+
+def qwen_model_ref(model_id):
+    return model_id if model_id.startswith("qwen/") else f"qwen/{model_id}"
+
+
+def strip_qwen_prefix(model_id):
+    if model_id.startswith("qwen/"):
+        return model_id[len("qwen/") :]
+    return model_id
+
+
+def build_qwen_provider(args, api_key):
+    endpoint = ENDPOINTS[(args.plan, args.region)]
+    model_id = strip_qwen_prefix(args.model_id)
+
+    provider = {
+        "baseUrl": endpoint["base_url"],
+        "apiKey": api_key,
+        "api": "openai-completions",
+        "models": [
+            {
+                "id": model_id,
+                "name": model_id,
+                "reasoning": args.reasoning,
+                "input": ["text", "image"]
+                if model_id in {"qwen3.5-plus", "qwen3.6-plus", "qwen3-coder-plus"}
+                else ["text"],
+                "contextWindow": args.context_window,
+                "maxTokens": args.max_tokens,
+                "cost": {
+                    "input": 0,
+                    "output": 0,
+                    "cacheRead": 0,
+                    "cacheWrite": 0,
+                },
+            }
+        ],
+    }
+
+    if not args.write_provider_config:
+        return None
+    return provider
+
+
+def build_dingtalk_channel(args):
+    channel = {
+        "enabled": True,
+        "clientId": args.dingtalk_client_id,
+        "clientSecret": args.dingtalk_client_secret,
+        "sharedMemoryAcrossConversations": args.shared_memory_across_conversations,
+        "separateSessionByConversation": args.separate_session_by_conversation,
+        "groupSessionScope": args.group_session_scope,
+    }
+
+    if args.dingtalk_robot_code:
+        channel["robotCode"] = args.dingtalk_robot_code
+    if args.dingtalk_corp_id:
+        channel["corpId"] = args.dingtalk_corp_id
+    if args.dingtalk_agent_id:
+        channel["agentId"] = args.dingtalk_agent_id
+
+    return channel
+
 
 def build_config(args):
-    """根据参数构建完整配置字典"""
+    api_key = (
+        args.qwen_api_key
+        or args.modelstudio_api_key
+        or args.dashscope_api_key
+        or os.environ.get("QWEN_API_KEY")
+        or os.environ.get("MODELSTUDIO_API_KEY")
+        or os.environ.get("DASHSCOPE_API_KEY")
+        or ""
+    )
+    if not api_key:
+        raise SystemExit(
+            "Qwen API key is required. Pass --qwen-api-key or set QWEN_API_KEY."
+        )
 
-    model_id = args.model_id
-    model_ref = f"bailian/{model_id}"
+    model_ref = qwen_model_ref(args.model_id)
+    provider_config = build_qwen_provider(args, api_key)
 
     config = {
-        "plugins": {
-            "enabled": True,
-            "allow": ["dingtalk"]
-        },
-        "models": {
-            "mode": "merge",
-            "providers": {
-                "bailian": {
-                    "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-                    "apiKey": args.dashscope_api_key,
-                    "api": "openai-completions",
-                    "models": [{
-                        "id": model_id,
-                        "name": "qwen3-max-thinking",
-                        "reasoning": False,
-                        "input": ["text"],
-                        "cost": {
-                            "input": 0, "output": 0,
-                            "cacheRead": 0, "cacheWrite": 0
-                        },
-                        "contextWindow": 262144,
-                        "maxTokens": 65536
-                    }]
-                }
-            }
-        },
         "agents": {
             "defaults": {
                 "model": {
-                    "primary": model_ref
+                    "primary": model_ref,
                 },
                 "models": {
                     model_ref: {
-                        "alias": "qwen3-max-thinking"
+                        "alias": args.model_alias,
                     }
                 },
-                "maxConcurrent": 4,
+                "maxConcurrent": args.max_concurrent,
                 "subagents": {
-                    "maxConcurrent": 8
-                }
+                    "maxConcurrent": args.subagent_max_concurrent,
+                },
             }
-        },
-        "channels": {
-            "dingtalk": build_dingtalk_channel(args)
-        },
-        "messages": {
-            "ackReactionScope": "group-mentions"
         },
         "commands": {
             "native": "auto",
             "nativeSkills": "auto",
             "restart": True,
-            "ownerDisplay": "raw"
+            "ownerDisplay": "raw",
         },
         "session": {
-            "dmScope": "per-channel-peer"
+            "dmScope": "per-channel-peer",
         },
         "gateway": {
-            "mode": "local"
+            "mode": "local",
+        },
+        "plugins": {
+            "enabled": True,
+            "allow": ["qwen"],
         },
         "skills": {
             "load": {
                 "extraDirs": [
-                    "/usr/share/anolisa/skills"
+                    "/usr/share/anolisa/skills",
                 ]
             }
-        }
+        },
     }
+
+    if provider_config is not None:
+        config["models"] = {
+            "mode": "merge",
+            "providers": {
+                "qwen": provider_config,
+            },
+        }
+
+    if args.dingtalk_client_id or args.dingtalk_client_secret:
+        if not args.dingtalk_client_id or not args.dingtalk_client_secret:
+            raise SystemExit(
+                "Both --dingtalk-client-id and --dingtalk-client-secret are required when configuring DingTalk."
+            )
+        config["plugins"] = {
+            "enabled": True,
+            "allow": ["qwen", "dingtalk-connector"],
+            "entries": {
+                "dingtalk-connector": {
+                    "enabled": True,
+                }
+            },
+        }
+        config["channels"] = {
+            "dingtalk-connector": build_dingtalk_channel(args),
+        }
 
     return config
 
 
-def build_dingtalk_channel(args):
-    """构建钉钉频道配置"""
-    ch = {
-        "enabled": True,
-        "clientId": args.dingtalk_client_id,
-        "clientSecret": args.dingtalk_client_secret,
-        "dmPolicy": args.dm_policy,
-        "groupPolicy": args.group_policy,
-        "debug": False,
-        "messageType": args.message_type,
-        "allowFrom": ["*"],
-    }
+def apply_config(config, config_path):
+    print("\n--- Writing OpenClaw 4.26 config ---\n")
 
-    # 可选字段 —— 有值才写入
-    if args.dingtalk_robot_code:
-        ch["robotCode"] = args.dingtalk_robot_code
-    if args.dingtalk_corp_id:
-        ch["corpId"] = args.dingtalk_corp_id
-    if args.dingtalk_agent_id:
-        ch["agentId"] = args.dingtalk_agent_id
-
-    # 卡片模式参数
-    if args.message_type == "card":
-        if args.card_template_id:
-            ch["cardTemplateId"] = args.card_template_id
-        ch["cardTemplateKey"] = args.card_template_key
-
-    return ch
-
-
-# ─── 写入配置 ───────────────────────────────────────────────
-
-def apply_config(config):
-    """直接读写 JSON 文件，避免多次启动 openclaw 子进程"""
-
-    print("\n--- 写入 OpenClaw 配置 ---\n")
-
-    # 读取现有配置（保留 meta、plugins 等已有字段）
     existing = {}
-    if os.path.exists(CONFIG_PATH):
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-            existing = json.load(f)
+    if config_path.exists():
+        with config_path.open("r", encoding="utf-8") as fh:
+            existing = json.load(fh)
 
-    # 深度合并：现有配置优先保留，新配置覆盖对应字段
     merged = deep_merge(existing, config)
+    merged = merge_plugin_allow(existing, merged)
 
-    os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(merged, f, indent=2, ensure_ascii=False)
-        f.write("\n")
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    with config_path.open("w", encoding="utf-8") as fh:
+        json.dump(merged, fh, indent=2, ensure_ascii=False)
+        fh.write("\n")
 
     for key in config:
-        print(f"  [OK]   {key}")
+        print(f"  [OK] {key}")
 
-    print("\n--- 配置写入完成 ---")
+    print(f"\nConfig written: {config_path}")
 
 
-# ─── 主入口 ─────────────────────────────────────────────────
-
-def main():
-    p = argparse.ArgumentParser(
-        description="OpenClaw 配置 — 钉钉 + 百炼 Qwen"
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Configure OpenClaw 4.26 with Qwen and DingTalk Connector."
     )
 
-    # 钉钉必填
-    p.add_argument("--dingtalk-client-id", required=True,
-                    help="钉钉应用 AppKey")
-    p.add_argument("--dingtalk-client-secret", required=True,
-                    help="钉钉应用 AppSecret")
+    parser.add_argument(
+        "--config",
+        default=str(DEFAULT_CONFIG_PATH),
+        help="OpenClaw config path",
+    )
 
-    # 钉钉可选
-    p.add_argument("--dingtalk-robot-code", default="",
-                    help="机器人代码（通常与 AppKey 相同）")
-    p.add_argument("--dingtalk-corp-id", default="",
-                    help="企业 ID")
-    p.add_argument("--dingtalk-agent-id", default="",
-                    help="应用 ID")
+    parser.add_argument(
+        "--plan",
+        default="standard",
+        choices=["standard", "coding"],
+        help="Qwen plan type: standard pay-as-you-go or coding subscription",
+    )
+    parser.add_argument(
+        "--region",
+        default="china",
+        choices=["china", "global"],
+        help="Qwen endpoint region",
+    )
+    parser.add_argument(
+        "--model-id",
+        default="qwen3.5-plus",
+        help="Qwen model id, without or with qwen/ prefix",
+    )
+    parser.add_argument(
+        "--model-alias",
+        default="qwen-default",
+        help="Alias written under agents.defaults.models",
+    )
+    parser.add_argument(
+        "--qwen-api-key",
+        default="",
+        help="Preferred Qwen API key. Also accepted through QWEN_API_KEY.",
+    )
+    parser.add_argument(
+        "--modelstudio-api-key",
+        default="",
+        help="Compatibility API key alias.",
+    )
+    parser.add_argument(
+        "--dashscope-api-key",
+        default="",
+        help="Compatibility API key alias.",
+    )
+    parser.add_argument(
+        "--write-provider-config",
+        dest="write_provider_config",
+        action="store_true",
+        default=True,
+        help=(
+            "Write models.providers.qwen with selected endpoint and key. "
+            "Keep enabled for non-interactive agent installation. "
+            "Use --no-write-provider-config only for manual onboard/auth-store flows."
+        ),
+    )
+    parser.add_argument(
+        "--no-write-provider-config",
+        dest="write_provider_config",
+        action="store_false",
+    )
+    parser.add_argument("--context-window", type=int, default=1_000_000)
+    parser.add_argument("--max-tokens", type=int, default=65_536)
+    parser.add_argument("--reasoning", action="store_true")
 
-    # 百炼必填
-    p.add_argument("--dashscope-api-key", required=True,
-                    help="百炼 DashScope API Key")
+    parser.add_argument("--dingtalk-client-id", default="")
+    parser.add_argument("--dingtalk-client-secret", default="")
+    parser.add_argument("--dingtalk-robot-code", default="")
+    parser.add_argument("--dingtalk-corp-id", default="")
+    parser.add_argument("--dingtalk-agent-id", default="")
+    parser.add_argument(
+        "--shared-memory-across-conversations",
+        dest="shared_memory_across_conversations",
+        action="store_true",
+        default=True,
+    )
+    parser.add_argument(
+        "--no-shared-memory-across-conversations",
+        dest="shared_memory_across_conversations",
+        action="store_false",
+    )
+    parser.add_argument(
+        "--separate-session-by-conversation",
+        dest="separate_session_by_conversation",
+        action="store_true",
+        default=True,
+    )
+    parser.add_argument(
+        "--no-separate-session-by-conversation",
+        dest="separate_session_by_conversation",
+        action="store_false",
+    )
+    parser.add_argument(
+        "--group-session-scope",
+        default="group",
+        choices=["group", "group_sender"],
+    )
+    parser.add_argument("--max-concurrent", type=int, default=4)
+    parser.add_argument("--subagent-max-concurrent", type=int, default=8)
 
-    # 模型可选
-    p.add_argument("--model-id", default="qwen3-max-2026-01-23",
-                    help="模型 ID（默认 qwen3-max-2026-01-23）")
+    return parser.parse_args()
 
-    # 策略
-    p.add_argument("--dm-policy", default="open",
-                    choices=["open", "pairing", "allowlist"],
-                    help="私聊策略")
-    p.add_argument("--group-policy", default="open",
-                    choices=["open", "allowlist"],
-                    help="群聊策略")
 
-    # 消息类型
-    p.add_argument("--message-type", default="markdown",
-                    choices=["markdown", "card"],
-                    help="消息类型")
-    p.add_argument("--card-template-id", default="",
-                    help="AI 卡片模板 ID（仅 card 模式）")
-    p.add_argument("--card-template-key", default="content",
-                    help="卡片内容字段 Key（默认 content）")
+def main():
+    args = parse_args()
 
-    args = p.parse_args()
+    if args.plan == "coding" and strip_qwen_prefix(args.model_id) == "qwen3.6-plus":
+        print(
+            "Warning: qwen3.6-plus should prefer the standard endpoint; "
+            "Coding Plan availability may lag behind the public catalog.",
+            file=sys.stderr,
+        )
 
-    # 构建 + 写入
     config = build_config(args)
-    apply_config(config)
+    apply_config(config, Path(args.config).expanduser())
 
-    print("\n下一步：运行 'openclaw gateway restart' 启动服务。")
+    endpoint = ENDPOINTS[(args.plan, args.region)]
+    print("\nNext steps:")
+    if args.dingtalk_client_id and args.dingtalk_client_secret:
+        print("  openclaw plugins install @dingtalk-real-ai/dingtalk-connector")
+    print("  openclaw gateway --force")
+    print("  openclaw models list --provider qwen")
+    print(
+        f"  # Manual alternative only: openclaw onboard --auth-choice {endpoint['auth_choice']}"
+    )
+    if args.dingtalk_client_id and args.dingtalk_client_secret:
+        print("  openclaw channels status --probe")
 
 
 if __name__ == "__main__":
