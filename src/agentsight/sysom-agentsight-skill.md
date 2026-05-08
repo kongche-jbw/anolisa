@@ -1,1 +1,0 @@
-../os-skills/devops/sysom-agentsight/SKILL.md

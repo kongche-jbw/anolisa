@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agentic OS — Coming Soon</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Inter:wght@300;400;600;700&display=swap');
+
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #0a0a0f;
+    --surface: #12121a;
+    --accent: #00e5a0;
+    --accent-dim: rgba(0, 229, 160, 0.15);
+    --accent-glow: rgba(0, 229, 160, 0.4);
+    --text: #e8e8ed;
+    --text-dim: #6b6b80;
+    --mono: 'JetBrains Mono', monospace;
+    --sans: 'Inter', -apple-system, sans-serif;
+  }
+
+  html, body {
+    width: 100%; height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    overflow: hidden;
+  }
+
+  /* ── particle canvas ── */
+  #particles {
+    position: fixed; inset: 0; z-index: 0;
+  }
+
+  /* ── grid overlay ── */
+  .grid-overlay {
+    position: fixed; inset: 0; z-index: 1;
+    background-image:
+      linear-gradient(rgba(0,229,160,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,229,160,0.03) 1px, transparent 1px);
+    background-size: 60px 60px;
+    pointer-events: none;
+  }
+
+  /* ── radial glow ── */
+  .glow {
+    position: fixed; z-index: 1; pointer-events: none;
+    width: 800px; height: 800px;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    background: radial-gradient(circle, rgba(0,229,160,0.06) 0%, transparent 70%);
+    animation: pulse-glow 4s ease-in-out infinite;
+  }
+  @keyframes pulse-glow {
+    0%, 100% { opacity: 0.6; transform: translate(-50%,-50%) scale(1); }
+    50% { opacity: 1; transform: translate(-50%,-50%) scale(1.1); }
+  }
+
+  /* ── main layout ── */
+  .container {
+    position: relative; z-index: 10;
+    width: 100%; height: 100%;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    padding: 2rem;
+  }
+
+  /* ── top badge ── */
+  .badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 6px 16px;
+    border: 1px solid rgba(0,229,160,0.25);
+    border-radius: 100px;
+    background: var(--accent-dim);
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.08em;
+    color: var(--accent);
+    margin-bottom: 2.5rem;
+    animation: fade-down 1s ease-out 0.2s both;
+  }
+  .badge-dot {
+    width: 6px; height: 6px;
+    background: var(--accent);
+    border-radius: 50%;
+    animation: blink 1.5s ease-in-out infinite;
+  }
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  /* ── logo line ── */
+  .logo {
+    font-family: var(--mono);
+    font-weight: 700;
+    font-size: clamp(2.5rem, 6vw, 5rem);
+    letter-spacing: -0.02em;
+    line-height: 1.1;
+    text-align: center;
+    margin-bottom: 1rem;
+    animation: fade-down 1s ease-out 0.4s both;
+  }
+  .logo .accent { color: var(--accent); }
+  .logo .dim { color: var(--text-dim); font-weight: 300; }
+
+  /* ── tagline (typed) ── */
+  .tagline {
+    font-family: var(--mono);
+    font-size: clamp(0.85rem, 1.8vw, 1.1rem);
+    color: var(--text-dim);
+    text-align: center;
+    height: 1.6em;
+    margin-bottom: 3rem;
+    animation: fade-down 1s ease-out 0.6s both;
+  }
+  .tagline .cursor {
+    display: inline-block;
+    width: 2px; height: 1.1em;
+    background: var(--accent);
+    vertical-align: text-bottom;
+    margin-left: 2px;
+    animation: cursor-blink 0.8s step-end infinite;
+  }
+  @keyframes cursor-blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+  }
+
+  /* ── coming soon ── */
+  .coming-soon {
+    font-family: var(--mono);
+    font-size: clamp(1.1rem, 2.5vw, 1.5rem);
+    font-weight: 400;
+    letter-spacing: 0.25em;
+    color: var(--text-dim);
+    margin-bottom: 3rem;
+    animation: fade-down 1s ease-out 0.8s both;
+    position: relative;
+  }
+  .coming-soon::after {
+    content: '';
+    position: absolute;
+    bottom: -10px; left: 10%; right: 10%;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    opacity: 0.4;
+  }
+
+  /* ── terminal prompt ── */
+  .terminal {
+    width: min(560px, 90vw);
+    background: var(--surface);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 10px;
+    overflow: hidden;
+    animation: fade-up 1s ease-out 1s both;
+  }
+  .terminal-bar {
+    display: flex; align-items: center; gap: 6px;
+    padding: 10px 14px;
+    background: rgba(255,255,255,0.03);
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+  }
+  .terminal-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+  }
+  .terminal-dot.r { background: #ff5f57; }
+  .terminal-dot.y { background: #febc2e; }
+  .terminal-dot.g { background: #28c840; }
+  .terminal-title {
+    flex: 1; text-align: center;
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    color: var(--text-dim);
+  }
+  .terminal-body {
+    padding: 1.2rem 1.4rem;
+    font-family: var(--mono);
+    font-size: 0.82rem;
+    line-height: 1.8;
+    color: var(--text-dim);
+  }
+  .terminal-body .prompt { color: var(--accent); }
+  .terminal-body .cmd { color: var(--text); }
+  .terminal-body .output { color: var(--text-dim); opacity: 0.7; }
+
+  /* ── bottom text ── */
+  .footer {
+    position: fixed;
+    bottom: 2rem;
+    left: 50%;
+    transform: translateX(-50%);
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    color: var(--text-dim);
+    opacity: 0.4;
+    letter-spacing: 0.1em;
+    z-index: 10;
+    animation: fade-up 1s ease-out 1.2s both;
+  }
+
+  /* ── animations ── */
+  @keyframes fade-down {
+    from { opacity: 0; transform: translateY(-20px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes fade-up {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+</style>
+</head>
+<body>
+
+<canvas id="particles"></canvas>
+<div class="grid-overlay"></div>
+<div class="glow"></div>
+
+<div class="container">
+  <div class="badge">
+    <span class="badge-dot"></span>
+    INITIALIZING
+  </div>
+
+  <div class="logo">
+    <span class="accent">Agentic</span><span class="dim"> OS</span>
+  </div>
+
+  <div class="tagline">
+    <span id="typed-text"></span><span class="cursor"></span>
+  </div>
+
+  <div class="coming-soon">COMING SOON</div>
+
+  <div class="terminal">
+    <div class="terminal-bar">
+      <div class="terminal-dot r"></div>
+      <div class="terminal-dot y"></div>
+      <div class="terminal-dot g"></div>
+      <div class="terminal-title">cosh — Copilot Shell</div>
+    </div>
+    <div class="terminal-body" id="terminal-body"></div>
+  </div>
+</div>
+
+<div class="footer">AGENT INFRASTRUCTURE</div>
+
+<script>
+// ── Typing effect ──
+const phrases = [
+  'The first server-side Agent-first operating system.',
+  'Where Agents become first-class citizens.',
+  'OS-level security. OS-level performance.',
+  'Redefining how Agents run on the cloud.',
+];
+let phraseIdx = 0, charIdx = 0, deleting = false;
+const typedEl = document.getElementById('typed-text');
+
+function typeLoop() {
+  const phrase = phrases[phraseIdx];
+  if (!deleting) {
+    typedEl.textContent = phrase.substring(0, charIdx + 1);
+    charIdx++;
+    if (charIdx === phrase.length) {
+      setTimeout(() => { deleting = true; typeLoop(); }, 2200);
+      return;
+    }
+    setTimeout(typeLoop, 50 + Math.random() * 40);
+  } else {
+    typedEl.textContent = phrase.substring(0, charIdx);
+    charIdx--;
+    if (charIdx < 0) {
+      deleting = false;
+      charIdx = 0;
+      phraseIdx = (phraseIdx + 1) % phrases.length;
+      setTimeout(typeLoop, 400);
+      return;
+    }
+    setTimeout(typeLoop, 25);
+  }
+}
+setTimeout(typeLoop, 1500);
+
+// ── Terminal typing ──
+const termLines = [
+  { type: 'output', text: 'Agentic OS', delay: 400 },
+  { type: 'newline' },
+  { type: 'output', text: 'Agent-first. Secure by default. Token-efficient.', delay: 600 },
+  { type: 'newline' },
+  { type: 'newline' },
+  { type: 'prompt', text: 'cosh' },
+  { type: 'output', text: '@agentic-os', delay: 100 },
+  { type: 'prompt', text: ':~ $ ' },
+  { type: 'cmd', text: 'cosh skill load', delay: 800 },
+  { type: 'newline' },
+  { type: 'output', text: '▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░  loading ...', delay: 1200 },
+];
+
+const termBody = document.getElementById('terminal-body');
+let lineIdx = 0;
+
+function renderTermLine() {
+  if (lineIdx >= termLines.length) return;
+  const line = termLines[lineIdx];
+  if (line.type === 'newline') {
+    termBody.appendChild(document.createElement('br'));
+    lineIdx++;
+    setTimeout(renderTermLine, 80);
+  } else {
+    const span = document.createElement('span');
+    span.className = line.type;
+    termBody.appendChild(span);
+    if (line.type === 'cmd') {
+      let ci = 0;
+      const interval = setInterval(() => {
+        span.textContent += line.text[ci];
+        ci++;
+        if (ci >= line.text.length) {
+          clearInterval(interval);
+          lineIdx++;
+          setTimeout(renderTermLine, line.delay || 200);
+        }
+      }, 45);
+    } else {
+      span.textContent = line.text;
+      lineIdx++;
+      setTimeout(renderTermLine, line.delay || 100);
+    }
+  }
+}
+setTimeout(renderTermLine, 2000);
+
+// ── Particle system ──
+const canvas = document.getElementById('particles');
+const ctx = canvas.getContext('2d');
+let W, H, particles = [];
+
+function resize() {
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+class Particle {
+  constructor() { this.reset(); }
+  reset() {
+    this.x = Math.random() * W;
+    this.y = Math.random() * H;
+    this.vx = (Math.random() - 0.5) * 0.3;
+    this.vy = (Math.random() - 0.5) * 0.3;
+    this.r = Math.random() * 1.5 + 0.5;
+    this.alpha = Math.random() * 0.4 + 0.1;
+  }
+  update() {
+    this.x += this.vx;
+    this.y += this.vy;
+    if (this.x < 0 || this.x > W || this.y < 0 || this.y > H) this.reset();
+  }
+  draw() {
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.r, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(0, 229, 160, ${this.alpha})`;
+    ctx.fill();
+  }
+}
+
+for (let i = 0; i < 80; i++) particles.push(new Particle());
+
+function drawLines() {
+  for (let i = 0; i < particles.length; i++) {
+    for (let j = i + 1; j < particles.length; j++) {
+      const dx = particles[i].x - particles[j].x;
+      const dy = particles[i].y - particles[j].y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < 150) {
+        ctx.beginPath();
+        ctx.moveTo(particles[i].x, particles[i].y);
+        ctx.lineTo(particles[j].x, particles[j].y);
+        ctx.strokeStyle = `rgba(0, 229, 160, ${0.06 * (1 - dist / 150)})`;
+        ctx.lineWidth = 0.5;
+        ctx.stroke();
+      }
+    }
+  }
+}
+
+function animate() {
+  ctx.clearRect(0, 0, W, H);
+  particles.forEach(p => { p.update(); p.draw(); });
+  drawLines();
+  requestAnimationFrame(animate);
+}
+animate();
+</script>
+</body>
+</html>
