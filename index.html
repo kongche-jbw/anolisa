@@ -64,7 +64,8 @@
     width: 100%; height: 100%;
     display: flex; flex-direction: column;
     align-items: center; justify-content: center;
-    padding: 2rem;
+    padding: 1.5rem;
+    padding-bottom: 4rem; /* 为底部 footer + 弹窗留出空间 */
   }
 
   /* ── top badge ── */
@@ -78,7 +79,7 @@
     font-size: 0.75rem;
     letter-spacing: 0.08em;
     color: var(--accent);
-    margin-bottom: 2.5rem;
+    margin-bottom: 1.4rem;
     animation: fade-down 1s ease-out 0.2s both;
   }
   .badge-dot {
@@ -96,11 +97,11 @@
   .logo {
     font-family: var(--mono);
     font-weight: 700;
-    font-size: clamp(2.5rem, 6vw, 5rem);
+    font-size: clamp(2rem, 5vw, 4rem);
     letter-spacing: -0.02em;
     line-height: 1.1;
     text-align: center;
-    margin-bottom: 1rem;
+    margin-bottom: 0.6rem;
     animation: fade-down 1s ease-out 0.4s both;
   }
   .logo .accent { color: var(--accent); }
@@ -109,11 +110,11 @@
   /* ── tagline (typed) ── */
   .tagline {
     font-family: var(--mono);
-    font-size: clamp(0.85rem, 1.8vw, 1.1rem);
+    font-size: clamp(0.8rem, 1.6vw, 1rem);
     color: var(--text-dim);
     text-align: center;
     height: 1.6em;
-    margin-bottom: 3rem;
+    margin-bottom: 1.6rem;
     animation: fade-down 1s ease-out 0.6s both;
   }
   .tagline .cursor {
@@ -132,11 +133,11 @@
   /* ── coming soon ── */
   .coming-soon {
     font-family: var(--mono);
-    font-size: clamp(1.1rem, 2.5vw, 1.5rem);
+    font-size: clamp(0.9rem, 2vw, 1.2rem);
     font-weight: 400;
     letter-spacing: 0.25em;
     color: var(--text-dim);
-    margin-bottom: 3rem;
+    margin-bottom: 1.6rem;
     animation: fade-down 1s ease-out 0.8s both;
     position: relative;
   }
@@ -151,7 +152,7 @@
 
   /* ── terminal prompt ── */
   .terminal {
-    width: min(560px, 90vw);
+    width: min(500px, 88vw);
     background: var(--surface);
     border: 1px solid rgba(255,255,255,0.06);
     border-radius: 10px;
@@ -160,12 +161,12 @@
   }
   .terminal-bar {
     display: flex; align-items: center; gap: 6px;
-    padding: 10px 14px;
+    padding: 8px 12px;
     background: rgba(255,255,255,0.03);
     border-bottom: 1px solid rgba(255,255,255,0.04);
   }
   .terminal-dot {
-    width: 10px; height: 10px; border-radius: 50%;
+    width: 9px; height: 9px; border-radius: 50%;
   }
   .terminal-dot.r { background: #ff5f57; }
   .terminal-dot.y { background: #febc2e; }
@@ -177,28 +178,204 @@
     color: var(--text-dim);
   }
   .terminal-body {
-    padding: 1.2rem 1.4rem;
+    padding: 0.9rem 1.2rem;
     font-family: var(--mono);
-    font-size: 0.82rem;
-    line-height: 1.8;
+    font-size: 0.78rem;
+    line-height: 1.7;
     color: var(--text-dim);
   }
   .terminal-body .prompt { color: var(--accent); }
   .terminal-body .cmd { color: var(--text); }
   .terminal-body .output { color: var(--text-dim); opacity: 0.7; }
 
+  /* ── openclaw integration ── */
+  .install-wrap {
+    position: relative;
+    margin-top: 1.2rem;
+    display: inline-flex;
+    justify-content: center;
+    animation: fade-up 1s ease-out 1.1s both;
+  }
+
+  .install-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 22px;
+    border: 1px solid rgba(0,229,160,0.35);
+    border-radius: 100px;
+    background: var(--accent-dim);
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    color: var(--accent);
+    cursor: pointer;
+    letter-spacing: 0.06em;
+    transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
+    user-select: none;
+  }
+  .install-btn:hover {
+    border-color: rgba(0,229,160,0.7);
+    background: rgba(0,229,160,0.22);
+    box-shadow: 0 0 18px rgba(0,229,160,0.2);
+  }
+  .install-btn .install-icon {
+    font-size: 0.9rem;
+    transition: transform 0.2s;
+  }
+  .install-wrap.open .install-btn .install-icon {
+    transform: rotate(45deg);
+  }
+  .install-wrap.open .install-btn {
+    border-color: rgba(0,229,160,0.7);
+    background: rgba(0,229,160,0.22);
+    box-shadow: 0 0 18px rgba(0,229,160,0.2);
+  }
+
+  .install-popup {
+    position: absolute;
+    top: calc(100% + 12px);
+    left: 50%;
+    width: min(520px, 88vw);
+    background: #0e0e18;
+    border: 1px solid rgba(0,229,160,0.25);
+    border-radius: 10px;
+    padding: 14px 16px;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.7), 0 0 0 1px rgba(0,229,160,0.08);
+    opacity: 0;
+    pointer-events: none;
+    transform: translateX(-50%) translateY(-8px);
+    transition: opacity 0.2s ease, transform 0.2s ease;
+    z-index: 100;
+  }
+  .install-wrap.open .install-popup {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateX(-50%) translateY(0);
+  }
+
+  /* arrow — 指向上方按钮 */
+  .install-popup::after {
+    content: '';
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    border: 7px solid transparent;
+    border-bottom-color: rgba(0,229,160,0.25);
+  }
+  .install-popup::before {
+    content: '';
+    position: absolute;
+    bottom: calc(100% + 1px);
+    left: 50%;
+    transform: translateX(-50%);
+    border: 6px solid transparent;
+    border-bottom-color: #0e0e18;
+    z-index: 1;
+  }
+
+  .install-popup-label {
+    font-family: var(--mono);
+    font-size: 0.65rem;
+    color: var(--text-dim);
+    letter-spacing: 0.08em;
+    margin-bottom: 8px;
+    opacity: 0.6;
+  }
+
+  /* ── popup tabs ── */
+  .popup-tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    padding-bottom: 8px;
+  }
+  .popup-tab {
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    padding: 4px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    color: var(--text-dim);
+    background: transparent;
+    border: 1px solid transparent;
+    transition: color 0.15s, background 0.15s, border-color 0.15s;
+    letter-spacing: 0.04em;
+  }
+  .popup-tab:hover {
+    color: var(--text);
+    background: rgba(255,255,255,0.05);
+  }
+  .popup-tab.active {
+    color: var(--accent);
+    background: var(--accent-dim);
+    border-color: rgba(0,229,160,0.25);
+  }
+  .popup-panel { display: none; }
+  .popup-panel.active { display: block; }
+
+  .install-popup-cmd {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: rgba(0,0,0,0.35);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 6px;
+    padding: 10px 12px;
+  }
+
+  .install-popup-cmd code {
+    flex: 1;
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    color: var(--text);
+    word-break: break-all;
+    line-height: 1.5;
+  }
+  .install-popup-cmd code .cmd-curl { color: var(--accent); }
+  .install-popup-cmd code .cmd-pipe { color: var(--text-dim); }
+
+  .copy-btn {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 12px;
+    background: var(--accent-dim);
+    border: 1px solid rgba(0,229,160,0.3);
+    border-radius: 5px;
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    color: var(--accent);
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+    white-space: nowrap;
+  }
+  .copy-btn:hover {
+    background: rgba(0,229,160,0.25);
+    border-color: rgba(0,229,160,0.6);
+  }
+  .copy-btn.copied {
+    color: #28c840;
+    border-color: #28c840;
+    background: rgba(40,200,64,0.12);
+  }
+
   /* ── bottom text ── */
   .footer {
     position: fixed;
     bottom: 2rem;
-    left: 50%;
-    transform: translateX(-50%);
+    left: 0;
+    right: 0;
+    text-align: center;
     font-family: var(--mono);
     font-size: 0.7rem;
     color: var(--text-dim);
     opacity: 0.4;
     letter-spacing: 0.1em;
     z-index: 10;
+    pointer-events: none;
     animation: fade-up 1s ease-out 1.2s both;
   }
 
@@ -243,6 +420,33 @@
       <div class="terminal-title">cosh — Copilot Shell</div>
     </div>
     <div class="terminal-body" id="terminal-body"></div>
+  </div>
+
+  <div class="install-wrap" id="install-wrap">
+    <div class="install-btn" id="install-btn">
+      <span class="install-icon">⊕</span>
+      <span>接入 OpenClaw</span>
+    </div>
+    <div class="install-popup" id="install-popup">
+      <div class="popup-tabs">
+        <button class="popup-tab active" data-tab="user">用户安装</button>
+        <button class="popup-tab" data-tab="agent">Agent 接管</button>
+      </div>
+      <div class="popup-panel active" id="panel-user">
+        <div class="install-popup-label">在目标机器终端执行，默认安装推荐套件（recommended）</div>
+        <div class="install-popup-cmd">
+          <code id="cmd-user"></code>
+          <button class="copy-btn" data-copy="user">Copy</button>
+        </div>
+      </div>
+      <div class="popup-panel" id="panel-agent">
+        <div class="install-popup-label">发送给 Agent，由 Agent 阅读 SKILL 后引导安装</div>
+        <div class="install-popup-cmd">
+          <code id="cmd-agent"></code>
+          <button class="copy-btn" data-copy="agent">Copy</button>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -395,6 +599,96 @@ function animate() {
   requestAnimationFrame(animate);
 }
 animate();
+
+// ── OpenClaw 集成命令组件 ──
+(function () {
+  var isLocal = window.location.protocol === 'file:';
+  var pageBase = window.location.href.replace(/\/[^\/]*$/, '/');
+
+  // 命令内容
+  var userCmd, agentCmd;
+  if (isLocal) {
+    userCmd  = { plain: 'curl <deployed-url>/agenticos2openclaw.sh | bash', html:
+      '<span class="cmd-curl">curl</span> <span style="color:var(--text-dim);font-style:italic">&lt;deployed-url&gt;/agenticos2openclaw.sh</span> <span class="cmd-pipe">|</span> bash' +
+      '<span style="display:block;margin-top:6px;font-size:0.63rem;color:var(--text-dim);opacity:0.55">⚠ 本地预览模式，部署到 gh-pages 后 URL 将自动替换</span>' };
+    agentCmd = { plain: 'curl <deployed-url>/SKILL.md，帮我进行配置', html:
+      '<span class="cmd-curl">curl</span> <span style="color:var(--text-dim);font-style:italic">&lt;deployed-url&gt;/SKILL.md</span><span style="color:var(--text-dim)">，帮我进行配置</span>' +
+      '<span style="display:block;margin-top:6px;font-size:0.63rem;color:var(--text-dim);opacity:0.55">⚠ 本地预览模式，部署到 gh-pages 后 URL 将自动替换</span>' };
+  } else {
+    var installerUrl = pageBase + 'agenticos2openclaw.sh';
+    var skillUrl     = pageBase + 'SKILL.md';
+    userCmd  = { plain: 'curl ' + installerUrl + ' | bash', html:
+      '<span class="cmd-curl">curl</span> ' + installerUrl + ' <span class="cmd-pipe">|</span> bash' };
+    agentCmd = { plain: 'curl ' + skillUrl + '，帮我进行配置', html:
+      '<span class="cmd-curl">curl</span> ' + skillUrl + '<span style="color:var(--text-dim)">，帮我进行配置</span>' };
+  }
+
+  document.getElementById('cmd-user').innerHTML  = userCmd.html;
+  document.getElementById('cmd-agent').innerHTML = agentCmd.html;
+
+  // Tab 切换
+  var tabs   = document.querySelectorAll('.popup-tab');
+  var panels = document.querySelectorAll('.popup-panel');
+  tabs.forEach(function (tab) {
+    tab.addEventListener('click', function (e) {
+      e.stopPropagation();
+      tabs.forEach(function (t) { t.classList.remove('active'); });
+      panels.forEach(function (p) { p.classList.remove('active'); });
+      tab.classList.add('active');
+      document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
+    });
+  });
+
+  // 复制按钮
+  function makeCopyHandler(btn, getCmd) {
+    btn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var text = getCmd();
+      function onCopied() {
+        btn.textContent = '✓ 已复制';
+        btn.classList.add('copied');
+        setTimeout(function () {
+          btn.textContent = 'Copy';
+          btn.classList.remove('copied');
+        }, 2000);
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(onCopied).catch(function () { fallback(text); onCopied(); });
+      } else {
+        fallback(text); onCopied();
+      }
+    });
+  }
+  function fallback(text) {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+  }
+
+  var copyBtns = document.querySelectorAll('.copy-btn[data-copy]');
+  copyBtns.forEach(function (btn) {
+    var key = btn.dataset.copy;
+    makeCopyHandler(btn, function () { return key === 'user' ? userCmd.plain : agentCmd.plain; });
+  });
+
+  // 点击按钮展开/收起
+  var wrap = document.getElementById('install-wrap');
+  var installBtn = document.getElementById('install-btn');
+  installBtn.addEventListener('click', function (e) {
+    e.stopPropagation();
+    wrap.classList.toggle('open');
+  });
+  document.addEventListener('click', function () {
+    wrap.classList.remove('open');
+  });
+  document.getElementById('install-popup').addEventListener('click', function (e) {
+    e.stopPropagation();
+  });
+})();
 </script>
 </body>
 </html>
