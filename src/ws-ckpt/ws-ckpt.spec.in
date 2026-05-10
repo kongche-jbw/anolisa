@@ -65,7 +65,7 @@ mkdir -p /run/ws-ckpt /data/ws-ckpt /mnt/btrfs-workspace /etc/ws-ckpt
 %post
 systemctl daemon-reload
 systemctl enable ws-ckpt.service
-systemctl start ws-ckpt.service 2>/dev/null || true
+systemctl restart ws-ckpt.service 2>/dev/null || true
 echo "ws-ckpt installed, started and enabled at boot."
 echo "Run 'systemctl status ws-ckpt' to check service status."
 echo "Run 'ws-ckpt --help' for usage."
