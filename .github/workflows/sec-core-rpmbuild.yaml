@@ -106,7 +106,7 @@ jobs:
           print(f'All {len(reqs) - skipped} dependencies verified ({skipped} skipped due to platform markers).')
           PYEOF
 
-      - name: Verify all Python imports
+      - name: Verify cli Python imports
         run: |
           export PYTHONPATH=/opt/agent-sec/lib/python3.11/site-packages${PYTHONPATH:+:$PYTHONPATH}
           python3 << 'PYEOF'
@@ -145,8 +145,43 @@ jobs:
           print('All modules imported successfully')
           PYEOF
 
-      - name: Install E2E test dependencies
-        run: dnf install -y jq
+      - name: Verify cosh hook Python imports
+        run: |
+          python3 << 'PYEOF'
+          import importlib.util, pathlib, sys
+
+          hooks_dir = pathlib.Path('/usr/share/anolisa/extensions/agent-sec-core/hooks')
+          print(f'Hooks directory: {hooks_dir.resolve()}')
+
+          py_files = sorted(hooks_dir.glob('*.py'))
+          if not py_files:
+              print('ERROR: no hook .py files found', file=sys.stderr)
+              sys.exit(1)
+
+          failed = []
+          for pyfile in py_files:
+              mod_name = pyfile.stem.replace('-', '_')
+              spec = importlib.util.spec_from_file_location(mod_name, pyfile)
+              if spec is None:
+                  print(f'  {pyfile.name} ... FAILED: cannot create module spec')
+                  failed.append((pyfile.name, 'cannot create module spec'))
+                  continue
+              try:
+                  mod = importlib.util.module_from_spec(spec)
+                  spec.loader.exec_module(mod)
+                  print(f'  {pyfile.name} ... OK')
+              except Exception as e:
+                  print(f'  {pyfile.name} ... FAILED: {e}')
+                  failed.append((pyfile.name, str(e)))
+
+          print(f'\nTotal: {len(py_files)} hooks, {len(failed)} failed')
+          if failed:
+              print('\nFailed hooks:', file=sys.stderr)
+              for name, err in failed:
+                  print(f'  - {name}: {err}', file=sys.stderr)
+              sys.exit(1)
+          print('All hook scripts imported successfully')
+          PYEOF
 
       - name: Uninstall skills package before E2E tests
         run: rpm -e agent-sec-skills --nodeps
