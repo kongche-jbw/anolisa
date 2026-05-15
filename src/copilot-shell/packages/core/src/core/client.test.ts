@@ -2536,6 +2536,170 @@ Other open files:
         expect(mockCheckNextSpeaker).toHaveBeenCalledTimes(2);
         expect(userPromptSubmitCallCount(mockMessageBus)).toBe(1);
       });
+
+      it('sets currentRunId before firing UserPromptSubmit so hook input has the right run_id', async () => {
+        // Arrange: enable hooks + messageBus
+        const mockMessageBus = createMockMessageBus();
+        vi.mocked(mockConfig.getEnableHooks).mockReturnValue(true);
+        vi.mocked(mockConfig.getMessageBus).mockReturnValue(
+          mockMessageBus as unknown as ReturnType<Config['getMessageBus']>,
+        );
+        // PreCompact hook uses hookSystem; return undefined so it short-circuits.
+        (mockConfig as unknown as { getHookSystem: Mock }).getHookSystem = vi
+          .fn()
+          .mockReturnValue(undefined);
+
+        mockTurnRunFn.mockReturnValueOnce(
+          (async function* () {
+            yield { type: 'content', value: 'Hello' };
+          })(),
+        );
+
+        const mockChat: Partial<GeminiChat> = {
+          addHistory: vi.fn(),
+          getHistory: vi.fn().mockReturnValue([]),
+          stripThoughtsFromHistory: vi.fn(),
+        };
+        client['chat'] = mockChat as GeminiChat;
+
+        const stream = client.sendMessageStream(
+          [{ text: 'Hi' }],
+          new AbortController().signal,
+          'prompt-id-runid',
+        );
+        for await (const _ of stream) {
+          // drain
+        }
+
+        // Assert: setCurrentRunId('prompt-id-runid') was invoked before the
+        // UserPromptSubmit hook request hit the bus, so hookEventHandler can
+        // read the right run_id when constructing the hook input.
+        const setRunIdCall = vi
+          .mocked(mockConfig.setCurrentRunId)
+          .mock.calls.findIndex((call) => call[0] === 'prompt-id-runid');
+        expect(setRunIdCall).toBeGreaterThanOrEqual(0);
+        const setRunIdOrder = vi.mocked(mockConfig.setCurrentRunId).mock
+          .invocationCallOrder[setRunIdCall];
+
+        const userPromptSubmitOrder = mockMessageBus.request.mock.calls
+          .map((call, i) => ({
+            order: mockMessageBus.request.mock.invocationCallOrder[i],
+            eventName: (call[0] as HookExecutionRequest).eventName,
+          }))
+          .find((entry) => entry.eventName === 'UserPromptSubmit')?.order;
+
+        expect(userPromptSubmitOrder).toBeDefined();
+        expect(setRunIdOrder).toBeLessThan(userPromptSubmitOrder!);
+      });
+
+      it('exposes the current run_id to hook handlers at UserPromptSubmit request time', async () => {
+        // Arrange: link setCurrentRunId / getCurrentRunId so the bus subscriber
+        // observes whatever sendMessageStream wrote — mirroring the real path
+        // hookEventHandler.createBaseInput() takes via config.getCurrentRunId().
+        let currentRunId: string | undefined;
+        vi.mocked(mockConfig.setCurrentRunId).mockImplementation((id) => {
+          currentRunId = id;
+        });
+        (mockConfig as unknown as { getCurrentRunId: Mock }).getCurrentRunId =
+          vi.fn(() => currentRunId);
+
+        // Capture run_id at the moment a HOOK_EXECUTION_REQUEST hits the bus,
+        // which is exactly when createBaseInput() would read it.
+        let runIdSeenByHookRunner: string | undefined;
+        const mockMessageBus = {
+          request: vi
+            .fn()
+            .mockImplementation(async (req: HookExecutionRequest) => {
+              if (req.eventName === 'UserPromptSubmit') {
+                runIdSeenByHookRunner = mockConfig.getCurrentRunId();
+              }
+              return {
+                type: MessageBusType.HOOK_EXECUTION_RESPONSE,
+                correlationId: 'test-correlation-id',
+                success: true,
+              };
+            }),
+        };
+        vi.mocked(mockConfig.getEnableHooks).mockReturnValue(true);
+        vi.mocked(mockConfig.getMessageBus).mockReturnValue(
+          mockMessageBus as unknown as ReturnType<Config['getMessageBus']>,
+        );
+        (mockConfig as unknown as { getHookSystem: Mock }).getHookSystem = vi
+          .fn()
+          .mockReturnValue(undefined);
+
+        mockTurnRunFn.mockReturnValueOnce(
+          (async function* () {
+            yield { type: 'content', value: 'Hello' };
+          })(),
+        );
+
+        const mockChat: Partial<GeminiChat> = {
+          addHistory: vi.fn(),
+          getHistory: vi.fn().mockReturnValue([]),
+          stripThoughtsFromHistory: vi.fn(),
+        };
+        client['chat'] = mockChat as GeminiChat;
+
+        const stream = client.sendMessageStream(
+          [{ text: 'Hi' }],
+          new AbortController().signal,
+          'prompt-id-hook-input-runid',
+        );
+        for await (const _ of stream) {
+          // drain
+        }
+
+        // Assert: at hook-handling time getCurrentRunId() returns the new id,
+        // i.e. the run_id that createBaseInput() will inject is correct.
+        expect(runIdSeenByHookRunner).toBe('prompt-id-hook-input-runid');
+      });
+
+      it('keeps the original run_id during a continuation call', async () => {
+        // Arrange: link set/get like the previous test.
+        let currentRunId: string | undefined = 'pre-existing-run-id';
+        vi.mocked(mockConfig.setCurrentRunId).mockImplementation((id) => {
+          currentRunId = id;
+        });
+        (mockConfig as unknown as { getCurrentRunId: Mock }).getCurrentRunId =
+          vi.fn(() => currentRunId);
+
+        const mockMessageBus = createMockMessageBus();
+        vi.mocked(mockConfig.getEnableHooks).mockReturnValue(true);
+        vi.mocked(mockConfig.getMessageBus).mockReturnValue(
+          mockMessageBus as unknown as ReturnType<Config['getMessageBus']>,
+        );
+        (mockConfig as unknown as { getHookSystem: Mock }).getHookSystem = vi
+          .fn()
+          .mockReturnValue(undefined);
+
+        mockTurnRunFn.mockReturnValueOnce(
+          (async function* () {
+            yield { type: 'content', value: 'after tool' };
+          })(),
+        );
+
+        const mockChat: Partial<GeminiChat> = {
+          addHistory: vi.fn(),
+          getHistory: vi.fn().mockReturnValue([]),
+          stripThoughtsFromHistory: vi.fn(),
+        };
+        client['chat'] = mockChat as GeminiChat;
+
+        const stream = client.sendMessageStream(
+          [{ text: 'tool result' }],
+          new AbortController().signal,
+          'continuation-prompt-id',
+          { isContinuation: true },
+        );
+        for await (const _ of stream) {
+          // drain
+        }
+
+        // Assert: continuations must NOT overwrite the active run_id.
+        expect(mockConfig.setCurrentRunId).not.toHaveBeenCalled();
+        expect(mockConfig.getCurrentRunId()).toBe('pre-existing-run-id');
+      });
     });
   });
 

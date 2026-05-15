@@ -534,6 +534,13 @@ export class GeminiClient {
     // user submits a prompt") only apply to the first, non-continuation call.
     const isContinuation = options?.isContinuation === true;
 
+    // Promote prompt_id to the current run id BEFORE firing UserPromptSubmit
+    // so hookEventHandler.createBaseInput() can populate run_id correctly.
+    // Continuations keep the run id from the original prompt — don't overwrite.
+    if (!isContinuation) {
+      this.config.setCurrentRunId(prompt_id);
+    }
+
     // Fire UserPromptSubmit hook through MessageBus (only if hooks are enabled)
     const hooksEnabled = this.config.getEnableHooks();
     const messageBus = this.config.getMessageBus();
@@ -623,7 +630,6 @@ export class GeminiClient {
     if (!isContinuation) {
       this.loopDetector.reset(prompt_id);
       this.lastPromptId = prompt_id;
-      this.config.setCurrentRunId(prompt_id);
 
       // record user message for session management
       this.config.getChatRecordingService()?.recordUserMessage(request);
