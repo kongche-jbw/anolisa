@@ -30,6 +30,7 @@ import {
   GeminiEventType,
   Turn,
   type ChatCompressionInfo,
+  type ServerGeminiStreamEvent,
 } from './turn.js';
 import { getCoreSystemPrompt } from './prompts.js';
 import { DEFAULT_QWEN_FLASH_MODEL } from '../config/models.js';
@@ -2699,6 +2700,269 @@ Other open files:
         // Assert: continuations must NOT overwrite the active run_id.
         expect(mockConfig.setCurrentRunId).not.toHaveBeenCalled();
         expect(mockConfig.getCurrentRunId()).toBe('pre-existing-run-id');
+      });
+
+      // ─────────────────────────────────────────────────────────────────
+      // Regression: Issue #535 — UserPromptSubmit allow/approve `reason`
+      //   was not surfaced to the terminal UI. Non-blocking decisions now
+      //   yield a HookSystemMessage event so users can see informational
+      //   warnings ("policy check passed with a warning") that hooks
+      //   surface alongside an allow decision.
+      // ─────────────────────────────────────────────────────────────────
+      it('emits HookSystemMessage when UserPromptSubmit allow decision carries a reason', async () => {
+        const mockMessageBus = {
+          request: vi.fn().mockResolvedValue({
+            type: MessageBusType.HOOK_EXECUTION_RESPONSE,
+            correlationId: 'test-correlation-id',
+            success: true,
+            output: {
+              decision: 'allow',
+              reason: 'Prompt accepted, but policy check found a warning',
+            },
+          }),
+        };
+        vi.mocked(mockConfig.getEnableHooks).mockReturnValue(true);
+        vi.mocked(mockConfig.getMessageBus).mockReturnValue(
+          mockMessageBus as unknown as ReturnType<Config['getMessageBus']>,
+        );
+        (mockConfig as unknown as { getHookSystem: Mock }).getHookSystem = vi
+          .fn()
+          .mockReturnValue(undefined);
+
+        const mockChat: Partial<GeminiChat> = {
+          addHistory: vi.fn(),
+          getHistory: vi.fn().mockReturnValue([]),
+          stripThoughtsFromHistory: vi.fn(),
+        };
+        client['chat'] = mockChat as GeminiChat;
+
+        mockTurnRunFn.mockReturnValueOnce(
+          (async function* () {
+            yield { type: 'content', value: 'ok' };
+          })(),
+        );
+        const stream = client.sendMessageStream(
+          [{ text: 'Hi' }],
+          new AbortController().signal,
+          'prompt-id-allow-reason',
+        );
+        const events = [];
+        for await (const e of stream) {
+          events.push(e);
+        }
+
+        const hookMessages = events.filter(
+          (e) => e.type === GeminiEventType.HookSystemMessage,
+        );
+        expect(hookMessages).toEqual([
+          {
+            type: GeminiEventType.HookSystemMessage,
+            value: 'Prompt accepted, but policy check found a warning',
+          },
+        ]);
+      });
+
+      it('prefers systemMessage over reason when both are present on allow', async () => {
+        const mockMessageBus = {
+          request: vi.fn().mockResolvedValue({
+            type: MessageBusType.HOOK_EXECUTION_RESPONSE,
+            correlationId: 'test-correlation-id',
+            success: true,
+            output: {
+              decision: 'allow',
+              systemMessage: 'explicit system message',
+              reason: 'fallback reason',
+            },
+          }),
+        };
+        vi.mocked(mockConfig.getEnableHooks).mockReturnValue(true);
+        vi.mocked(mockConfig.getMessageBus).mockReturnValue(
+          mockMessageBus as unknown as ReturnType<Config['getMessageBus']>,
+        );
+        (mockConfig as unknown as { getHookSystem: Mock }).getHookSystem = vi
+          .fn()
+          .mockReturnValue(undefined);
+
+        const mockChat: Partial<GeminiChat> = {
+          addHistory: vi.fn(),
+          getHistory: vi.fn().mockReturnValue([]),
+          stripThoughtsFromHistory: vi.fn(),
+        };
+        client['chat'] = mockChat as GeminiChat;
+
+        mockTurnRunFn.mockReturnValueOnce(
+          (async function* () {
+            yield { type: 'content', value: 'ok' };
+          })(),
+        );
+        const stream = client.sendMessageStream(
+          [{ text: 'Hi' }],
+          new AbortController().signal,
+          'prompt-id-systemmsg-priority',
+        );
+        const events = [];
+        for await (const e of stream) {
+          events.push(e);
+        }
+
+        const hookMessages = events.filter(
+          (e) => e.type === GeminiEventType.HookSystemMessage,
+        );
+        expect(hookMessages).toEqual([
+          {
+            type: GeminiEventType.HookSystemMessage,
+            value: 'explicit system message',
+          },
+        ]);
+      });
+
+      it('does not emit HookSystemMessage when blocking — Error event already carries the reason', async () => {
+        const mockMessageBus = {
+          request: vi.fn().mockResolvedValue({
+            type: MessageBusType.HOOK_EXECUTION_RESPONSE,
+            correlationId: 'test-correlation-id',
+            success: true,
+            output: {
+              decision: 'block',
+              reason: 'blocked by policy',
+            },
+          }),
+        };
+        vi.mocked(mockConfig.getEnableHooks).mockReturnValue(true);
+        vi.mocked(mockConfig.getMessageBus).mockReturnValue(
+          mockMessageBus as unknown as ReturnType<Config['getMessageBus']>,
+        );
+        (mockConfig as unknown as { getHookSystem: Mock }).getHookSystem = vi
+          .fn()
+          .mockReturnValue(undefined);
+
+        const mockChat: Partial<GeminiChat> = {
+          addHistory: vi.fn(),
+          getHistory: vi.fn().mockReturnValue([]),
+          stripThoughtsFromHistory: vi.fn(),
+        };
+        client['chat'] = mockChat as GeminiChat;
+
+        const stream = client.sendMessageStream(
+          [{ text: 'Hi' }],
+          new AbortController().signal,
+          'prompt-id-block',
+        );
+        const events = [];
+        for await (const e of stream) {
+          events.push(e);
+        }
+
+        // Block path: an Error event is yielded with the reason; no separate
+        // HookSystemMessage should be emitted.
+        const errorEvents = events.filter(
+          (e) => e.type === GeminiEventType.Error,
+        );
+        expect(errorEvents).toHaveLength(1);
+        const hookMessages = events.filter(
+          (e) => e.type === GeminiEventType.HookSystemMessage,
+        );
+        expect(hookMessages).toEqual([]);
+      });
+
+      it('does not emit HookSystemMessage when ask — UserPromptConfirmation already carries the reason', async () => {
+        const mockMessageBus = {
+          request: vi.fn().mockResolvedValue({
+            type: MessageBusType.HOOK_EXECUTION_RESPONSE,
+            correlationId: 'test-correlation-id',
+            success: true,
+            output: {
+              decision: 'ask',
+              reason: 'please confirm',
+            },
+          }),
+        };
+        vi.mocked(mockConfig.getEnableHooks).mockReturnValue(true);
+        vi.mocked(mockConfig.getMessageBus).mockReturnValue(
+          mockMessageBus as unknown as ReturnType<Config['getMessageBus']>,
+        );
+        (mockConfig as unknown as { getHookSystem: Mock }).getHookSystem = vi
+          .fn()
+          .mockReturnValue(undefined);
+
+        const mockChat: Partial<GeminiChat> = {
+          addHistory: vi.fn(),
+          getHistory: vi.fn().mockReturnValue([]),
+          stripThoughtsFromHistory: vi.fn(),
+        };
+        client['chat'] = mockChat as GeminiChat;
+
+        // Ask path awaits a confirmation resolve(); abort to unblock.
+        const abortController = new AbortController();
+        const stream = client.sendMessageStream(
+          [{ text: 'Hi' }],
+          abortController.signal,
+          'prompt-id-ask',
+        );
+        const events: ServerGeminiStreamEvent[] = [];
+        const collect = (async () => {
+          for await (const e of stream) {
+            events.push(e);
+            if (e.type === GeminiEventType.UserPromptConfirmation) {
+              abortController.abort();
+            }
+          }
+        })();
+        await collect;
+
+        const confirmations = events.filter(
+          (e) => e.type === GeminiEventType.UserPromptConfirmation,
+        );
+        expect(confirmations).toHaveLength(1);
+        const hookMessages = events.filter(
+          (e) => e.type === GeminiEventType.HookSystemMessage,
+        );
+        expect(hookMessages).toEqual([]);
+      });
+
+      it('does not emit HookSystemMessage when allow has no message at all', async () => {
+        const mockMessageBus = createMockMessageBus();
+        // Override default: empty `output` with neither systemMessage nor reason.
+        mockMessageBus.request = vi.fn().mockResolvedValue({
+          type: MessageBusType.HOOK_EXECUTION_RESPONSE,
+          correlationId: 'test-correlation-id',
+          success: true,
+          output: { decision: 'allow' },
+        });
+        vi.mocked(mockConfig.getEnableHooks).mockReturnValue(true);
+        vi.mocked(mockConfig.getMessageBus).mockReturnValue(
+          mockMessageBus as unknown as ReturnType<Config['getMessageBus']>,
+        );
+        (mockConfig as unknown as { getHookSystem: Mock }).getHookSystem = vi
+          .fn()
+          .mockReturnValue(undefined);
+
+        const mockChat: Partial<GeminiChat> = {
+          addHistory: vi.fn(),
+          getHistory: vi.fn().mockReturnValue([]),
+          stripThoughtsFromHistory: vi.fn(),
+        };
+        client['chat'] = mockChat as GeminiChat;
+
+        mockTurnRunFn.mockReturnValueOnce(
+          (async function* () {
+            yield { type: 'content', value: 'ok' };
+          })(),
+        );
+        const stream = client.sendMessageStream(
+          [{ text: 'Hi' }],
+          new AbortController().signal,
+          'prompt-id-allow-empty',
+        );
+        const events = [];
+        for await (const e of stream) {
+          events.push(e);
+        }
+
+        const hookMessages = events.filter(
+          (e) => e.type === GeminiEventType.HookSystemMessage,
+        );
+        expect(hookMessages).toEqual([]);
       });
     });
   });

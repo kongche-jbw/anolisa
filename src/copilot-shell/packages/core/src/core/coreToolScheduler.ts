@@ -1512,6 +1512,42 @@ export class CoreToolScheduler {
                   );
 
                   if (postToolOutput) {
+                    // Compute mergedDecision once so every notification shares
+                    // the same context. Mirrors the PreToolUse path: blocking
+                    // (block/deny or continue=false) wins over ask, which
+                    // wins over the per-hook decision used for individual
+                    // notification dimming.
+                    const isBlockingPost =
+                      postToolOutput.isBlockingDecision() ||
+                      postToolOutput.shouldStopExecution();
+                    const isAskPost = postToolOutput.isAskDecision();
+                    const mergedDecisionPost: HookDecision | undefined =
+                      isBlockingPost
+                        ? postToolOutput.decision === 'deny'
+                          ? 'deny'
+                          : 'block'
+                        : isAskPost
+                          ? 'ask'
+                          : postToolOutput.decision;
+
+                    // Emit per-hook notifications BEFORE applying the merged
+                    // decision so every hook's reason/systemMessage surfaces
+                    // in the UI even when the overall outcome later replaces
+                    // the tool response.
+                    if (
+                      this.outputUpdateHandler &&
+                      postToolOutput.notifications?.length
+                    ) {
+                      for (const n of postToolOutput.notifications) {
+                        this.outputUpdateHandler(callId, {
+                          hookName: n.hookName,
+                          hookMessage: n.message,
+                          decision: n.decision,
+                          mergedDecision: mergedDecisionPost,
+                        });
+                      }
+                    }
+
                     // If hook denies, replace tool result with reason
                     if (postToolOutput.isBlockingDecision()) {
                       const reason = postToolOutput.getEffectiveReason();

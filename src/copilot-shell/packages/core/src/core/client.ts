@@ -619,6 +619,25 @@ export class GeminiClient {
         }
       }
 
+      // Non-blocking allow/approve path: surface systemMessage (or reason as
+      // fallback) to the terminal UI. Block uses Error event above; ask uses
+      // UserPromptConfirmation, both of which already render the message — so
+      // this branch only runs when no other UI path was taken.
+      if (
+        hookOutput &&
+        !hookOutput.isBlockingDecision() &&
+        !hookOutput.shouldStopExecution() &&
+        !hookOutput.isAskDecision()
+      ) {
+        const message = hookOutput.systemMessage ?? hookOutput.reason;
+        if (message) {
+          yield {
+            type: GeminiEventType.HookSystemMessage,
+            value: message,
+          };
+        }
+      }
+
       // Add additional context from hooks to the request
       const additionalContext = hookOutput?.getAdditionalContext();
       if (additionalContext) {

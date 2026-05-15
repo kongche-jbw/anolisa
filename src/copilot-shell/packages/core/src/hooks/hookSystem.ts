@@ -197,6 +197,11 @@ export class HookSystem {
           result.finalOutput,
         ) as PostToolUseHookOutput)
       : undefined;
+    // Carry per-hook notifications from the aggregator so the scheduler can
+    // emit them as structured data to the UI layer (mirrors PreToolUse).
+    if (output && result.notifications?.length) {
+      output.notifications = result.notifications;
+    }
     debugLogger.info(
       `[Hook Debug] hookSystem.firePostToolUseEvent: facade returning, hasOutput=${!!output}`,
     );

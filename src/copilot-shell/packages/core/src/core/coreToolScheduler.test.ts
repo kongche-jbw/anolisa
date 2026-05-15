@@ -2613,6 +2613,259 @@ describe('CoreToolScheduler Sequential Execution', () => {
   });
 
   // ─────────────────────────────────────────────────────────────────────────
+  // Regression: Issue #535 — PostToolUse hook reason was not surfaced to UI.
+  //   The aggregator already produces notifications[]; the scheduler must
+  //   forward them via outputUpdateHandler so the terminal renders the same
+  //   per-hook box style used for PreToolUse.
+  // ─────────────────────────────────────────────────────────────────────────
+  it('PostToolUse allow decision with reason should emit a structured notification to outputUpdateHandler', async () => {
+    const executeFn = vi.fn().mockResolvedValue({
+      llmContent: 'tool ran',
+      returnDisplay: 'tool ran',
+    });
+    const postAllowTool = new MockTool({
+      name: 'postAllowTool',
+      execute: executeFn,
+      shouldConfirmExecute: vi.fn().mockResolvedValue(false),
+    });
+
+    const postAllowHookOutput = {
+      decision: 'allow' as const,
+      isBlockingDecision: () => false,
+      shouldStopExecution: () => false,
+      isAskDecision: () => false,
+      systemMessage: undefined,
+      reason: 'Tool output passed compliance review',
+      getEffectiveReason: () => 'Tool output passed compliance review',
+      getAdditionalContext: () => undefined,
+      notifications: [
+        {
+          hookName: 'compliance-reviewer',
+          message: 'Tool output passed compliance review',
+          decision: 'allow' as const,
+        },
+      ],
+    };
+    const mockHookPostAllow = {
+      firePreToolUseEvent: vi.fn().mockResolvedValue(undefined),
+      firePostToolUseEvent: vi.fn().mockResolvedValue(postAllowHookOutput),
+    };
+
+    const toolRegistryPostAllow = {
+      getTool: () => postAllowTool,
+      getFunctionDeclarations: () => [],
+      tools: new Map(),
+      discovery: {},
+      registerTool: () => {},
+      getToolByName: () => postAllowTool,
+      getToolByDisplayName: () => postAllowTool,
+      getTools: () => [],
+      discoverTools: async () => {},
+      getAllTools: () => [],
+      getToolsByServer: () => [],
+    } as unknown as ToolRegistry;
+
+    const onAllToolCallsCompletePostAllow = vi.fn();
+    const outputUpdateHandlerPostAllow = vi.fn();
+
+    const mockConfigPostAllow = {
+      getSessionId: () => 'test-session-post-allow',
+      getUsageStatisticsEnabled: () => true,
+      getDebugMode: () => false,
+      getApprovalMode: () => ApprovalMode.DEFAULT,
+      getAllowedTools: () => [],
+      getToolRegistry: () => toolRegistryPostAllow,
+      getContentGeneratorConfig: () => ({
+        model: 'test-model',
+        authType: 'gemini',
+      }),
+      getShellExecutionConfig: () => ({
+        terminalWidth: 90,
+        terminalHeight: 30,
+      }),
+      storage: { getProjectTempDir: () => '/tmp' },
+      getTruncateToolOutputThreshold: () =>
+        DEFAULT_TRUNCATE_TOOL_OUTPUT_THRESHOLD,
+      getTruncateToolOutputLines: () => DEFAULT_TRUNCATE_TOOL_OUTPUT_LINES,
+      getUseSmartEdit: () => false,
+      getUseModelRouter: () => false,
+      getGeminiClient: () => null,
+      getChatRecordingService: () => undefined,
+      isInteractive: () => true,
+      getExperimentalZedIntegration: () => false,
+      getEnableHooks: () => true,
+      getHookSystem: () => mockHookPostAllow,
+    } as unknown as Config;
+
+    const schedulerPostAllow = new CoreToolScheduler({
+      config: mockConfigPostAllow,
+      onAllToolCallsComplete: onAllToolCallsCompletePostAllow,
+      onToolCallsUpdate: vi.fn(),
+      outputUpdateHandler: outputUpdateHandlerPostAllow,
+      getPreferredEditor: () => 'vscode',
+      onEditorClose: vi.fn(),
+    });
+
+    const abortControllerPostAllow = new AbortController();
+    await schedulerPostAllow.schedule(
+      [
+        {
+          callId: 'post-allow-1',
+          name: 'postAllowTool',
+          args: {},
+          isClientInitiated: false,
+          prompt_id: 'p-post-allow',
+        },
+      ],
+      abortControllerPostAllow.signal,
+    );
+
+    await vi.waitFor(() => {
+      expect(onAllToolCallsCompletePostAllow).toHaveBeenCalled();
+    });
+
+    // Notification must surface to the UI even though the decision is allow.
+    expect(outputUpdateHandlerPostAllow).toHaveBeenCalledWith('post-allow-1', {
+      hookName: 'compliance-reviewer',
+      hookMessage: 'Tool output passed compliance review',
+      decision: 'allow',
+      mergedDecision: 'allow',
+    });
+
+    const completedCalls = onAllToolCallsCompletePostAllow.mock
+      .calls[0][0] as ToolCall[];
+    expect(completedCalls[0].status).toBe('success');
+  });
+
+  it('PostToolUse block decision should emit notification AND replace tool response', async () => {
+    const executeFn = vi.fn().mockResolvedValue({
+      llmContent: 'tool ran',
+      returnDisplay: 'tool ran',
+    });
+    const postBlockTool = new MockTool({
+      name: 'postBlockTool',
+      execute: executeFn,
+      shouldConfirmExecute: vi.fn().mockResolvedValue(false),
+    });
+
+    const postBlockHookOutput = {
+      decision: 'block' as const,
+      isBlockingDecision: () => true,
+      shouldStopExecution: () => false,
+      isAskDecision: () => false,
+      systemMessage: undefined,
+      reason: 'Output requires follow-up review before continuing',
+      getEffectiveReason: () =>
+        'Output requires follow-up review before continuing',
+      getAdditionalContext: () => undefined,
+      notifications: [
+        {
+          hookName: 'compliance-reviewer',
+          message: 'Output requires follow-up review before continuing',
+          decision: 'block' as const,
+        },
+      ],
+    };
+    const mockHookPostBlock = {
+      firePreToolUseEvent: vi.fn().mockResolvedValue(undefined),
+      firePostToolUseEvent: vi.fn().mockResolvedValue(postBlockHookOutput),
+    };
+
+    const toolRegistryPostBlock = {
+      getTool: () => postBlockTool,
+      getFunctionDeclarations: () => [],
+      tools: new Map(),
+      discovery: {},
+      registerTool: () => {},
+      getToolByName: () => postBlockTool,
+      getToolByDisplayName: () => postBlockTool,
+      getTools: () => [],
+      discoverTools: async () => {},
+      getAllTools: () => [],
+      getToolsByServer: () => [],
+    } as unknown as ToolRegistry;
+
+    const onAllToolCallsCompletePostBlock = vi.fn();
+    const outputUpdateHandlerPostBlock = vi.fn();
+
+    const mockConfigPostBlock = {
+      getSessionId: () => 'test-session-post-block',
+      getUsageStatisticsEnabled: () => true,
+      getDebugMode: () => false,
+      getApprovalMode: () => ApprovalMode.DEFAULT,
+      getAllowedTools: () => [],
+      getToolRegistry: () => toolRegistryPostBlock,
+      getContentGeneratorConfig: () => ({
+        model: 'test-model',
+        authType: 'gemini',
+      }),
+      getShellExecutionConfig: () => ({
+        terminalWidth: 90,
+        terminalHeight: 30,
+      }),
+      storage: { getProjectTempDir: () => '/tmp' },
+      getTruncateToolOutputThreshold: () =>
+        DEFAULT_TRUNCATE_TOOL_OUTPUT_THRESHOLD,
+      getTruncateToolOutputLines: () => DEFAULT_TRUNCATE_TOOL_OUTPUT_LINES,
+      getUseSmartEdit: () => false,
+      getUseModelRouter: () => false,
+      getGeminiClient: () => null,
+      getChatRecordingService: () => undefined,
+      isInteractive: () => true,
+      getExperimentalZedIntegration: () => false,
+      getEnableHooks: () => true,
+      getHookSystem: () => mockHookPostBlock,
+    } as unknown as Config;
+
+    const schedulerPostBlock = new CoreToolScheduler({
+      config: mockConfigPostBlock,
+      onAllToolCallsComplete: onAllToolCallsCompletePostBlock,
+      onToolCallsUpdate: vi.fn(),
+      outputUpdateHandler: outputUpdateHandlerPostBlock,
+      getPreferredEditor: () => 'vscode',
+      onEditorClose: vi.fn(),
+    });
+
+    const abortControllerPostBlock = new AbortController();
+    await schedulerPostBlock.schedule(
+      [
+        {
+          callId: 'post-block-1',
+          name: 'postBlockTool',
+          args: {},
+          isClientInitiated: false,
+          prompt_id: 'p-post-block',
+        },
+      ],
+      abortControllerPostBlock.signal,
+    );
+
+    await vi.waitFor(() => {
+      expect(onAllToolCallsCompletePostBlock).toHaveBeenCalled();
+    });
+
+    // Block path: mergedDecision is 'block' so the per-hook box can dim.
+    expect(outputUpdateHandlerPostBlock).toHaveBeenCalledWith('post-block-1', {
+      hookName: 'compliance-reviewer',
+      hookMessage: 'Output requires follow-up review before continuing',
+      decision: 'block',
+      mergedDecision: 'block',
+    });
+
+    // Tool execution still completes (status success); only the responseParts
+    // sent back to the LLM are replaced with the hook reason.
+    const completedCalls = onAllToolCallsCompletePostBlock.mock
+      .calls[0][0] as ToolCall[];
+    expect(completedCalls[0].status).toBe('success');
+    const responseParts = (
+      completedCalls[0] as { response: { responseParts: unknown } }
+    ).response.responseParts;
+    expect(JSON.stringify(responseParts)).toContain(
+      'Output requires follow-up review before continuing',
+    );
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
   // hook-ask command forwarding: safe shell command (echo)
   //   When shouldConfirmExecute() returns false (safe command like `echo`)
   //   but a hook forces ask, the scheduler must extract the shell command
