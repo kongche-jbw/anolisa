@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # uninstall.sh — Remove tokenless plugin via OpenClaw official CLI.
+#
+# TODO(adapter-manifest): keep this explicit script while adapter actions are
+# invoked by component Makefile/build-all instead of a shared manifest runner.
 set -euo pipefail
 
 AGENT="${ANOLISA_TARGET:-openclaw}"
