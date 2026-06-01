@@ -4,16 +4,17 @@
 
 - 日期：2026-06-01
 - 分支：`kongche/dev/anolisa-p1`
-- HEAD：`6f1b4c8 merge: P1-fixup-5 operation_id filter + logs CLI wiring`
+- HEAD：P1-E1 完成（`list` / `status` 接入 Catalog + InstalledState v1）
 - 定位：P1 可开发骨架；不是可安装组件的产品形态
 
 ## 当前结论
 
 - CLI 命令面、全局参数、JSON envelope、`NOT_IMPLEMENTED` / `INVALID_ARGUMENT` 错误码已经稳定。
 - 已落地的基础库包括 `EnvService`、`FsLayout`、`Catalog`、`DistributionIndex` resolver、`InstalledState v1`、`CentralLog`、install lock、backup plan skeleton。
-- 当前可真实使用的命令主要是 `env` 和 `logs`。
-- `list` 目前是 placeholder 成功输出，不能当真实 capability catalog 使用。
-- `status` 和所有有副作用命令仍未实现。
+- 当前可真实使用的命令：`env`、`logs`、`list`、`status`。
+- `list` 接入 bundled `Catalog` + `InstalledState v1`，支持 `--enabled`；`--available` 已布线但当前恒为 `true`，等 EnvFacts gating 落地后再收紧。
+- `status [CAPABILITY]` 接入 `InstalledState v1`：fresh install / 未安装 capability 返回 ok 空集（或 `not_installed`），非错误。
+- 所有有副作用命令（`enable/disable/restart/update/...`）仍返回 `NOT_IMPLEMENTED`。
 - `backup.rs` 仍是 plan-only；因此真实 `enable/install/uninstall/update/restart/rollback` 不能打开执行路径。
 
 ## 当前可用命令
@@ -26,6 +27,11 @@ cargo run -- env --json
 cargo run -- logs
 cargo run -- logs --json
 cargo run -- logs --kind operation --severity warn --limit 10 --json
+cargo run -- list
+cargo run -- list --json
+cargo run -- list --enabled --json
+cargo run -- status
+cargo run -- status agent-observability --json
 ```
 
 ### `env`
@@ -67,22 +73,36 @@ cargo run -- logs --kind operation --severity warn --limit 10 --json
 
 ### `list`
 
-状态：placeholder。
+状态：可用（P1-E1）。
 
-当前行为：
+能力：
 
-```json
-{
-  "filter": "all",
-  "note": "Capability Resolver not yet wired"
-}
-```
+- 读取 bundled `Catalog`，叠加 `InstalledState v1` 得出 `installed` / `installed_version`。
+- 支持 `--enabled`（只看已安装）和 `--available`（当前 no-op，恒为 true）。
+- `--json` 输出统一 response envelope；人类输出固定列宽 `NAME / PRIORITY / STATUS / VERSION`。
+- `priority` 字段当前取自 `capability.stability`（manifest 暂无独立 priority 字段）；`summary` 取自 `capability.description`。
 
 限制：
 
-- 尚未读取 `Catalog`。
-- 尚未叠加 `InstalledState`。
-- 尚未根据 `EnvFacts` 判断 available/degraded/unavailable。
+- `available` 不做 EnvFacts gating，必须等 capability resolver / env probing 落地。
+- `components` / 健康聚合不在 `list` 范围内，留给 `status`。
+
+### `status`
+
+状态：可用（P1-E1）。
+
+能力：
+
+- 不带参数列出 `InstalledState v1` 中所有 `kind == capability` 对象。
+- 带 `[CAPABILITY]` 时过滤到精确名字；未安装返回单条 `status: not_installed`（仍 ok）。
+- Fresh install 无 `installed.toml` 返回空集，非错误。
+- `--json` 输出 envelope；人类输出 `name / status / version / installed_at`，`--verbose` 附 `last_operation_id`。
+- `ObjectStatus::Partial` 在 wire 上映射为 `degraded`，与 spec `installed|degraded|failed|not_installed` 对齐。
+
+限制：
+
+- `components` 字段当前恒为 `[]`，等 capability resolver 落地后再回填。
+- 没有 health probe；状态完全来自 `InstalledState`，未触达运行时。
 
 ## 当前未实现命令
 
@@ -90,7 +110,6 @@ cargo run -- logs --kind operation --severity warn --limit 10 --json
 
 - `enable`
 - `disable`
-- `status`
 - `doctor`
 - `restart`
 - `info`
