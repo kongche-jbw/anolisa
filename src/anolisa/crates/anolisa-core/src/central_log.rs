@@ -5,6 +5,14 @@
 //! on a single line with a trailing `\n`, so callers can tail/grep the
 //! file without needing structured tooling.
 //!
+//! The schema follows launch spec §8.4 verbatim: every record carries a
+//! `kind` discriminator (operation vs. component-reported), the
+//! originating `command`/`source`, a `severity`, an `actor`, and the
+//! `started_at` timestamp. Operation entries additionally include
+//! `operation_id`, `finished_at`, `status`, and the list of `objects`
+//! they touched. All new optional fields default-deserialise so the
+//! schema can grow without breaking older records.
+//!
 //! The current implementation is the P1-A skeleton: append uses
 //! `OpenOptions::append`, and `query` is a sequential scan with simple
 //! filters. Rotation, indexing, and follow-mode are future work.
@@ -15,40 +23,110 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-/// A single line in the central log.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Whether the record describes an ANOLISA operation (tracked via
+/// `operation_id`) or a passive component-reported event.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LogKind {
+    /// Operation initiated by `anolisa` (enable/disable/install/...).
+    Operation,
+    /// Event reported by a managed component (agentsight, sec-core, ...).
+    Component,
+}
+
+/// Severity level. Ordering: `Debug < Info < Warn < Error`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum Severity {
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
+
+/// Terminal status for an operation record.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LogStatus {
+    /// Completed successfully.
+    Ok,
+    /// Failed; no rollback performed (or rollback also failed).
+    Failed,
+    /// Failed and rolled back to the prior state.
+    RolledBack,
+    /// Partial success — some objects applied, others did not.
+    Partial,
+}
+
+/// A single line in the central log (launch spec §8.4).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LogRecord {
-    /// ISO8601 UTC timestamp (e.g. `2026-06-01T10:00:00Z`).
-    pub ts: String,
-    /// Event name, e.g. `capability.enable`, `tx.commit`.
-    pub event: String,
-    /// Who emitted the record (`cli` for now; later `daemon`, components).
-    pub actor: String,
-    /// Originating CLI invocation, e.g. `anolisa enable agent-observability`.
+    /// Operation vs. component-reported event.
+    pub kind: LogKind,
+    /// Stable operation identifier, e.g. `op-20260601-001`. Component
+    /// events typically leave this `None`.
+    #[serde(default)]
+    pub operation_id: Option<String>,
+    /// Human-readable command, e.g. `enable agent-observability`.
     pub command: String,
-    /// Object the event is about (capability or component name).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub object: Option<String>,
-    /// Outcome tag: `ok` | `fail` | `skipped` | `dry-run`.
-    pub outcome: String,
-    /// Free-form structured payload, may be `Null`.
+    /// Producer, e.g. `anolisa-cli`, `agentsight`, `sec-core`.
+    pub source: String,
+    /// Component name when the record is component-scoped.
+    #[serde(default)]
+    pub component: Option<String>,
+    /// Severity (`debug` < `info` < `warn` < `error`).
+    pub severity: Severity,
+    /// Human-readable message.
+    pub message: String,
+    /// User identity; `cli` when ANOLISA cannot determine it.
+    pub actor: String,
+    /// Install mode (`system` or `user`).
+    #[serde(default)]
+    pub install_mode: Option<String>,
+    /// ISO8601 UTC timestamp marking when the operation started or when
+    /// the component-reported event was observed.
+    pub started_at: String,
+    /// ISO8601 UTC completion timestamp; `None` for in-flight or
+    /// instantaneous records.
+    #[serde(default)]
+    pub finished_at: Option<String>,
+    /// Terminal status for operations; `None` for component events or
+    /// records still in flight.
+    #[serde(default)]
+    pub status: Option<LogStatus>,
+    /// Capability/component names involved in the record.
+    #[serde(default)]
+    pub objects: Vec<String>,
+    /// Backup IDs taken by the operation.
+    #[serde(default)]
+    pub backup_ids: Vec<String>,
+    /// Non-fatal warnings collected during the operation.
+    #[serde(default)]
+    pub warnings: Vec<String>,
+    /// Free-form structured payload; defaults to `Null`.
     #[serde(default)]
     pub details: serde_json::Value,
-    /// Transaction id when emitted inside a `tx.*` block.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tx_id: Option<String>,
 }
 
 /// Subset of fields to filter on during [`CentralLog::query`].
 #[derive(Debug, Default, Clone)]
 pub struct LogFilter {
-    /// Match exact `object` (capability or component name).
+    /// Match exact `kind`.
+    pub kind: Option<LogKind>,
+    /// Match exact `source`.
+    pub source: Option<String>,
+    /// Match exact `component`.
+    pub component: Option<String>,
+    /// Match records whose severity is `>=` this value.
+    pub severity_at_least: Option<Severity>,
+    /// Match if the value is in `objects[]`, or — for backward
+    /// compatibility with records that only carry `component` — if
+    /// `component == Some(value)`.
     pub object: Option<String>,
-    /// Match exact `event` name.
-    pub event: Option<String>,
-    /// Lexicographic lower bound on `ts` (ISO8601 sorts correctly).
+    /// Lexicographic lower bound on `started_at` (ISO8601 sorts
+    /// correctly for UTC).
     pub since: Option<String>,
-    /// Cap the returned record count (taken from the tail of the match list).
+    /// Cap the returned record count (first N AFTER filtering).
     pub limit: Option<usize>,
 }
 
@@ -115,7 +193,8 @@ impl CentralLog {
     }
 
     /// Sequentially scan the log, returning matching records. Missing
-    /// file yields an empty result.
+    /// file yields an empty result. `limit` is applied after filtering
+    /// and keeps the first `N` matches encountered.
     pub fn query(&self, filter: &LogFilter) -> Result<Vec<LogRecord>, CentralLogError> {
         if !self.path.exists() {
             return Ok(Vec::new());
@@ -138,13 +217,11 @@ impl CentralLog {
             let record: LogRecord = serde_json::from_str(&line)?;
             if record_matches(&record, filter) {
                 matches.push(record);
-            }
-        }
-
-        if let Some(limit) = filter.limit {
-            if matches.len() > limit {
-                let drop = matches.len() - limit;
-                matches.drain(..drop);
+                if let Some(limit) = filter.limit {
+                    if matches.len() >= limit {
+                        break;
+                    }
+                }
             }
         }
         Ok(matches)
@@ -152,19 +229,36 @@ impl CentralLog {
 }
 
 fn record_matches(record: &LogRecord, filter: &LogFilter) -> bool {
-    if let Some(obj) = &filter.object {
-        match &record.object {
-            Some(record_obj) if record_obj == obj => {}
+    if let Some(kind) = filter.kind {
+        if record.kind != kind {
+            return false;
+        }
+    }
+    if let Some(source) = &filter.source {
+        if &record.source != source {
+            return false;
+        }
+    }
+    if let Some(component) = &filter.component {
+        match &record.component {
+            Some(record_component) if record_component == component => {}
             _ => return false,
         }
     }
-    if let Some(ev) = &filter.event {
-        if &record.event != ev {
+    if let Some(min) = filter.severity_at_least {
+        if record.severity < min {
+            return false;
+        }
+    }
+    if let Some(obj) = &filter.object {
+        let in_objects = record.objects.iter().any(|candidate| candidate == obj);
+        let legacy_component_match = record.component.as_deref() == Some(obj.as_str());
+        if !in_objects && !legacy_component_match {
             return false;
         }
     }
     if let Some(since) = &filter.since {
-        if record.ts.as_str() < since.as_str() {
+        if record.started_at.as_str() < since.as_str() {
             return false;
         }
     }
@@ -174,106 +268,365 @@ fn record_matches(record: &LogRecord, filter: &LogFilter) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
-    fn rec(ts: &str, event: &str, object: Option<&str>) -> LogRecord {
+    fn operation_record(
+        started_at: &str,
+        operation_id: &str,
+        objects: &[&str],
+        severity: Severity,
+    ) -> LogRecord {
         LogRecord {
-            ts: ts.to_string(),
-            event: event.to_string(),
-            actor: "cli".to_string(),
-            command: "anolisa test".to_string(),
-            object: object.map(|s| s.to_string()),
-            outcome: "ok".to_string(),
+            kind: LogKind::Operation,
+            operation_id: Some(operation_id.to_string()),
+            command: "enable agent-observability".to_string(),
+            source: "anolisa-cli".to_string(),
+            component: None,
+            severity,
+            message: "operation finished".to_string(),
+            actor: "kongche".to_string(),
+            install_mode: Some("user".to_string()),
+            started_at: started_at.to_string(),
+            finished_at: Some(started_at.to_string()),
+            status: Some(LogStatus::Ok),
+            objects: objects.iter().map(|s| s.to_string()).collect(),
+            backup_ids: Vec::new(),
+            warnings: Vec::new(),
             details: serde_json::Value::Null,
-            tx_id: None,
+        }
+    }
+
+    fn component_record(started_at: &str, source: &str, severity: Severity) -> LogRecord {
+        LogRecord {
+            kind: LogKind::Component,
+            operation_id: None,
+            command: "report".to_string(),
+            source: source.to_string(),
+            component: Some(source.to_string()),
+            severity,
+            message: "component reported".to_string(),
+            actor: "cli".to_string(),
+            install_mode: None,
+            started_at: started_at.to_string(),
+            finished_at: None,
+            status: None,
+            objects: Vec::new(),
+            backup_ids: Vec::new(),
+            warnings: Vec::new(),
+            details: serde_json::Value::Null,
         }
     }
 
     #[test]
-    fn append_creates_file_and_writes_jsonl() {
-        let dir = tempfile::tempdir().unwrap();
+    fn roundtrip_record() {
+        let record = LogRecord {
+            kind: LogKind::Operation,
+            operation_id: Some("op-20260601-001".to_string()),
+            command: "enable agent-observability".to_string(),
+            source: "anolisa-cli".to_string(),
+            component: Some("agentsight".to_string()),
+            severity: Severity::Info,
+            message: "enable agent-observability finished".to_string(),
+            actor: "kongche".to_string(),
+            install_mode: Some("user".to_string()),
+            started_at: "2026-06-01T10:00:00Z".to_string(),
+            finished_at: Some("2026-06-01T10:00:03Z".to_string()),
+            status: Some(LogStatus::Ok),
+            objects: vec!["agent-observability".to_string(), "agentsight".to_string()],
+            backup_ids: vec!["bk-1".to_string()],
+            warnings: vec!["systemd reload skipped".to_string()],
+            details: json!({"duration_ms": 3000}),
+        };
+
+        let line = serde_json::to_string(&record).expect("serialize");
+        let parsed: LogRecord = serde_json::from_str(&line).expect("deserialize");
+        assert_eq!(record, parsed);
+    }
+
+    #[test]
+    fn append_then_query_all() {
+        let dir = tempfile::tempdir().expect("tempdir");
         let log = CentralLog::open(dir.path().join("nested").join("audit.jsonl"));
 
-        log.append(&rec("2026-06-01T10:00:00Z", "tx.begin", Some("foo")))
-            .unwrap();
-        log.append(&rec("2026-06-01T10:00:01Z", "tx.commit", Some("foo")))
-            .unwrap();
+        log.append(&operation_record(
+            "2026-06-01T10:00:00Z",
+            "op-1",
+            &["agent-observability"],
+            Severity::Info,
+        ))
+        .expect("append 1");
+        log.append(&operation_record(
+            "2026-06-01T10:00:01Z",
+            "op-2",
+            &["tokenless"],
+            Severity::Info,
+        ))
+        .expect("append 2");
+        log.append(&operation_record(
+            "2026-06-01T10:00:02Z",
+            "op-3",
+            &["ws-ckpt"],
+            Severity::Info,
+        ))
+        .expect("append 3");
 
-        let contents = std::fs::read_to_string(log.path()).unwrap();
-        let lines: Vec<&str> = contents.lines().collect();
-        assert_eq!(lines.len(), 2);
-        // Each line must parse independently.
-        for line in lines {
-            serde_json::from_str::<LogRecord>(line).unwrap();
+        let all = log.query(&LogFilter::default()).expect("query");
+        assert_eq!(all.len(), 3);
+        let contents = std::fs::read_to_string(log.path()).expect("read");
+        assert_eq!(contents.lines().count(), 3);
+    }
+
+    #[test]
+    fn query_filters_by_kind() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let log = CentralLog::open(dir.path().join("audit.jsonl"));
+
+        log.append(&operation_record(
+            "2026-06-01T10:00:00Z",
+            "op-1",
+            &[],
+            Severity::Info,
+        ))
+        .expect("append");
+        log.append(&operation_record(
+            "2026-06-01T10:00:01Z",
+            "op-2",
+            &[],
+            Severity::Info,
+        ))
+        .expect("append");
+        log.append(&component_record(
+            "2026-06-01T10:00:02Z",
+            "agentsight",
+            Severity::Info,
+        ))
+        .expect("append");
+        log.append(&component_record(
+            "2026-06-01T10:00:03Z",
+            "sec-core",
+            Severity::Warn,
+        ))
+        .expect("append");
+
+        let components = log
+            .query(&LogFilter {
+                kind: Some(LogKind::Component),
+                ..Default::default()
+            })
+            .expect("query");
+        assert_eq!(components.len(), 2);
+        assert!(components.iter().all(|r| r.kind == LogKind::Component));
+    }
+
+    #[test]
+    fn query_filters_by_source() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let log = CentralLog::open(dir.path().join("audit.jsonl"));
+
+        log.append(&component_record(
+            "2026-06-01T10:00:00Z",
+            "agentsight",
+            Severity::Info,
+        ))
+        .expect("append");
+        log.append(&component_record(
+            "2026-06-01T10:00:01Z",
+            "sec-core",
+            Severity::Info,
+        ))
+        .expect("append");
+        log.append(&component_record(
+            "2026-06-01T10:00:02Z",
+            "agentsight",
+            Severity::Warn,
+        ))
+        .expect("append");
+
+        let agentsight_only = log
+            .query(&LogFilter {
+                source: Some("agentsight".to_string()),
+                ..Default::default()
+            })
+            .expect("query");
+        assert_eq!(agentsight_only.len(), 2);
+        assert!(agentsight_only.iter().all(|r| r.source == "agentsight"));
+    }
+
+    #[test]
+    fn query_filters_by_severity_at_least() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let log = CentralLog::open(dir.path().join("audit.jsonl"));
+
+        log.append(&component_record(
+            "2026-06-01T10:00:00Z",
+            "agentsight",
+            Severity::Debug,
+        ))
+        .expect("append");
+        log.append(&component_record(
+            "2026-06-01T10:00:01Z",
+            "agentsight",
+            Severity::Info,
+        ))
+        .expect("append");
+        log.append(&component_record(
+            "2026-06-01T10:00:02Z",
+            "agentsight",
+            Severity::Warn,
+        ))
+        .expect("append");
+        log.append(&component_record(
+            "2026-06-01T10:00:03Z",
+            "agentsight",
+            Severity::Error,
+        ))
+        .expect("append");
+
+        let warn_or_above = log
+            .query(&LogFilter {
+                severity_at_least: Some(Severity::Warn),
+                ..Default::default()
+            })
+            .expect("query");
+        assert_eq!(warn_or_above.len(), 2);
+        assert!(
+            warn_or_above
+                .iter()
+                .all(|r| r.severity == Severity::Warn || r.severity == Severity::Error)
+        );
+    }
+
+    #[test]
+    fn query_filters_by_object() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let log = CentralLog::open(dir.path().join("audit.jsonl"));
+
+        log.append(&operation_record(
+            "2026-06-01T10:00:00Z",
+            "op-1",
+            &["agent-observability", "agentsight"],
+            Severity::Info,
+        ))
+        .expect("append");
+        log.append(&operation_record(
+            "2026-06-01T10:00:01Z",
+            "op-2",
+            &["tokenless"],
+            Severity::Info,
+        ))
+        .expect("append");
+        // Component record carrying only `component` — legacy match.
+        log.append(&component_record(
+            "2026-06-01T10:00:02Z",
+            "agentsight",
+            Severity::Info,
+        ))
+        .expect("append");
+
+        let hits = log
+            .query(&LogFilter {
+                object: Some("agentsight".to_string()),
+                ..Default::default()
+            })
+            .expect("query");
+        assert_eq!(hits.len(), 2);
+    }
+
+    #[test]
+    fn query_limit_applies_after_filter() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let log = CentralLog::open(dir.path().join("audit.jsonl"));
+
+        for (idx, severity) in [
+            Severity::Debug,
+            Severity::Info,
+            Severity::Warn,
+            Severity::Error,
+            Severity::Warn,
+        ]
+        .iter()
+        .enumerate()
+        {
+            log.append(&component_record(
+                &format!("2026-06-01T10:00:0{idx}Z"),
+                "agentsight",
+                *severity,
+            ))
+            .expect("append");
         }
-    }
 
-    #[test]
-    fn query_missing_file_yields_empty() {
-        let dir = tempfile::tempdir().unwrap();
-        let log = CentralLog::open(dir.path().join("audit.jsonl"));
-        let out = log.query(&LogFilter::default()).unwrap();
-        assert!(out.is_empty());
-    }
-
-    #[test]
-    fn query_filters_by_object_event_and_limit() {
-        let dir = tempfile::tempdir().unwrap();
-        let log = CentralLog::open(dir.path().join("audit.jsonl"));
-
-        log.append(&rec("2026-06-01T10:00:00Z", "tx.begin", Some("foo")))
-            .unwrap();
-        log.append(&rec("2026-06-01T10:00:01Z", "tx.commit", Some("foo")))
-            .unwrap();
-        log.append(&rec("2026-06-01T10:00:02Z", "tx.commit", Some("bar")))
-            .unwrap();
-
-        // event filter
-        let event_only = log
+        let warn_two = log
             .query(&LogFilter {
-                event: Some("tx.commit".to_string()),
-                ..Default::default()
-            })
-            .unwrap();
-        assert_eq!(event_only.len(), 2);
-
-        // object filter
-        let foo_only = log
-            .query(&LogFilter {
-                object: Some("foo".to_string()),
-                ..Default::default()
-            })
-            .unwrap();
-        assert_eq!(foo_only.len(), 2);
-        assert!(foo_only.iter().all(|r| r.object.as_deref() == Some("foo")));
-
-        // limit takes the tail
-        let limited = log
-            .query(&LogFilter {
+                severity_at_least: Some(Severity::Warn),
                 limit: Some(2),
                 ..Default::default()
             })
-            .unwrap();
-        assert_eq!(limited.len(), 2);
-        assert_eq!(limited[0].ts, "2026-06-01T10:00:01Z");
-        assert_eq!(limited[1].ts, "2026-06-01T10:00:02Z");
+            .expect("query");
+        assert_eq!(warn_two.len(), 2);
+        // Limit picks the first 2 matches encountered (Warn, Error).
+        assert_eq!(warn_two[0].severity, Severity::Warn);
+        assert_eq!(warn_two[1].severity, Severity::Error);
+    }
+
+    #[test]
+    fn severity_ordering() {
+        assert!(Severity::Debug < Severity::Info);
+        assert!(Severity::Info < Severity::Warn);
+        assert!(Severity::Warn < Severity::Error);
+        assert!(Severity::Error > Severity::Debug);
     }
 
     #[test]
     fn query_since_uses_lexicographic_lower_bound() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().expect("tempdir");
         let log = CentralLog::open(dir.path().join("audit.jsonl"));
-        log.append(&rec("2026-05-01T00:00:00Z", "tx.begin", None))
-            .unwrap();
-        log.append(&rec("2026-06-01T00:00:00Z", "tx.commit", None))
-            .unwrap();
+        log.append(&operation_record(
+            "2026-05-01T00:00:00Z",
+            "op-old",
+            &[],
+            Severity::Info,
+        ))
+        .expect("append");
+        log.append(&operation_record(
+            "2026-06-01T00:00:00Z",
+            "op-new",
+            &[],
+            Severity::Info,
+        ))
+        .expect("append");
 
         let recent = log
             .query(&LogFilter {
                 since: Some("2026-05-15T00:00:00Z".to_string()),
                 ..Default::default()
             })
-            .unwrap();
+            .expect("query");
         assert_eq!(recent.len(), 1);
-        assert_eq!(recent[0].event, "tx.commit");
+        assert_eq!(recent[0].operation_id.as_deref(), Some("op-new"));
+    }
+
+    #[test]
+    fn missing_optional_fields_default_on_deserialize() {
+        // Minimum payload — all #[serde(default)] fields omitted.
+        let line = r#"{
+            "kind": "component",
+            "command": "report",
+            "source": "agentsight",
+            "severity": "info",
+            "message": "hello",
+            "actor": "cli",
+            "started_at": "2026-06-01T10:00:00Z"
+        }"#;
+        let parsed: LogRecord = serde_json::from_str(line).expect("deserialize");
+        assert_eq!(parsed.kind, LogKind::Component);
+        assert!(parsed.operation_id.is_none());
+        assert!(parsed.component.is_none());
+        assert!(parsed.install_mode.is_none());
+        assert!(parsed.finished_at.is_none());
+        assert!(parsed.status.is_none());
+        assert!(parsed.objects.is_empty());
+        assert!(parsed.backup_ids.is_empty());
+        assert!(parsed.warnings.is_empty());
+        assert!(parsed.details.is_null());
     }
 }

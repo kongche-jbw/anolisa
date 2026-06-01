@@ -16,7 +16,9 @@ pub mod transaction;
 pub use backup::{BackupEntry, BackupSet};
 pub use capability::{CapabilityError, CapabilityResolver, ResolvedPlan};
 pub use catalog::{Catalog, CatalogError, CatalogLayers};
-pub use central_log::{CentralLog, CentralLogError, LogFilter, LogRecord};
+pub use central_log::{
+    CentralLog, CentralLogError, LogFilter, LogKind, LogRecord, LogStatus, Severity,
+};
 pub use component::{Component, ComponentMeta, ComponentStatus};
 pub use distribution::{
     ArtifactType, DistributionEntry, DistributionError, DistributionIndex, ResolveError,
