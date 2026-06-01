@@ -1,5 +1,6 @@
 pub mod backup;
 pub mod capability;
+pub mod catalog;
 pub mod central_log;
 pub mod component;
 pub mod dependency;
@@ -13,7 +14,8 @@ pub mod subscription;
 pub mod transaction;
 
 pub use backup::{BackupEntry, BackupSet};
-pub use capability::{CapabilityError, CapabilityManifest, CapabilityResolver, ResolvedPlan};
+pub use capability::{CapabilityError, CapabilityResolver, ResolvedPlan};
+pub use catalog::{Catalog, CatalogError, CatalogLayers};
 pub use central_log::{CentralLog, CentralLogError, LogFilter, LogRecord};
 pub use component::{Component, ComponentMeta, ComponentStatus};
 pub use distribution::{
@@ -22,7 +24,6 @@ pub use distribution::{
 };
 pub use feature_flags::FeatureStore;
 pub use lock::{InstallLock, LockError};
-pub use manifest::Manifest;
 pub use registry::Registry;
 pub use state::{
     CapabilityRecord, ComponentRecord, InstalledState, STATE_SCHEMA_VERSION, StateError,
