@@ -7,14 +7,14 @@
 //! `not_installed` record rather than an error (launch spec §7.1).
 //!
 //! This handler does NOT consult the catalog or resolver — it reports only
-//! what is already on disk. The `components` JSON field is left empty for
-//! now (see TODO below) and will be populated once the capability resolver
-//! lands in a later P1 exercise.
+//! what is already on disk. Every field in [`CapabilityRecord`] is projected
+//! straight from [`InstalledObject`]; nothing is synthesized that the state
+//! file does not already know about.
 
 use clap::Parser;
 use serde::Serialize;
 
-use anolisa_core::{InstalledObject, InstalledState, ObjectKind, ObjectStatus};
+use anolisa_core::{HealthEntry, InstalledObject, InstalledState, ObjectKind};
 
 use crate::commands::common;
 use crate::context::CliContext;
@@ -29,8 +29,9 @@ pub struct StatusArgs {
 }
 
 /// JSON-shaped record for a single capability, used in both the wire
-/// envelope and the human renderer. Optional fields are skipped when
-/// absent (e.g. on synthetic `not_installed` records).
+/// envelope and the human renderer. Fields are projected straight from
+/// the matching [`InstalledObject`] on disk; optional/empty fields are
+/// skipped when absent so synthetic `not_installed` records stay compact.
 #[derive(Debug, Serialize, PartialEq, Eq)]
 struct CapabilityRecord {
     name: String,
@@ -41,7 +42,17 @@ struct CapabilityRecord {
     installed_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     last_operation_id: Option<String>,
+    /// Components reported by the install record (from `component_refs`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     components: Vec<String>,
+    /// Feature flags the install record marks as enabled.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    enabled_features: Vec<String>,
+    /// Last-known health probe entries persisted in state. Empty until a
+    /// background probe wires up — but still surfaced verbatim today so
+    /// users see whatever the install runner recorded.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    health: Vec<HealthEntry>,
 }
 
 pub fn handle(args: StatusArgs, ctx: &CliContext) -> Result<(), CliError> {
@@ -81,6 +92,8 @@ fn select_capabilities(state: &InstalledState, name: Option<&str>) -> Vec<Capabi
                 installed_at: None,
                 last_operation_id: None,
                 components: Vec::new(),
+                enabled_features: Vec::new(),
+                health: Vec::new(),
             }],
         },
     }
@@ -89,22 +102,13 @@ fn select_capabilities(state: &InstalledState, name: Option<&str>) -> Vec<Capabi
 fn record_from_object(obj: &InstalledObject) -> CapabilityRecord {
     CapabilityRecord {
         name: obj.name.clone(),
-        status: status_str(obj.status).to_string(),
+        status: common::object_status_str(obj.status).to_string(),
         version: Some(obj.version.clone()),
         installed_at: Some(obj.installed_at.clone()),
         last_operation_id: obj.last_operation_id.clone(),
-        // TODO: populate from catalog when resolver lands
-        components: Vec::new(),
-    }
-}
-
-fn status_str(status: ObjectStatus) -> &'static str {
-    match status {
-        ObjectStatus::Installed => "installed",
-        ObjectStatus::Partial => "degraded",
-        ObjectStatus::Disabled => "disabled",
-        ObjectStatus::Failed => "failed",
-        ObjectStatus::Adopted => "adopted",
+        components: obj.component_refs.clone(),
+        enabled_features: obj.enabled_features.clone(),
+        health: obj.health.clone(),
     }
 }
 
@@ -123,6 +127,21 @@ fn render_human(records: &[CapabilityRecord], verbose: bool) {
             if let Some(op) = record.last_operation_id.as_deref() {
                 println!("    last_operation_id: {}", op);
             }
+            if !record.components.is_empty() {
+                println!("    components: {}", record.components.join(", "));
+            }
+            if !record.enabled_features.is_empty() {
+                println!(
+                    "    enabled_features: {}",
+                    record.enabled_features.join(", ")
+                );
+            }
+            for entry in &record.health {
+                println!(
+                    "    health[{}]: {} @ {}",
+                    entry.name, entry.status, entry.checked_at
+                );
+            }
         }
     }
 }
@@ -131,8 +150,8 @@ fn render_human(records: &[CapabilityRecord], verbose: bool) {
 mod tests {
     use super::*;
     use anolisa_core::{
-        FileOwner, InstalledObject, InstalledState, ObjectKind, ObjectStatus, OwnedFile,
-        SubscriptionScope,
+        FileOwner, HealthEntry, InstalledObject, InstalledState, ObjectKind, ObjectStatus,
+        OwnedFile, SubscriptionScope,
     };
     use std::path::PathBuf;
 
@@ -224,11 +243,15 @@ mod tests {
     #[test]
     fn filter_hit_returns_stored_record() {
         let mut state = InstalledState::default();
-        state.upsert_object(capability_object(
-            "agent-observability",
-            "0.3.1",
-            ObjectStatus::Installed,
-        ));
+        let mut obj = capability_object("agent-observability", "0.3.1", ObjectStatus::Installed);
+        obj.component_refs = vec!["agentsight".to_string(), "openclaw".to_string()];
+        obj.enabled_features = vec!["bpf-events".to_string()];
+        obj.health = vec![HealthEntry {
+            name: "binary".to_string(),
+            status: "ok".to_string(),
+            checked_at: "2026-06-01T10:01:00Z".to_string(),
+        }];
+        state.upsert_object(obj);
 
         let records = select_capabilities(&state, Some("agent-observability"));
         assert_eq!(records.len(), 1);
@@ -238,7 +261,11 @@ mod tests {
         assert_eq!(only.version.as_deref(), Some("0.3.1"));
         assert_eq!(only.installed_at.as_deref(), Some("2026-06-01T10:00:00Z"));
         assert_eq!(only.last_operation_id.as_deref(), Some("op-20260601-001"));
-        // No catalog/resolver yet -> components stays empty.
-        assert!(only.components.is_empty());
+        // State-projected fields must reach the wire record verbatim.
+        assert_eq!(only.components, vec!["agentsight", "openclaw"]);
+        assert_eq!(only.enabled_features, vec!["bpf-events"]);
+        assert_eq!(only.health.len(), 1);
+        assert_eq!(only.health[0].name, "binary");
+        assert_eq!(only.health[0].status, "ok");
     }
 }

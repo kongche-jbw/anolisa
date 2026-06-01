@@ -12,8 +12,9 @@
 - CLI 命令面、全局参数、JSON envelope、`NOT_IMPLEMENTED` / `INVALID_ARGUMENT` 错误码已经稳定。
 - 已落地的基础库包括 `EnvService`、`FsLayout`、`Catalog`、`DistributionIndex` resolver、`InstalledState v1`、`CentralLog`、install lock、backup plan skeleton。
 - 当前可真实使用的命令：`env`、`logs`、`list`、`status`。
-- `list` 接入 bundled `Catalog` + `InstalledState v1`，支持 `--enabled`；`--available` 已布线但当前恒为 `true`，等 EnvFacts gating 落地后再收紧。
-- `status [CAPABILITY]` 接入 `InstalledState v1`：fresh install / 未安装 capability 返回 ok 空集（或 `not_installed`），非错误。
+- `list` 接入 bundled `Catalog` + `InstalledState v1`，支持 `--enabled`；`--available` 已布线但当前恒为 `true`，等 EnvFacts gating 落地后再收紧。每行带真实 `status` 字段（`installed | degraded | disabled | failed | adopted | not_installed`），`--enabled` 只放过 `installed | degraded | adopted`。
+- `status [CAPABILITY]` 接入 `InstalledState v1`：fresh install / 未安装 capability 返回 ok 空集（或 `not_installed`），非错误。直接投出 state 里的 `component_refs` / `enabled_features` / `health`，不依赖 resolver。
+- Catalog 加载已修正为分层装配：bundled = packaged `datadir/manifests`（缺时回落 dev-tree manifests），overlay = `manifests_overlay` 按 install mode 挂作 `system` 或 `user` 层叠加，不再被 overlay 替代。
 - 所有有副作用命令（`enable/disable/restart/update/...`）仍返回 `NOT_IMPLEMENTED`。
 - `backup.rs` 仍是 plan-only；因此真实 `enable/install/uninstall/update/restart/rollback` 不能打开执行路径。
 
@@ -73,12 +74,13 @@ cargo run -- status agent-observability --json
 
 ### `list`
 
-状态：可用（P1-E1）。
+状态：可用（P1-E1 + fixup）。
 
 能力：
 
-- 读取 bundled `Catalog`，叠加 `InstalledState v1` 得出 `installed` / `installed_version`。
-- 支持 `--enabled`（只看已安装）和 `--available`（当前 no-op，恒为 true）。
+- bundled `Catalog` 从 packaged `datadir/manifests` 加载（缺时回落 dev-tree manifests）；`manifests_overlay` 按 install mode 作为 `system` 或 `user` 层叠加，不再整盘替换。
+- 叠加 `InstalledState v1` 得出每行真实 `status`（`installed | degraded | disabled | failed | adopted | not_installed`）+ `installed_version`。
+- `--enabled` 只放过 `installed | degraded | adopted`，`disabled` 和 `failed` 被显式排除；`--available` 当前恒为 true，但 flag 已生效（未来 EnvFacts gating 直接改谓词即可）。两个 flag 同传取交集。
 - `--json` 输出统一 response envelope；人类输出固定列宽 `NAME / PRIORITY / STATUS / VERSION`。
 - `priority` 字段当前取自 `capability.stability`（manifest 暂无独立 priority 字段）；`summary` 取自 `capability.description`。
 
@@ -89,20 +91,20 @@ cargo run -- status agent-observability --json
 
 ### `status`
 
-状态：可用（P1-E1）。
+状态：可用（P1-E1 + fixup）。
 
 能力：
 
 - 不带参数列出 `InstalledState v1` 中所有 `kind == capability` 对象。
 - 带 `[CAPABILITY]` 时过滤到精确名字；未安装返回单条 `status: not_installed`（仍 ok）。
 - Fresh install 无 `installed.toml` 返回空集，非错误。
-- `--json` 输出 envelope；人类输出 `name / status / version / installed_at`，`--verbose` 附 `last_operation_id`。
-- `ObjectStatus::Partial` 在 wire 上映射为 `degraded`，与 spec `installed|degraded|failed|not_installed` 对齐。
+- JSON 直接投出 state 里已有字段：`components`（取自 `component_refs`）、`enabled_features`、`health`；不依赖 resolver。
+- `--json` 输出 envelope；人类输出 `name / status / version / installed_at`，`--verbose` 附 `last_operation_id` / components / enabled_features / health。
+- `ObjectStatus` 全集映射到 wire 上：`Installed→installed`、`Partial→degraded`、`Disabled→disabled`、`Failed→failed`、`Adopted→adopted`（与 `list` 共享 `common::object_status_str`）。
 
 限制：
 
-- `components` 字段当前恒为 `[]`，等 capability resolver 落地后再回填。
-- 没有 health probe；状态完全来自 `InstalledState`，未触达运行时。
+- 没有 health probe；`health` 字段仅原样回放 state 已写入的探针记录，未触达运行时。
 
 ## 当前未实现命令
 
@@ -136,9 +138,11 @@ cargo run -- logs --json
 
 已确认：
 
-- `cargo test --workspace`：63 tests passed。
+- `cargo test --workspace`：76 tests passed（含 P1-E1 + fixup 新增 list/status/common 用例）。
+- `cargo fmt --all -- --check`：通过。
 - `anolisa env --json`：返回 `ok: true`。
 - `anolisa logs --json`：fresh install 返回 `ok: true, data: []`。
+- `anolisa list --json` / `anolisa status [CAPABILITY] --json`：返回 envelope，未安装条目带 `status: not_installed`。
 
 ## enable 是否是最高优先级
 
@@ -194,15 +198,15 @@ anolisa logs agent-observability
 
 ## 下一步优先级
 
-### P1-E1：只读接线
+### P1-E1：只读接线（已完成）
 
 目标：让用户能看到 ANOLISA 认识哪些 capability、当前机器装了什么。
 
-- `list` 读取 `Catalog`。
-- `list --available` 基于 `EnvFacts` 做最小可用性判断。
-- `list --enabled` 读取 `InstalledState v1`。
-- `status [CAPABILITY]` 读取 `InstalledState v1`。
-- `status` 无 state 文件时返回空状态，不报错。
+- ✅ `list` 读取分层 `Catalog`（bundled + overlay）。
+- ⏳ `list --available` 基于 `EnvFacts` 做最小可用性判断 —— 当前 stub 恒为 true，等 capability resolver / env probing 落地。
+- ✅ `list --enabled` 读取 `InstalledState v1`，按 wire status 排除 `disabled` / `failed`。
+- ✅ `status [CAPABILITY]` 读取 `InstalledState v1`，直接投出 `component_refs` / `enabled_features` / `health`。
+- ✅ `status` 无 state 文件时返回空状态，不报错。
 
 ### P1-E2：enable dry-run plan
 
@@ -255,7 +259,7 @@ agent-observability -> agentsight -> prebuilt tar_gz 或 rpm -> user-mode instal
 
 ## 后续动作
 
-- 先接 `list` 和 `status` 只读 CLI wiring。
-- 再接 `enable agent-observability --dry-run`。
-- 最后打开 `enable agent-observability` 的最小真实安装闭环。
+- ✅ `list` 和 `status` 只读 CLI wiring（P1-E1 已完成）。
+- 下一步：接 `enable agent-observability --dry-run`（P1-E2）。
+- 然后：打开 `enable agent-observability` 的最小真实安装闭环（P1-F）。
 - 所有 mutating 命令在 transaction/backup/rollback 未完成前继续返回 `NOT_IMPLEMENTED`。

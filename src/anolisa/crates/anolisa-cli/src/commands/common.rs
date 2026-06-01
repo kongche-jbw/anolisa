@@ -6,11 +6,15 @@
 
 use std::path::{Path, PathBuf};
 
-use anolisa_core::{Catalog, CatalogLayers, InstalledState};
+use anolisa_core::{Catalog, CatalogLayers, InstalledState, ObjectStatus};
 use anolisa_platform::fs_layout::FsLayout;
 
 use crate::context::{CliContext, InstallMode};
 use crate::response::CliError;
+
+/// Subdirectory under `datadir` and `etc_dir` where capability/component
+/// manifests live (e.g. `share/anolisa/manifests`, `etc/anolisa/manifests`).
+const MANIFESTS_SUBDIR: &str = "manifests";
 
 /// Build the layout for the active install mode, honoring `--prefix`
 /// (system-mode) and resolving `$HOME` via `EnvService::detect` (user-mode).
@@ -38,29 +42,49 @@ pub fn load_installed_state(ctx: &CliContext, command: &str) -> Result<Installed
     })
 }
 
-/// Load the bundled catalog. Prefers `FsLayout::manifests_overlay` if the
-/// directory exists; otherwise falls back to the in-tree manifests root
-/// (`CARGO_MANIFEST_DIR/../../manifests`) so dev-tree runs work without
-/// a real install layout.
+/// Load the layered catalog.
+///
+/// Layers (low → high precedence):
+///   1. **bundled** — packaged manifests under `datadir/manifests` (the
+///      install-time location). Falls back to the dev-tree manifests
+///      (`CARGO_MANIFEST_DIR/../../manifests`) when the packaged location is
+///      absent so `cargo run` in the source tree works without an install.
+///   2. **overlay** — `manifests_overlay` (e.g. `/etc/anolisa/manifests` or
+///      `~/.config/anolisa/manifests`) attached as the `system` or `user`
+///      layer per `ctx.install_mode`. Optional: skipped when the directory
+///      does not exist.
+///
+/// The overlay used to be passed as `bundled` with no system/user layers —
+/// that meant any overlay completely replaced the in-tree catalog (and an
+/// empty overlay produced an empty catalog). The proper Catalog contract is
+/// that the bundled layer is always-present and overlays stack on top.
 pub fn load_bundled_catalog(ctx: &CliContext, command: &str) -> Result<Catalog, CliError> {
-    let bundled = bundled_manifests_root(ctx);
+    let layout = resolve_layout(ctx);
+    let bundled = packaged_manifests_root(&layout)
+        .or_else(dev_tree_manifests)
+        .unwrap_or_else(|| layout.datadir.join(MANIFESTS_SUBDIR));
+
+    let overlay = layout.manifests_overlay.clone();
+    let overlay = overlay.is_dir().then_some(overlay);
+    let (system, user) = match ctx.install_mode {
+        InstallMode::System => (overlay, None),
+        InstallMode::User => (None, overlay),
+    };
+
     let layers = CatalogLayers {
         bundled,
-        system: None,
-        user: None,
+        system,
+        user,
     };
     Catalog::load(layers).map_err(|err| CliError::InvalidArgument {
         command: command.to_string(),
-        reason: format!("failed to load bundled catalog: {err}"),
+        reason: format!("failed to load catalog: {err}"),
     })
 }
 
-fn bundled_manifests_root(ctx: &CliContext) -> PathBuf {
-    let overlay = resolve_layout(ctx).manifests_overlay;
-    if overlay.is_dir() {
-        return overlay;
-    }
-    dev_tree_manifests().unwrap_or(overlay)
+fn packaged_manifests_root(layout: &FsLayout) -> Option<PathBuf> {
+    let candidate = layout.datadir.join(MANIFESTS_SUBDIR);
+    candidate.is_dir().then_some(candidate)
 }
 
 fn dev_tree_manifests() -> Option<PathBuf> {
@@ -68,5 +92,55 @@ fn dev_tree_manifests() -> Option<PathBuf> {
         .join("..")
         .join("..")
         .join("manifests");
-    candidate.is_dir().then(|| candidate)
+    candidate.is_dir().then_some(candidate)
+}
+
+/// Wire-friendly label for an [`ObjectStatus`] value. Shared between the
+/// `status` and `list` handlers so both surfaces speak the same vocabulary
+/// (matches launch spec §7.1: `installed | degraded | disabled | failed |
+/// adopted`). The `"not_installed"` label is produced separately by callers
+/// when no `InstalledObject` exists at all.
+pub(crate) fn object_status_str(status: ObjectStatus) -> &'static str {
+    match status {
+        ObjectStatus::Installed => "installed",
+        ObjectStatus::Partial => "degraded",
+        ObjectStatus::Disabled => "disabled",
+        ObjectStatus::Failed => "failed",
+        ObjectStatus::Adopted => "adopted",
+    }
+}
+
+/// True iff the wire status label denotes a capability that is actively
+/// serving (i.e. `installed`, `degraded`, or `adopted`). Used by
+/// `list --enabled` to exclude `disabled`/`failed`/`not_installed`.
+pub(crate) fn status_is_enabled(status_label: &str) -> bool {
+    matches!(status_label, "installed" | "degraded" | "adopted")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `object_status_str` must cover every variant of `ObjectStatus` and
+    /// produce the exact wire vocabulary the spec promises. If a new variant
+    /// is added, this test forces us to extend the mapping.
+    #[test]
+    fn object_status_str_covers_full_vocabulary() {
+        assert_eq!(object_status_str(ObjectStatus::Installed), "installed");
+        assert_eq!(object_status_str(ObjectStatus::Partial), "degraded");
+        assert_eq!(object_status_str(ObjectStatus::Disabled), "disabled");
+        assert_eq!(object_status_str(ObjectStatus::Failed), "failed");
+        assert_eq!(object_status_str(ObjectStatus::Adopted), "adopted");
+    }
+
+    #[test]
+    fn status_is_enabled_excludes_disabled_failed_and_unknown() {
+        assert!(status_is_enabled("installed"));
+        assert!(status_is_enabled("degraded"));
+        assert!(status_is_enabled("adopted"));
+        assert!(!status_is_enabled("disabled"));
+        assert!(!status_is_enabled("failed"));
+        assert!(!status_is_enabled("not_installed"));
+        assert!(!status_is_enabled(""));
+    }
 }

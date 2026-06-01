@@ -8,12 +8,18 @@
 //! 2. Load `installed.toml` via [`crate::commands::common::load_installed_state`]
 //!    (missing file ⇒ `Default`, fresh-install case).
 //! 3. For every capability, project a [`Row`] carrying name, summary, priority,
-//!    install state, installed version (if any), and `available`.
+//!    real status string, installed version (if any), and `available`.
+//!    - `status` is the same `installed | degraded | disabled | failed |
+//!      adopted | not_installed` vocabulary used by `status` (shared via
+//!      [`crate::commands::common::object_status_str`]). The previous
+//!      `installed: bool` shape conflated `Disabled` / `Failed` / `Adopted`
+//!      with `Installed`, which is wrong.
 //!    - `available` is hard-coded to `true` for E1 — env-fact gating lands with
 //!      the capability resolver / `EnvFacts` wiring.
-//! 4. Apply `--enabled` (installed-only) and `--available` (no-op for now;
-//!    flag is still honored so a future env-facts pass changes only the
-//!    predicate). Both flags ⇒ intersection.
+//! 4. Apply `--enabled` (only actively-serving rows: `installed | degraded |
+//!    adopted` — `disabled` and `failed` are excluded) and `--available`
+//!    (no-op for now; flag is still honored so a future env-facts pass
+//!    changes only the predicate). Both flags ⇒ intersection.
 //! 5. Render JSON envelope via [`render_json`] when `ctx.json`, else a
 //!    plain table on stdout (suppressed under `ctx.quiet`).
 //!
@@ -48,12 +54,16 @@ pub struct ListArgs {
 /// Projection of a `Catalog` capability + `InstalledState` overlay. Kept
 /// `Serialize` so the same struct feeds the `--json` envelope and the
 /// human renderer.
+///
+/// `status` is the authoritative install state (`installed | degraded |
+/// disabled | failed | adopted | not_installed`) — JSON consumers should
+/// branch on this rather than re-deriving a boolean.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct Row {
     pub name: String,
     pub summary: String,
     pub priority: String,
-    pub installed: bool,
+    pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub installed_version: Option<String>,
     pub available: bool,
@@ -88,7 +98,9 @@ pub(crate) fn build_rows(catalog: &Catalog, state: &InstalledState, args: &ListA
         .into_iter()
         .map(|cap| {
             let installed_obj = state.find_object(ObjectKind::Capability, &cap.capability.name);
-            let installed = installed_obj.is_some();
+            let status = installed_obj
+                .map(|o| common::object_status_str(o.status).to_string())
+                .unwrap_or_else(|| "not_installed".to_string());
             let installed_version = installed_obj.map(|o| o.version.clone());
             // TODO: env-fact-based availability when resolver lands; for E1
             // every capability is reported as available so the CLI plumbing
@@ -98,12 +110,12 @@ pub(crate) fn build_rows(catalog: &Catalog, state: &InstalledState, args: &ListA
                 name: cap.capability.name.clone(),
                 summary: cap.capability.description.clone(),
                 priority: cap.capability.stability.clone(),
-                installed,
+                status,
                 installed_version,
                 available,
             }
         })
-        .filter(|row| !args.enabled || row.installed)
+        .filter(|row| !args.enabled || common::status_is_enabled(&row.status))
         .filter(|row| !args.available || row.available)
         .collect()
 }
@@ -114,15 +126,10 @@ fn render_human(rows: &[Row], verbose: bool) {
         "NAME", "PRIORITY", "STATUS", "VERSION"
     );
     for row in rows {
-        let status = if row.installed {
-            "installed"
-        } else {
-            "not_installed"
-        };
         let version = row.installed_version.as_deref().unwrap_or("-");
         println!(
             "{:<28} {:<10} {:<14} {}",
-            row.name, row.priority, status, version,
+            row.name, row.priority, row.status, version,
         );
         if verbose && !row.summary.is_empty() {
             println!("    {}", row.summary);
@@ -170,11 +177,15 @@ mod tests {
     }
 
     fn make_installed(name: &str, version: &str) -> InstalledObject {
+        make_object(name, version, ObjectStatus::Installed)
+    }
+
+    fn make_object(name: &str, version: &str, status: ObjectStatus) -> InstalledObject {
         InstalledObject {
             kind: ObjectKind::Capability,
             name: name.to_string(),
             version: version.to_string(),
-            status: ObjectStatus::Installed,
+            status,
             manifest_digest: None,
             distribution_source: None,
             installed_at: "2026-06-01T00:00:00Z".to_string(),
@@ -217,7 +228,7 @@ mod tests {
         let rows = build_rows(&catalog, &state, &args);
         assert_eq!(rows.len(), 2);
         for row in &rows {
-            assert!(!row.installed);
+            assert_eq!(row.status, "not_installed");
             assert!(row.installed_version.is_none());
             assert!(row.available);
         }
@@ -241,16 +252,14 @@ mod tests {
         };
         let rows = build_rows(&catalog, &state, &args);
         assert_eq!(rows.len(), 2);
-        let installed_count = rows.iter().filter(|r| r.installed).count();
-        assert_eq!(installed_count, 1);
         let cap = rows
             .iter()
             .find(|r| r.name == "agent-observability")
             .unwrap();
-        assert!(cap.installed);
+        assert_eq!(cap.status, "installed");
         assert_eq!(cap.installed_version.as_deref(), Some("0.1.0"));
         let other = rows.iter().find(|r| r.name == "tokenless").unwrap();
-        assert!(!other.installed);
+        assert_eq!(other.status, "not_installed");
         assert!(other.installed_version.is_none());
     }
 
@@ -270,7 +279,85 @@ mod tests {
         let rows = build_rows(&catalog, &state, &args);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].name, "agent-observability");
-        assert!(rows[0].installed);
+        assert_eq!(rows[0].status, "installed");
+    }
+
+    /// `--enabled` must exclude `Disabled` and `Failed` even though those
+    /// objects still exist in `InstalledState`. Regression for the bug
+    /// where `installed = installed_obj.is_some()` flagged every state row
+    /// as "installed" regardless of lifecycle.
+    #[test]
+    fn enabled_filter_excludes_disabled_and_failed() {
+        let catalog = make_catalog(vec![
+            make_cap("agent-observability", "tracing"),
+            make_cap("tokenless", "compression"),
+            make_cap("ws-ckpt", "checkpoint"),
+            make_cap("sandbox", "isolation"),
+        ]);
+        let mut state = InstalledState::default();
+        state.upsert_object(make_object(
+            "agent-observability",
+            "0.1.0",
+            ObjectStatus::Installed,
+        ));
+        state.upsert_object(make_object("tokenless", "0.2.0", ObjectStatus::Disabled));
+        state.upsert_object(make_object("ws-ckpt", "0.3.0", ObjectStatus::Failed));
+        state.upsert_object(make_object("sandbox", "0.4.0", ObjectStatus::Adopted));
+
+        let args = ListArgs {
+            available: false,
+            enabled: true,
+        };
+        let rows = build_rows(&catalog, &state, &args);
+        let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
+        assert!(names.contains(&"agent-observability"));
+        assert!(names.contains(&"sandbox"));
+        assert!(
+            !names.contains(&"tokenless"),
+            "disabled must not pass --enabled"
+        );
+        assert!(
+            !names.contains(&"ws-ckpt"),
+            "failed must not pass --enabled"
+        );
+        assert_eq!(rows.len(), 2);
+    }
+
+    /// Status strings must round-trip the full ObjectStatus vocabulary so
+    /// human + JSON consumers can branch on the real state, not on a
+    /// collapsed boolean.
+    #[test]
+    fn status_string_matches_object_status() {
+        let catalog = make_catalog(vec![
+            make_cap("a", ""),
+            make_cap("b", ""),
+            make_cap("c", ""),
+            make_cap("d", ""),
+            make_cap("e", ""),
+        ]);
+        let mut state = InstalledState::default();
+        state.upsert_object(make_object("a", "1", ObjectStatus::Installed));
+        state.upsert_object(make_object("b", "1", ObjectStatus::Partial));
+        state.upsert_object(make_object("c", "1", ObjectStatus::Disabled));
+        state.upsert_object(make_object("d", "1", ObjectStatus::Failed));
+        state.upsert_object(make_object("e", "1", ObjectStatus::Adopted));
+
+        let args = ListArgs {
+            available: false,
+            enabled: false,
+        };
+        let rows = build_rows(&catalog, &state, &args);
+        let by_name = |n: &str| {
+            rows.iter()
+                .find(|r| r.name == n)
+                .map(|r| r.status.as_str())
+                .unwrap()
+        };
+        assert_eq!(by_name("a"), "installed");
+        assert_eq!(by_name("b"), "degraded");
+        assert_eq!(by_name("c"), "disabled");
+        assert_eq!(by_name("d"), "failed");
+        assert_eq!(by_name("e"), "adopted");
     }
 
     #[test]
@@ -291,7 +378,7 @@ mod tests {
         // installed set — but the flag must still be honored.
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].name, "tokenless");
-        assert!(rows[0].installed);
+        assert_eq!(rows[0].status, "installed");
         assert!(rows[0].available);
     }
 }
