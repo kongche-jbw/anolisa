@@ -4,6 +4,9 @@
 `docs/anolisa/anolisa-cli-launch-spec.md` 和
 `docs/anolisa/anolisa-framework-contract.md`。
 
+当前实现状态、可用命令和下一步优先级见
+`docs/anolisa/anolisa-cli-development-status.md`。
+
 ## 目录分工
 
 | 路径 | 内容 | 对应 launch spec |
