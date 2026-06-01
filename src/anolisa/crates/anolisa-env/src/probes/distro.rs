@@ -1,7 +1,7 @@
 //! Distribution detection via /etc/os-release.
 
+use super::{DetectError, EnvDetector};
 use crate::{DistroInfo, EnvFacts, PkgBase};
-use super::{EnvDetector, DetectError};
 use std::fs;
 
 pub struct DistroProbe;

@@ -59,7 +59,7 @@ Response {
 ## 已确认命令语义
 
 - `logs [OBJECT]` 是中心化日志过滤入口，包含 ANOLISA operation/audit logs 和组件上报日志。
-- `doctor` 无参数是只读检查；`doctor --fix` 直接修复；`--dry-run --fix` 只输出修复计划。
+- `doctor` 无参数是只读检查；`doctor --fix` 直接修复；`doctor --dry-run --fix` 是无效组合。
 - `update self` 独立更新 CLI；`update all` 不包含 `self`。
 - `enable --feature <name>` 表示先启 capability，再启指定 feature。
 - `runtime install --component-version <VERSION>` 替代会冲突的 `--version`。

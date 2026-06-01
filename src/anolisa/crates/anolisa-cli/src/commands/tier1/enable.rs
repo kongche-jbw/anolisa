@@ -1,5 +1,8 @@
 use clap::Parser;
 
+use crate::context::CliContext;
+use crate::response::CliError;
+
 #[derive(Parser)]
 pub struct EnableArgs {
     /// Capability name(s) to enable
@@ -16,21 +19,10 @@ pub struct EnableArgs {
     pub from_source: bool,
 }
 
-pub fn handle(args: EnableArgs) -> anyhow::Result<()> {
-    for cap in &args.capabilities {
-        println!("Resolving {cap}...");
-        if let Some(ref f) = args.feature {
-            println!("  → feature override: {f}");
-        }
-        match args.with_adapter.as_deref() {
-            Some("auto") => println!("  → adapter mode: autoprobe + install all detected"),
-            Some(list) => println!("  → adapter mode: explicit ({list})"),
-            None => println!("  → adapter mode: first-party only"),
-        }
-        if args.from_source {
-            println!("  → source build requested");
-        }
-        println!("  → Capability Resolver not yet wired");
-    }
-    Ok(())
+pub fn handle(args: EnableArgs, _ctx: &CliContext) -> Result<(), CliError> {
+    let command = format!("enable {}", args.capabilities.join(" "));
+    Err(CliError::not_implemented_with_hint(
+        command,
+        "capability resolver, planner and transaction runner are not wired yet",
+    ))
 }

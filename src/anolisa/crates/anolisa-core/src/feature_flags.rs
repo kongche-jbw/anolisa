@@ -29,22 +29,19 @@ impl FeatureStore {
         if !path.exists() {
             return Ok(Self::default());
         }
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| FeatureStoreError::Io(e.to_string()))?;
-        toml::from_str(&content)
-            .map_err(|e| FeatureStoreError::Parse(e.to_string()))
+        let content =
+            std::fs::read_to_string(path).map_err(|e| FeatureStoreError::Io(e.to_string()))?;
+        toml::from_str(&content).map_err(|e| FeatureStoreError::Parse(e.to_string()))
     }
 
     /// Save feature store to a TOML file.
     pub fn save(&self, path: &Path) -> Result<(), FeatureStoreError> {
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| FeatureStoreError::Io(e.to_string()))?;
+            std::fs::create_dir_all(parent).map_err(|e| FeatureStoreError::Io(e.to_string()))?;
         }
-        let content = toml::to_string_pretty(self)
-            .map_err(|e| FeatureStoreError::Parse(e.to_string()))?;
-        std::fs::write(path, content)
-            .map_err(|e| FeatureStoreError::Io(e.to_string()))
+        let content =
+            toml::to_string_pretty(self).map_err(|e| FeatureStoreError::Parse(e.to_string()))?;
+        std::fs::write(path, content).map_err(|e| FeatureStoreError::Io(e.to_string()))
     }
 
     /// Check if a feature is enabled for a component.

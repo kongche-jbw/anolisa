@@ -1,7 +1,7 @@
 //! Kernel information detection.
 
+use super::{DetectError, EnvDetector};
 use crate::{EnvFacts, KernelInfo};
-use super::{EnvDetector, DetectError};
 use std::fs;
 use std::path::Path;
 

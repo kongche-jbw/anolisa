@@ -10,7 +10,8 @@ fn manifests_dir() -> PathBuf {
     p.push("..");
     p.push("manifests");
     p.push("capabilities");
-    p.canonicalize().expect("manifests/capabilities should exist")
+    p.canonicalize()
+        .expect("manifests/capabilities should exist")
 }
 
 #[test]
@@ -33,8 +34,15 @@ fn all_capability_manifests_parse() {
     assert_eq!(count, 9, "expected 9 capability manifests, got {count}");
 
     // Spot-check a few canonical capabilities resolve.
-    for name in ["token-optimization", "agent-memory", "sandbox", "os-security"] {
-        let plan = resolver.resolve(name).unwrap_or_else(|e| panic!("resolve {name}: {e}"));
+    for name in [
+        "token-optimization",
+        "agent-memory",
+        "sandbox",
+        "os-security",
+    ] {
+        let plan = resolver
+            .resolve(name)
+            .unwrap_or_else(|e| panic!("resolve {name}: {e}"));
         assert!(!plan.components.is_empty(), "{name} should have components");
     }
 }

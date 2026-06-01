@@ -1,5 +1,8 @@
 use clap::Parser;
 
+use crate::context::CliContext;
+use crate::response::CliError;
+
 #[derive(Parser)]
 pub struct DisableArgs {
     /// Capability to disable
@@ -12,14 +15,9 @@ pub struct DisableArgs {
     pub purge: bool,
 }
 
-pub fn handle(args: DisableArgs) -> anyhow::Result<()> {
-    if let Some(f) = args.feature {
-        println!("Disabling feature {f} of {}...", args.capability);
-    } else if args.purge {
-        println!("Purging {} (files + config)...", args.capability);
-    } else {
-        println!("Disabling {}...", args.capability);
-    }
-    println!("  → Capability Resolver not yet wired");
-    Ok(())
+pub fn handle(args: DisableArgs, _ctx: &CliContext) -> Result<(), CliError> {
+    Err(CliError::not_implemented(format!(
+        "disable {}",
+        args.capability
+    )))
 }

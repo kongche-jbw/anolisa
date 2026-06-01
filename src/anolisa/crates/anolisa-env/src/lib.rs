@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-pub mod probes;
 pub mod cache;
 pub mod gate;
+pub mod probes;
 
 /// Top-level environment facts collected by all probes.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -42,8 +42,8 @@ uses = ["capability", "component", "distribution-index", "target-provider"]
 
 [exit_codes]
 ok = 0
-not_implemented = 2
-invalid_input = 64
+not_implemented = 64
+invalid_input = 2
 precheck_failed = 70
 transaction_failed = 71
 artifact_not_found = 72

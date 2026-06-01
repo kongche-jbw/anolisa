@@ -65,11 +65,14 @@ pub struct CapabilityResolver {
 
 impl CapabilityResolver {
     pub fn new() -> Self {
-        Self { manifests: HashMap::new() }
+        Self {
+            manifests: HashMap::new(),
+        }
     }
 
     pub fn register(&mut self, manifest: CapabilityManifest) {
-        self.manifests.insert(manifest.capability.name.clone(), manifest);
+        self.manifests
+            .insert(manifest.capability.name.clone(), manifest);
     }
 
     /// Translate a capability name into a component + feature plan.

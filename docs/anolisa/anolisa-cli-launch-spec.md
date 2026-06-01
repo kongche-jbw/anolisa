@@ -318,7 +318,7 @@ anolisa doctor agent-observability --fix
 - 修复完成后必须执行 health check。
 - 所有修复必须写 central log 的 operation 记录。
 - 显式传入 `--fix` 就代表执行修复，不再额外要求交互确认。
-- 如果用户同时传 `--dry-run --fix`，只输出 fix plan，不执行。
+- `doctor --dry-run --fix` 是无效组合，应返回 `INVALID_ARGUMENT`。`doctor` 默认已经是只读检查；需要修复时只使用 `doctor --fix`。
 
 ### 7.6 `adapter`
 
@@ -610,7 +610,7 @@ system-mode: /var/lib/anolisa/lock
 
 1. `logs` 是中心化日志入口，包含 ANOLISA operation/audit logs 和组件主动上报日志；`logs xxx` 表示过滤，help 应从 `<CAPABILITY>` 调整为 `[OBJECT]`。
 2. `update all` 不包含 `self`；`anolisa update self` 是独立自更新入口。
-3. `doctor` 无参数是只读检查；`doctor --fix` 直接修复；`--dry-run --fix` 只输出修复计划。
+3. `doctor` 无参数是只读检查；`doctor --fix` 直接修复；`doctor --dry-run --fix` 是无效组合。
 
 ## 12. `src/anolisa` 内落地路径
 

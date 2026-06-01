@@ -1,5 +1,8 @@
 use clap::{Parser, Subcommand};
 
+use crate::context::CliContext;
+use crate::response::CliError;
+
 #[derive(Parser)]
 pub struct AdapterArgs {
     #[command(subcommand)]
@@ -26,20 +29,18 @@ pub enum AdapterCommands {
     Scan,
 }
 
-pub fn handle(args: AdapterArgs) -> anyhow::Result<()> {
-    match args.command {
-        AdapterCommands::List => {
-            println!("Registered adapters: not yet implemented");
-        }
-        AdapterCommands::Install { component, framework } => {
-            println!("adapter install {component} → {framework}: not yet implemented");
-        }
-        AdapterCommands::Remove { component, framework } => {
-            println!("adapter remove {component} → {framework}: not yet implemented");
-        }
-        AdapterCommands::Scan => {
-            println!("Scanning for available adapter integrations: not yet implemented");
-        }
-    }
-    Ok(())
+pub fn handle(args: AdapterArgs, _ctx: &CliContext) -> Result<(), CliError> {
+    let command = match &args.command {
+        AdapterCommands::List => "adapter list".to_string(),
+        AdapterCommands::Install {
+            component,
+            framework,
+        } => format!("adapter install {component} {framework}"),
+        AdapterCommands::Remove {
+            component,
+            framework,
+        } => format!("adapter remove {component} {framework}"),
+        AdapterCommands::Scan => "adapter scan".to_string(),
+    };
+    Err(CliError::not_implemented(command))
 }

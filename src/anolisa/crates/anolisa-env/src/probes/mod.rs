@@ -1,9 +1,9 @@
 //! Environment probes for detecting platform, kernel, distro, etc.
 
-pub mod platform;
-pub mod kernel;
 pub mod distro;
 pub mod frameworks;
+pub mod kernel;
+pub mod platform;
 
 use crate::EnvFacts;
 

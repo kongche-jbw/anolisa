@@ -26,9 +26,8 @@ impl InstalledState {
             return Ok(Self::default());
         }
         let content = std::fs::read_to_string(path)?;
-        toml::from_str(&content).map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
-        })
+        toml::from_str(&content)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))
     }
 
     pub fn save(&self, path: &Path) -> Result<(), std::io::Error> {

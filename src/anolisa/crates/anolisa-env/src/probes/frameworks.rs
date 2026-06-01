@@ -10,8 +10,8 @@
 //! best-effort signal-based detection scaffolding for `openclaw` / `hermes` /
 //! `mcp` to be filled in by real probes later.
 
-use crate::{DetectedFramework, EnvFacts, FrameworkKind};
 use super::{DetectError, EnvDetector};
+use crate::{DetectedFramework, EnvFacts, FrameworkKind};
 
 pub struct FrameworksProbe;
 

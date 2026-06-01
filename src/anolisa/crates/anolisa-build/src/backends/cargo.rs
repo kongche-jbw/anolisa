@@ -31,7 +31,11 @@ impl BuildBackend for CargoBuilder {
             .targets
             .iter()
             .map(|target| Artifact {
-                path: spec.source_dir.join("target").join(profile_dir).join(target),
+                path: spec
+                    .source_dir
+                    .join("target")
+                    .join(profile_dir)
+                    .join(target),
                 artifact_type: ArtifactType::Binary,
             })
             .collect();

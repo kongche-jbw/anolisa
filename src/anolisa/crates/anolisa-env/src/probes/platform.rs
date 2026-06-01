@@ -1,7 +1,7 @@
 //! Platform detection: Physical vs VM vs Container.
 
-use crate::{ContainerRuntime, Hypervisor, Platform, EnvFacts};
-use super::{EnvDetector, DetectError};
+use super::{DetectError, EnvDetector};
+use crate::{ContainerRuntime, EnvFacts, Hypervisor, Platform};
 use std::fs;
 use std::path::Path;
 
