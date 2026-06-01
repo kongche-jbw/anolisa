@@ -56,6 +56,11 @@ pub enum InstallError {
     ExternalPath { path: PathBuf },
 
     #[error(
+        "destination '{path}' already exists — P1-F refuses to overwrite (backup/rollback lands in P1-G)"
+    )]
+    DestExists { path: PathBuf },
+
+    #[error(
         "destination '{path}' resolved to an unrendered template — manifest variable not substituted"
     )]
     UnresolvedTemplate { path: PathBuf },
@@ -107,6 +112,18 @@ impl<'a> InstallRunner<'a> {
         }
         for dest in resolved_dests {
             self.validate_dest(dest)?;
+        }
+        // Fresh-install only for P1-F: refuse to overwrite anything already
+        // on disk. Backup/restore of pre-existing ANOLISA-owned files lands
+        // in P1-G; until then, the runner must never silently clobber.
+        // Check all dests up front so a partial run can't leave half-written
+        // siblings behind.
+        for dest in resolved_dests {
+            if dest.exists() {
+                return Err(InstallError::DestExists {
+                    path: dest.to_path_buf(),
+                });
+            }
         }
 
         match artifact_type {
@@ -515,6 +532,68 @@ mod tests {
             .install("binary", &cached, &[])
             .expect_err("must error");
         assert!(matches!(err, InstallError::NoDestinations));
+    }
+
+    #[test]
+    fn binary_install_refuses_to_overwrite_existing_dest() {
+        let home = tempdir().unwrap();
+        let cache = tempdir().unwrap();
+        let layout = layout_for(home.path());
+        let runner = InstallRunner::new(&layout);
+
+        let cached = write_cached(cache.path(), "agentsight", b"v2-bytes");
+        let dest = layout.bin_dir.join("agentsight");
+
+        // Pre-existing file from a prior install / external source.
+        std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        std::fs::write(&dest, b"v1-bytes").unwrap();
+
+        let err = runner
+            .install("binary", &cached, &[dest.clone()])
+            .expect_err("second install must refuse");
+        match err {
+            InstallError::DestExists { path } => assert_eq!(path, dest),
+            other => panic!("expected DestExists, got {other:?}"),
+        }
+
+        // Pre-existing file must be untouched — and no .tmp sibling left behind.
+        assert_eq!(std::fs::read(&dest).unwrap(), b"v1-bytes");
+        let tmp = tmp_sibling(&dest);
+        assert!(!tmp.exists(), ".tmp sibling must not be created");
+    }
+
+    #[test]
+    fn tar_gz_install_refuses_when_any_dest_preexists() {
+        // Pre-existence check runs before extraction, so neither dest is
+        // written even if only one of them collides.
+        let home = tempdir().unwrap();
+        let cache = tempdir().unwrap();
+        let layout = layout_for(home.path());
+        let runner = InstallRunner::new(&layout);
+
+        let bin_bytes: &[u8] = b"agentsight-binary";
+        let data_bytes: &[u8] = b"data-file-contents";
+        let gz = build_tar_gz(&[
+            ("bin/agentsight", bin_bytes),
+            ("share/data.toml", data_bytes),
+        ]);
+        let cached = cache.path().join("payload.tar.gz");
+        fs::write(&cached, &gz).unwrap();
+
+        let dest_bin = layout.bin_dir.join("agentsight");
+        let dest_data = layout.datadir.join("data.toml");
+        std::fs::create_dir_all(dest_data.parent().unwrap()).unwrap();
+        std::fs::write(&dest_data, b"existing-data").unwrap();
+
+        let err = runner
+            .install("tar_gz", &cached, &[dest_bin.clone(), dest_data.clone()])
+            .expect_err("must refuse");
+        match err {
+            InstallError::DestExists { path } => assert_eq!(path, dest_data),
+            other => panic!("expected DestExists, got {other:?}"),
+        }
+        assert!(!dest_bin.exists(), "bin dest must not be created");
+        assert_eq!(std::fs::read(&dest_data).unwrap(), b"existing-data");
     }
 
     #[test]

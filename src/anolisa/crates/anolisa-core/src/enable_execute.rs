@@ -179,6 +179,7 @@ pub fn execute_enable(
                 actor,
                 &started_at,
                 objects.clone(),
+                None,
                 lock,
             );
         };
@@ -200,6 +201,7 @@ pub fn execute_enable(
                     actor,
                     &started_at,
                     objects.clone(),
+                    None,
                     lock,
                 );
             }
@@ -224,6 +226,7 @@ pub fn execute_enable(
                     actor,
                     &started_at,
                     objects.clone(),
+                    None,
                     lock,
                 );
             }
@@ -243,6 +246,15 @@ pub fn execute_enable(
     let finished_at_utc = Utc::now();
     let finished_at = finished_at_utc.to_rfc3339_opts(SecondsFormat::Secs, true);
 
+    // Snapshot the prior on-disk state so any failure from state.save()
+    // onwards can restore the machine to its pre-op state. Without this
+    // snapshot a successful state.save() followed by a failed succeeded-log
+    // append would leave `installed.toml` claiming components are installed
+    // while cleanup unlinks their files — the worst possible inconsistency
+    // for a package manager. `None` means there was no prior file; cleanup
+    // will remove anything this op wrote instead of restoring bytes.
+    let prior_state_bytes: Option<Vec<u8>> = fs::read(&state_path).ok();
+
     let mut state = match InstalledState::load(&state_path) {
         Ok(s) => s,
         Err(src) => {
@@ -255,6 +267,7 @@ pub fn execute_enable(
                 actor,
                 &started_at,
                 objects.clone(),
+                None,
                 lock,
             );
         }
@@ -345,6 +358,9 @@ pub fn execute_enable(
     });
 
     if let Err(src) = state.save(&state_path) {
+        // state.save uses tmp+rename so on failure the on-disk file is
+        // usually the prior bytes already. Pass the snapshot anyway as
+        // defense in depth — restoring known-good bytes is idempotent.
         return cleanup_and_fail(
             ExecuteError::State { source: src },
             &installed,
@@ -354,13 +370,17 @@ pub fn execute_enable(
             actor,
             &started_at,
             objects.clone(),
+            Some((state_path.clone(), prior_state_bytes.clone())),
             lock,
         );
     }
 
     // Step 6 — append the succeeded record. Even if state.save above
     // succeeded, a failure here is fatal: without the audit record the
-    // user has no way to find this operation in `anolisa logs`.
+    // user has no way to find this operation in `anolisa logs`. The
+    // snapshot restore is load-bearing here — state.save just succeeded,
+    // so the on-disk file currently claims this op completed; we must
+    // roll it back before unlinking files.
     if let Err(src) = central.append(&succeeded_record(
         &operation_id,
         plan,
@@ -378,6 +398,7 @@ pub fn execute_enable(
             actor,
             &started_at,
             objects.clone(),
+            Some((state_path.clone(), prior_state_bytes)),
             lock,
         );
     }
@@ -397,9 +418,19 @@ pub fn execute_enable(
 }
 
 /// Cleanup helper invoked when any post-lock step fails. Unlinks every
-/// file already installed in this operation, appends a `failed` audit
+/// file already installed in this operation, optionally rolls
+/// `installed.toml` back to its pre-op bytes (only required when the
+/// failure happened after `state.save()`), appends a `failed` audit
 /// record (errors here are swallowed so the original failure surfaces),
 /// drops the lock, and returns the original error.
+///
+/// `state_restore`:
+///   * `None` — failure happened before `state.save()`; the state file
+///     was never written by this op and must not be touched.
+///   * `Some((path, Some(bytes)))` — restore `path` to `bytes` (the
+///     pre-op snapshot).
+///   * `Some((path, None))` — no prior state existed; remove `path`
+///     entirely so the cleanup is a true rollback.
 #[allow(clippy::too_many_arguments)]
 fn cleanup_and_fail(
     err: ExecuteError,
@@ -410,10 +441,24 @@ fn cleanup_and_fail(
     actor: &str,
     started_at: &str,
     objects: Vec<String>,
+    state_restore: Option<(PathBuf, Option<Vec<u8>>)>,
     lock: InstallLock,
 ) -> Result<ExecuteOutcome, ExecuteError> {
     for f in installed {
         let _ = fs::remove_file(&f.path);
+    }
+    if let Some((path, prior)) = state_restore {
+        match prior {
+            Some(bytes) => {
+                // Best-effort restore: if the rewrite fails the failed
+                // audit record will still be appended below and the user
+                // sees the original error, which is the right signal.
+                let _ = fs::write(&path, &bytes);
+            }
+            None => {
+                let _ = fs::remove_file(&path);
+            }
+        }
     }
     let finished_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     let _ = central.append(&failed_record(
@@ -886,5 +931,119 @@ mod tests {
             lines[1].get("status").and_then(|v| v.as_str()),
             Some("failed"),
         );
+    }
+
+    /// Regression for the snapshot+restore path: when `state.save()` fails
+    /// AND there is a pre-op `installed.toml`, the prior file must remain
+    /// intact (cleanup must not delete it). We force the save failure by
+    /// pre-creating `installed.toml`'s `.tmp` sibling as a *directory* so
+    /// `fs::write(&tmp, ...)` inside `InstalledState::save` errors out
+    /// before the rename.
+    #[test]
+    fn state_save_failure_restores_prior_installed_toml() {
+        let root = tempdir().expect("tempdir");
+        let payloads = tempdir().expect("tempdir");
+        let layout = fixture_layout(root.path());
+
+        let payload = b"new-agentsight-bytes";
+        let (url, sha) = write_payload_artifact(payloads.path(), "agentsight", payload);
+
+        // Pre-existing installed.toml from a prior successful operation.
+        // We use a bespoke marker string so we can assert byte-for-byte
+        // that cleanup did not rewrite the file.
+        let state_path = layout.state_dir.join("installed.toml");
+        std_fs::create_dir_all(&layout.state_dir).unwrap();
+        let prior_marker = b"# prior installed.toml -- must survive a failed enable\n";
+        std_fs::write(&state_path, prior_marker).unwrap();
+
+        // Trip InstalledState::save by squatting on its tmp sibling path.
+        let tmp_squat = layout.state_dir.join(".installed.toml.tmp");
+        std_fs::create_dir_all(&tmp_squat).unwrap();
+
+        let dest = layout.bin_dir.join("agentsight");
+        let comp = fixture_component(
+            "agentsight",
+            Some(artifact_plan(&url, &sha)),
+            vec![dest.display().to_string()],
+            PlanStatus::Ready,
+        );
+        let plan = fixture_plan(
+            "agent-observability",
+            vec![comp],
+            PlanStatus::Ready,
+            "system",
+            &layout,
+        );
+
+        // load() reads the prior bytes as TOML — the marker line is a
+        // comment, so it parses as an empty state. That's fine: the
+        // contract under test is "prior bytes survive cleanup", not the
+        // parsed state's shape.
+        let err = execute_enable(&plan, &layout, "tester").expect_err("must fail at state.save");
+        assert!(
+            matches!(err, ExecuteError::State { .. }),
+            "unexpected error: {err:?}",
+        );
+
+        // Prior installed.toml content is unchanged.
+        let after = std_fs::read(&state_path).expect("installed.toml still readable");
+        assert_eq!(
+            after, prior_marker,
+            "cleanup must restore the prior installed.toml byte-for-byte",
+        );
+        // Installed binary was unlinked.
+        assert!(!dest.exists(), "cleanup must unlink installed files");
+        // A failed audit record was appended.
+        let lines = read_log_lines(&layout.central_log);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(
+            lines[1].get("status").and_then(|v| v.as_str()),
+            Some("failed"),
+        );
+    }
+
+    /// Same trip, but with NO pre-existing `installed.toml`. Cleanup must
+    /// remove any state file this op wrote (here state.save fails before
+    /// the rename so nothing is on disk anyway — the assertion is "still
+    /// nothing", confirming the `None` snapshot branch is a no-op rather
+    /// than accidentally writing an empty file).
+    #[test]
+    fn state_save_failure_no_prior_state_leaves_no_installed_toml() {
+        let root = tempdir().expect("tempdir");
+        let payloads = tempdir().expect("tempdir");
+        let layout = fixture_layout(root.path());
+
+        let payload = b"new-agentsight-bytes";
+        let (url, sha) = write_payload_artifact(payloads.path(), "agentsight", payload);
+
+        std_fs::create_dir_all(&layout.state_dir).unwrap();
+        let tmp_squat = layout.state_dir.join(".installed.toml.tmp");
+        std_fs::create_dir_all(&tmp_squat).unwrap();
+
+        let dest = layout.bin_dir.join("agentsight");
+        let comp = fixture_component(
+            "agentsight",
+            Some(artifact_plan(&url, &sha)),
+            vec![dest.display().to_string()],
+            PlanStatus::Ready,
+        );
+        let plan = fixture_plan(
+            "agent-observability",
+            vec![comp],
+            PlanStatus::Ready,
+            "system",
+            &layout,
+        );
+
+        let err = execute_enable(&plan, &layout, "tester").expect_err("must fail at state.save");
+        assert!(
+            matches!(err, ExecuteError::State { .. }),
+            "unexpected error: {err:?}",
+        );
+        assert!(
+            !layout.state_dir.join("installed.toml").exists(),
+            "no installed.toml may leak from a failed first-time enable",
+        );
+        assert!(!dest.exists());
     }
 }

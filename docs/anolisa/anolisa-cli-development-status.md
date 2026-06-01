@@ -282,18 +282,18 @@ anolisa logs agent-observability
 | 阶段 | 依赖 | 当前状态 |
 |---|---|---|
 | env probe | `anolisa-env` | 最小可用，仍需补 systemd/eBPF/package manager probe |
-| catalog load | `anolisa-core::Catalog` | 库可用，CLI `list` 已接入 |
-| capability resolve | `CapabilityService` / planner | dry-run planner 已接入；真实执行 service 未实现 |
-| distribution resolve | `DistributionIndex` resolver | 库可用 |
-| artifact fetch | downloader/cache/checksum/signature | 未实现 |
-| install runner | rpm/deb/tar_gz/binary/file backend | 未实现 |
-| lock | `InstallLock` | 库可用 |
-| backup | backup copy/restore | 当前 plan-only |
-| transaction | apply/verify/rollback boundary | 未实现 |
-| state | `InstalledState v1` | schema 可用 |
-| audit | `CentralLog` | query 可用，operation write 需接入执行链路 |
+| catalog load | `anolisa-core::Catalog` | 库可用，CLI `list` / `status` 已接入 |
+| capability resolve | `CapabilityService` / planner | dry-run planner + 真实 executor 均已接入（P1-E2/P1-F） |
+| distribution resolve | `DistributionIndex` resolver | 库可用，P1-F review fixup 后缺 sha256 直接 `Blocked`，不再 `Degraded` |
+| artifact fetch | downloader/cache/checksum/signature | P1-F：`DownloadCache`（`file://` + sha256 streaming verify）；HTTPS / signature 留待 P1-G |
+| install runner | rpm/deb/tar_gz/binary/file backend | P1-F：`InstallRunner`（`binary` + `tar_gz`）；ANOLISA-owned roots only；review fixup 后 fresh-install only（拒绝已存在目标），rpm/deb/file 留待 P1-G |
+| lock | `InstallLock` | 库可用，P1-F 端到端使用，contention → `LockHeld` |
+| backup | backup copy/restore | 当前仍 plan-only；ANOLISA-owned 文件 P1-F 通过 fresh-install 守卫规避冲突，真正 backup/restore 留待 P1-G |
+| transaction | apply/verify/rollback boundary | P1-F：cleanup 段 = unlink ANOLISA-owned files + 恢复 `installed.toml` snapshot；完整 transaction boundary 留待 P1-G |
+| state | `InstalledState v1` | schema 可用；P1-F 真实写入 + cleanup snapshot/restore |
+| audit | `CentralLog` | query 可用；P1-F 接入 operation 三阶段记录（started/succeeded/failed）；per-phase（download/install/state-write）的细粒度记录留待 P1-G |
 
-因此，真实 enable 的前置里程碑 `enable --dry-run` 已完成；下一步才进入 downloader / install runner / state + audit 写入。
+因此，真实 enable 的前置里程碑 `enable --dry-run` 已完成；P1-F 把上面列的 artifact fetch / install runner / state / audit / lock 全部接到了 `agent-observability` 一条最窄路径上。
 
 ## 下一步优先级
 
@@ -317,7 +317,7 @@ anolisa logs agent-observability
 - ✅ `anolisa_core::plan_enable` 新增 `EnablePlan` / `ComponentPlan` / `ArtifactPlan` / `PrecheckResult` / `LayoutSummary` / `EnvFactsSummary` / `PlanStatus` / `PlanError`，纯函数、零 IO。
 - ✅ Plan 暴露 capability 名称 + stability + install_mode、component 列表 + 命中的 artifact（type / backend / version / url / sha256）、env facts、prechecks、layout 摘要、warnings、next_actions、resolved_files。
 - ✅ Precheck 同时评估 capability **与** component 两层 env_requirements（`kernel_min` / `btf` / `cap_bpf` / `libc` / `pkg_base`）；component 检查带命名空间，`unknown` 探针一律 warn 而非默认 ok。
-- ✅ 状态聚合：fail / 任一 component blocked → `blocked`；warn / 版本漂移 / 缺 sha256 / 空 index / component degraded → `degraded`；否则 `ready`。`blocked` 仍以 exit 0 + envelope 返回。
+- ✅ 状态聚合：fail / 任一 component blocked → `blocked`；warn / 版本漂移 / 空 index / component degraded → `degraded`；否则 `ready`。`blocked` 仍以 exit 0 + envelope 返回。（P1-F review fixup：缺 sha256 升格为 `blocked`，详见下文。）
 - ✅ CLI scope 守卫：仅 `agent-observability` 放行；多 capability → `INVALID_ARGUMENT`；`--feature` / `--with-adapter` / `--from-source` / 非 `--dry-run` → 显式 `NOT_IMPLEMENTED`。
 - ✅ 缺失 distribution index 不再致命：用空 index 出 plan、顶层 warning、组件 `blocked`。
 - ✅ DistributionIndex 查找按 overlay → packaged → dev-tree（与 Catalog 分层一致）。
@@ -344,6 +344,16 @@ agent-observability -> agentsight -> prebuilt tar_gz 或 rpm -> user-mode instal
 - ✅ `InstallLock` 端到端使用：整个 execute 段在锁内，contention 直接 `LockHeld` 拒绝。
 - ✅ 下载器（Sub-A，`DownloadCache`，仅 `file://` + sha256）、install runner（Sub-B，`InstallRunner`，仅 `binary` / `tar_gz`）、orchestrator（Sub-C，`enable_execute`，cleanup + failed log）、CLI wiring（Sub-D，本文档对应 commit）全部 green。
 
+#### P1-F review fixup（已完成）
+
+P1-F happy path 接起来后，code review 指出三个收紧项，已一并落地：
+
+- ✅ **缺 sha256 升格为 `Blocked`**：`plan_enable` 中 `entry.sha256.is_none()` 不再产生 `Degraded` + warning，而是直接返回 `ComponentPlan { status: Blocked, blocked_reason: "...refuse to install without verification" }`。原因：`DownloadCache::fetch(url, None)` 不强制校验，`execute_enable` 又只拒绝 `Blocked` plan —— 旧路径会让无 sha256 的 artifact 真实安装。
+- ✅ **state 写入 snapshot/restore**：`execute_enable` 在 `state.save()` 之前抓 `installed.toml` 字节快照；`state.save()` 或之后的 succeeded-log append 任意一步失败，cleanup 会把 `installed.toml` 还原为 pre-op 字节（无 prior 则删除）。修补此前 succeeded-log 失败时 cleanup 删 ANOLISA-owned files 但 `installed.toml` 仍声称"已安装"的不一致状态。
+- ✅ **fresh-install only**：`InstallRunner::install` 在 `validate_dest` 之后再扫一遍 `dest.exists()`，命中即 `InstallError::DestExists`。P1-F 不做 backup/restore，因此覆盖已有 ANOLISA-owned 文件直接拒绝；真正的 backup + 升级路径留待 P1-G。
+
+回归测试：planner `missing_sha256_marks_component_blocked`；executor `state_save_failure_restores_prior_installed_toml` + `state_save_failure_no_prior_state_leaves_no_installed_toml`；install runner `binary_install_refuses_to_overwrite_existing_dest` + `tar_gz_install_refuses_when_any_dest_preexists`。
+
 ### P1-G：execute 路径补齐与对称命令
 
 P1-F 落地后还差几个明确缺口，按落地难度排：
@@ -352,8 +362,10 @@ P1-F 落地后还差几个明确缺口，按落地难度排：
 - DownloadCache 加 HTTPS scheme + retry / progress：当前 `file://` only，覆盖 GitHub Release 之类的真实 artifact 源。
 - Signature verification：在 sha256 之外要求 detached signature（首版可走 minisign / cosign），与 distribution-index 已有的 `signature` 字段对齐。
 - 扩 artifact backend：rpm / deb（走系统包管理器、保留 transaction 概念）、oci（image pull）、tar_xz 等。
+- Per-phase CentralLog 记录：当前 `execute_enable` 只写 operation 级 `started` / `succeeded` / `failed`；P1-G 需补 download 起停、install 起停、state-write 起停的 phase 级记录，方便 `anolisa logs` 定位具体失败阶段。
+- ANOLISA-owned 文件 backup/restore：P1-F 通过 `InstallError::DestExists` 守住 fresh-install；P1-G 把 `backup.rs` 从 plan-only 升级到 copy/restore，让 reinstall / upgrade 能在覆盖前 backup、失败时 restore。
 - `disable` 对称路径：用同套 `InstallLock` + `CentralLog` 脚手架解绑 state objects，并 unlink ANOLISA-owned files；不在 Sub-D 范围内但库层（state.upsert_object / state.remove_object）已就绪。
-- 首条 external-file adapter case：要求 transaction / backup 真接，从 `backup.rs` 的 plan-only 升级到 copy/restore 能跑通；以一个 well-defined adapter（如 sshd_config 改一行）为目标。
+- 首条 external-file adapter case：要求 transaction / backup 真接，以一个 well-defined adapter（如 sshd_config 改一行）为目标。
 - `update` / `uninstall`：在 `disable` 落地后基于 InstalledState diff 渐进打开。
 
 ## 待决策问题
@@ -368,6 +380,6 @@ P1-F 落地后还差几个明确缺口，按落地难度排：
 
 - ✅ `list` 和 `status` 只读 CLI wiring（P1-E1 已完成）。
 - ✅ `enable agent-observability --dry-run` 接入 `plan_enable`（P1-E2 已完成）。
-- ✅ `enable agent-observability` 最小真实安装闭环（P1-F 已完成）：`DownloadCache` (`file://` + sha256) → `InstallRunner` (`binary` / `tar_gz`，仅 ANOLISA-owned roots) → `InstalledState v1` capability + component upsert → `CentralLog` started/succeeded/failed → `InstallLock` 整段持有 → 中途失败自清理。
-- 下一步是 P1-G（上面列出的方向：tighter exit code、网络下载、签名校验、disable / uninstall 对称路径）。
+- ✅ `enable agent-observability` 最小真实安装闭环（P1-F 已完成，含 review fixup）：`DownloadCache` (`file://` + sha256) → `InstallRunner` (`binary` / `tar_gz`，仅 ANOLISA-owned roots，fresh-install only) → `InstalledState v1` capability + component upsert（cleanup 走 snapshot/restore）→ `CentralLog` started/succeeded/failed → `InstallLock` 整段持有 → 中途失败自清理 + 缺 sha256 提前 `Blocked`。
+- 下一步是 P1-G（上面列出的方向：tighter exit code、网络下载、签名校验、per-phase audit 记录、ANOLISA-owned 文件 backup/restore、disable / uninstall 对称路径）。
 - 其它 mutating 命令（`disable` / `restart` / `update` / `uninstall` / `subscription` / `adapter` / `self` / `runtime *` / `osbase *` 等）在 P1-G 之前继续返回 `NOT_IMPLEMENTED`。
