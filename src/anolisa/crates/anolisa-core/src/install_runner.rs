@@ -56,6 +56,11 @@ pub enum InstallError {
     ExternalPath { path: PathBuf },
 
     #[error(
+        "destination '{path}' contains a '.' or '..' segment — refuse to install via traversal"
+    )]
+    TraversalSegment { path: PathBuf },
+
+    #[error(
         "destination '{path}' already exists — P1-F refuses to overwrite (backup/rollback lands in P1-G)"
     )]
     DestExists { path: PathBuf },
@@ -117,12 +122,23 @@ impl<'a> InstallRunner<'a> {
         // on disk. Backup/restore of pre-existing ANOLISA-owned files lands
         // in P1-G; until then, the runner must never silently clobber.
         // Check all dests up front so a partial run can't leave half-written
-        // siblings behind.
+        // siblings behind. Use `symlink_metadata` rather than `exists()` so
+        // a broken symlink (target missing, `exists()` returns false) is
+        // still caught and refused.
         for dest in resolved_dests {
-            if dest.exists() {
-                return Err(InstallError::DestExists {
-                    path: dest.to_path_buf(),
-                });
+            match fs::symlink_metadata(dest) {
+                Ok(_) => {
+                    return Err(InstallError::DestExists {
+                        path: dest.to_path_buf(),
+                    });
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(source) => {
+                    return Err(InstallError::Io {
+                        path: dest.to_path_buf(),
+                        source,
+                    });
+                }
             }
         }
 
@@ -178,7 +194,54 @@ impl<'a> InstallRunner<'a> {
                 path: dest.to_path_buf(),
             });
         }
-        let roots: Vec<&Path> = vec![
+        // Lexical reject of traversal segments. Defeats render_files outputs
+        // that look like `<bin_dir>/../<escape>` — without this check the
+        // `starts_with(root)` below would pass, and `create_dir_all` /
+        // `rename` would happily write outside the root.
+        for component in dest.components() {
+            if matches!(
+                component,
+                std::path::Component::ParentDir | std::path::Component::CurDir
+            ) {
+                return Err(InstallError::TraversalSegment {
+                    path: dest.to_path_buf(),
+                });
+            }
+        }
+        let lex_roots = self.lexical_roots();
+        if !lex_roots.iter().any(|root| dest.starts_with(root)) {
+            return Err(InstallError::ExternalPath {
+                path: dest.to_path_buf(),
+            });
+        }
+        // Canonicalize the deepest existing ancestor of `dest` and ensure
+        // it still lives under a canonicalized root. Defeats symlink-in-
+        // ancestor escapes (e.g. someone planted a symlink inside bin_dir
+        // pointing at /etc). When neither the dest nor any ancestor of the
+        // root exists yet, canonicalize_nearest_existing returns None and
+        // we fall back to the lexical check above — acceptable for P1-F
+        // since a fresh layout's roots are themselves under a tmp prefix
+        // we control.
+        if let Some(canonical_dest) = canonicalize_nearest_existing(dest) {
+            let canonical_roots: Vec<PathBuf> = lex_roots
+                .iter()
+                .filter_map(|r| canonicalize_nearest_existing(r))
+                .collect();
+            if !canonical_roots.is_empty()
+                && !canonical_roots
+                    .iter()
+                    .any(|r| canonical_dest.starts_with(r))
+            {
+                return Err(InstallError::ExternalPath {
+                    path: dest.to_path_buf(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn lexical_roots(&self) -> Vec<&Path> {
+        vec![
             self.layout.bin_dir.as_path(),
             self.layout.etc_dir.as_path(),
             self.layout.state_dir.as_path(),
@@ -187,13 +250,29 @@ impl<'a> InstallRunner<'a> {
             self.layout.datadir.as_path(),
             self.layout.log_dir.as_path(),
             self.layout.cache_dir.as_path(),
-        ];
-        if roots.iter().any(|root| dest.starts_with(root)) {
-            Ok(())
-        } else {
-            Err(InstallError::ExternalPath {
-                path: dest.to_path_buf(),
-            })
+        ]
+    }
+}
+
+/// Walk up `p`'s ancestors until one exists, canonicalize that, and
+/// re-attach the missing tail. Returns `None` only if not even `/` (or
+/// the platform equivalent) can be canonicalized — effectively never on
+/// the platforms this CLI targets.
+fn canonicalize_nearest_existing(p: &Path) -> Option<PathBuf> {
+    let mut suffix: Vec<std::ffi::OsString> = Vec::new();
+    let mut current = p.to_path_buf();
+    loop {
+        if let Ok(canonical) = current.canonicalize() {
+            let mut out = canonical;
+            for seg in suffix.iter().rev() {
+                out.push(seg);
+            }
+            return Some(out);
+        }
+        let name = current.file_name()?.to_os_string();
+        suffix.push(name);
+        if !current.pop() {
+            return None;
         }
     }
 }
@@ -594,6 +673,112 @@ mod tests {
         }
         assert!(!dest_bin.exists(), "bin dest must not be created");
         assert_eq!(std::fs::read(&dest_data).unwrap(), b"existing-data");
+    }
+
+    #[test]
+    fn binary_install_dotdot_segment_rejected() {
+        let home = tempdir().unwrap();
+        let cache = tempdir().unwrap();
+        let layout = layout_for(home.path());
+        let runner = InstallRunner::new(&layout);
+        let cached = write_cached(cache.path(), "x", b"x");
+
+        // dest = <bin_dir>/../escape/file — passes the old lexical
+        // starts_with check but would write outside bin_dir.
+        let dest = layout.bin_dir.join("..").join("escape").join("file");
+        let err = runner
+            .install("binary", &cached, &[dest.clone()])
+            .expect_err("must reject");
+        match err {
+            InstallError::TraversalSegment { path } => assert_eq!(path, dest),
+            other => panic!("expected TraversalSegment, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn binary_install_dotdot_at_tail_rejected() {
+        // `..` as the final segment would resolve to a directory and let
+        // rename overwrite something the user did not name. Same defense
+        // as the mid-path case but covers the tail position explicitly.
+        let home = tempdir().unwrap();
+        let cache = tempdir().unwrap();
+        let layout = layout_for(home.path());
+        let runner = InstallRunner::new(&layout);
+        let cached = write_cached(cache.path(), "x", b"x");
+
+        let dest = layout.bin_dir.join("sub").join("..");
+        let err = runner
+            .install("binary", &cached, &[dest.clone()])
+            .expect_err("must reject");
+        match err {
+            InstallError::TraversalSegment { path } => assert_eq!(path, dest),
+            other => panic!("expected TraversalSegment, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn binary_install_refuses_broken_symlink_dest() {
+        // exists() returns false for a broken symlink (target missing) but
+        // symlink_metadata() returns Ok. We must treat the broken symlink
+        // as "occupied" and refuse, otherwise rename() would silently
+        // replace it.
+        let home = tempdir().unwrap();
+        let cache = tempdir().unwrap();
+        let layout = layout_for(home.path());
+        let runner = InstallRunner::new(&layout);
+        let cached = write_cached(cache.path(), "agentsight", b"new-bytes");
+
+        let dest = layout.bin_dir.join("agentsight");
+        fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink("/nonexistent/target", &dest).unwrap();
+        assert!(!dest.exists(), "test precondition: broken symlink");
+        assert!(
+            fs::symlink_metadata(&dest).is_ok(),
+            "symlink itself present"
+        );
+
+        let err = runner
+            .install("binary", &cached, &[dest.clone()])
+            .expect_err("must refuse");
+        match err {
+            InstallError::DestExists { path } => assert_eq!(path, dest),
+            other => panic!("expected DestExists, got {other:?}"),
+        }
+        // Symlink untouched.
+        assert!(fs::symlink_metadata(&dest).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn binary_install_symlink_ancestor_escapes_root_rejected() {
+        // bin_dir/escape -> <outside>, dest = bin_dir/escape/file. The
+        // lexical starts_with check passes (it's literally under bin_dir),
+        // but canonicalize_nearest_existing resolves the symlink and the
+        // canonical dest no longer lives under the canonical root.
+        let home = tempdir().unwrap();
+        let cache = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        let layout = layout_for(home.path());
+        let runner = InstallRunner::new(&layout);
+        let cached = write_cached(cache.path(), "x", b"x");
+
+        fs::create_dir_all(&layout.bin_dir).unwrap();
+        let escape_link = layout.bin_dir.join("escape");
+        std::os::unix::fs::symlink(outside.path(), &escape_link).unwrap();
+
+        let dest = escape_link.join("file");
+        let err = runner
+            .install("binary", &cached, &[dest.clone()])
+            .expect_err("must reject");
+        assert!(
+            matches!(err, InstallError::ExternalPath { ref path } if path == &dest),
+            "expected ExternalPath for symlink-escape, got {err:?}",
+        );
+        assert!(
+            !outside.path().join("file").exists(),
+            "must not write through the symlink",
+        );
     }
 
     #[test]

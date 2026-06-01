@@ -71,6 +71,10 @@ pub enum ExecuteError {
     PlanNotExecutable { status: String, reason: String },
     #[error("component '{component}': no artifact resolved")]
     MissingArtifact { component: String },
+    #[error(
+        "component '{component}': resolved artifact has no sha256 — refusing to install without verification"
+    )]
+    MissingChecksum { component: String },
     #[error("download failed for component '{component}': {source}")]
     Download {
         component: String,
@@ -184,8 +188,31 @@ pub fn execute_enable(
             );
         };
 
+        // Hard guard: the planner now marks missing-sha256 plans Blocked,
+        // but `execute_enable` is a public API — a hand-built plan could
+        // still arrive with `artifact.sha256: None`. Refuse it here so the
+        // download is never attempted without verification, regardless of
+        // caller. This is defense-in-depth against bypassing the planner.
+        let Some(expected_sha) = artifact.sha256.as_deref() else {
+            let err = ExecuteError::MissingChecksum {
+                component: c.name.clone(),
+            };
+            return cleanup_and_fail(
+                err,
+                &installed,
+                &central,
+                &operation_id,
+                plan,
+                actor,
+                &started_at,
+                objects.clone(),
+                None,
+                lock,
+            );
+        };
+
         let cache = DownloadCache::new(layout.cache_dir.clone());
-        let cached = match cache.fetch(&artifact.url, artifact.sha256.as_deref()) {
+        let cached = match cache.fetch(&artifact.url, Some(expected_sha)) {
             Ok(d) => d,
             Err(src) => {
                 let err = ExecuteError::Download {
@@ -933,12 +960,79 @@ mod tests {
         );
     }
 
+    /// Executor-level checksum hard guard: even though the planner now
+    /// marks missing-sha256 plans Blocked, `execute_enable` is a public
+    /// API — a hand-built plan could still arrive with `artifact.sha256:
+    /// None`. The executor must refuse without touching the disk: no
+    /// download, no install, no state file. The started/failed audit
+    /// records are still expected (the lock was acquired and started was
+    /// already written before we hit the per-component loop).
+    #[test]
+    fn missing_checksum_in_artifact_returns_missing_checksum_error_with_no_install() {
+        let root = tempdir().expect("tempdir");
+        let layout = fixture_layout(root.path());
+
+        // Construct a plan that bypasses the planner's missing-sha guard:
+        // status=Ready, artifact present, but sha256=None.
+        let dest = layout.bin_dir.join("agentsight");
+        let artifact_no_sha = ArtifactPlan {
+            artifact_type: "binary".to_string(),
+            backend: "binary".to_string(),
+            version: "0.2.0".to_string(),
+            url: "file:///does/not/matter".to_string(),
+            sha256: None,
+            signature: None,
+            artifact_id: None,
+        };
+        let comp = fixture_component(
+            "agentsight",
+            Some(artifact_no_sha),
+            vec![dest.display().to_string()],
+            PlanStatus::Ready,
+        );
+        let plan = fixture_plan(
+            "agent-observability",
+            vec![comp],
+            PlanStatus::Ready,
+            "system",
+            &layout,
+        );
+
+        let err = execute_enable(&plan, &layout, "tester").expect_err("must error");
+        match err {
+            ExecuteError::MissingChecksum { ref component } => assert_eq!(component, "agentsight"),
+            other => panic!("expected MissingChecksum, got {other:?}"),
+        }
+
+        // No file installed, no state file written.
+        assert!(!dest.exists(), "no file may be installed without sha256");
+        assert!(
+            !layout.state_dir.join("installed.toml").exists(),
+            "no state file may be created when the executor refuses to install",
+        );
+
+        // Started + failed audit records.
+        let lines = read_log_lines(&layout.central_log);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(
+            lines[1].get("status").and_then(|v| v.as_str()),
+            Some("failed"),
+        );
+    }
+
     /// Regression for the snapshot+restore path: when `state.save()` fails
     /// AND there is a pre-op `installed.toml`, the prior file must remain
     /// intact (cleanup must not delete it). We force the save failure by
     /// pre-creating `installed.toml`'s `.tmp` sibling as a *directory* so
     /// `fs::write(&tmp, ...)` inside `InstalledState::save` errors out
     /// before the rename.
+    ///
+    /// The prior state is built with `InstalledState::default().save(...)`
+    /// so the file is a *real* serialized state (not just a TOML comment).
+    /// That way `InstalledState::load` actually parses a populated-shape
+    /// document and the test exercises the real cleanup path — losing
+    /// the prior state of an existing install is the worst-case failure
+    /// for a package manager and is what this regression locks down.
     #[test]
     fn state_save_failure_restores_prior_installed_toml() {
         let root = tempdir().expect("tempdir");
@@ -948,13 +1042,15 @@ mod tests {
         let payload = b"new-agentsight-bytes";
         let (url, sha) = write_payload_artifact(payloads.path(), "agentsight", payload);
 
-        // Pre-existing installed.toml from a prior successful operation.
-        // We use a bespoke marker string so we can assert byte-for-byte
-        // that cleanup did not rewrite the file.
+        // Build a valid prior installed.toml using the real serializer
+        // and snapshot its bytes; that snapshot is what cleanup must
+        // restore byte-for-byte after the failed save.
         let state_path = layout.state_dir.join("installed.toml");
         std_fs::create_dir_all(&layout.state_dir).unwrap();
-        let prior_marker = b"# prior installed.toml -- must survive a failed enable\n";
-        std_fs::write(&state_path, prior_marker).unwrap();
+        InstalledState::default()
+            .save(&state_path)
+            .expect("prior state save");
+        let prior_bytes = std_fs::read(&state_path).expect("read prior bytes");
 
         // Trip InstalledState::save by squatting on its tmp sibling path.
         let tmp_squat = layout.state_dir.join(".installed.toml.tmp");
@@ -975,22 +1071,22 @@ mod tests {
             &layout,
         );
 
-        // load() reads the prior bytes as TOML — the marker line is a
-        // comment, so it parses as an empty state. That's fine: the
-        // contract under test is "prior bytes survive cleanup", not the
-        // parsed state's shape.
         let err = execute_enable(&plan, &layout, "tester").expect_err("must fail at state.save");
         assert!(
             matches!(err, ExecuteError::State { .. }),
             "unexpected error: {err:?}",
         );
 
-        // Prior installed.toml content is unchanged.
+        // Prior installed.toml content is unchanged byte-for-byte.
         let after = std_fs::read(&state_path).expect("installed.toml still readable");
         assert_eq!(
-            after, prior_marker,
+            after, prior_bytes,
             "cleanup must restore the prior installed.toml byte-for-byte",
         );
+        // Belt-and-suspenders: the restored bytes still parse as a valid
+        // InstalledState — proof we did not leave a truncated/garbled file.
+        let _: InstalledState = InstalledState::load(&state_path).expect("prior state reparses");
+
         // Installed binary was unlinked.
         assert!(!dest.exists(), "cleanup must unlink installed files");
         // A failed audit record was appended.

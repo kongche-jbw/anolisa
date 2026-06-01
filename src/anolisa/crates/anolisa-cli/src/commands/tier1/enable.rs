@@ -165,6 +165,9 @@ fn execute_err_to_cli(err: ExecuteError) -> CliError {
         ExecuteError::MissingArtifact { component } => format!(
             "component '{component}' has no resolved artifact (catalog vs distribution-index mismatch — check `anolisa enable agent-observability --dry-run`)",
         ),
+        ExecuteError::MissingChecksum { component } => format!(
+            "component '{component}' has no sha256 in the distribution index — refuse to install without verification (regenerate the index with checksums and retry)",
+        ),
         ExecuteError::Download { component, source } => {
             format!("download for component '{component}' failed: {source}")
         }
