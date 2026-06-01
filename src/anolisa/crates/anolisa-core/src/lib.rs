@@ -1,6 +1,7 @@
 pub mod capability;
 pub mod component;
 pub mod dependency;
+pub mod distribution;
 pub mod feature_flags;
 pub mod manifest;
 pub mod registry;
@@ -10,6 +11,10 @@ pub mod transaction;
 
 pub use capability::{CapabilityError, CapabilityManifest, CapabilityResolver, ResolvedPlan};
 pub use component::{Component, ComponentMeta, ComponentStatus};
+pub use distribution::{
+    ArtifactType, DistributionEntry, DistributionError, DistributionIndex, ResolveError,
+    ResolveQuery,
+};
 pub use feature_flags::FeatureStore;
 pub use manifest::Manifest;
 pub use registry::Registry;

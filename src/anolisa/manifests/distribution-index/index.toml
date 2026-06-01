@@ -1,0 +1,38 @@
+# DistributionIndex (schema v1).
+#
+# Flat `[[entries]]` form consumed by anolisa-core::distribution::DistributionIndex.
+# One row per (component, version, channel, target) artifact binding. Concrete
+# artifact URL / checksum / signature / backend live here, never in component
+# manifests.
+#
+# Fake URLs only — this fixture is for tests and offline development.
+
+schema_version = 1
+
+[[entries]]
+component = "agentsight"
+version = "0.1.0"
+channel = "stable"
+artifact_type = "rpm"
+backend = "rpm"
+url = "https://example.invalid/agentsight-0.1.0.rpm"
+os = "linux"
+arch = "x86_64"
+libc = "glibc"
+pkg_base = "anolis23"
+install_modes = ["system"]
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+dependencies = ["kernel-headers"]
+
+[[entries]]
+component = "tokenless"
+version = "0.1.0"
+channel = "stable"
+artifact_type = "tar"
+backend = "tar"
+url = "https://example.invalid/tokenless-0.1.0-linux.tar.gz"
+os = "linux"
+arch = "any"
+install_modes = ["user"]
+sha256 = "1111111111111111111111111111111111111111111111111111111111111111"
+dependencies = []
