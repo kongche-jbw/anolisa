@@ -611,3 +611,20 @@ system-mode: /var/lib/anolisa/lock
 1. `logs` 是中心化日志入口，包含 ANOLISA operation/audit logs 和组件主动上报日志；`logs xxx` 表示过滤，help 应从 `<CAPABILITY>` 调整为 `[OBJECT]`。
 2. `update all` 不包含 `self`；`anolisa update self` 是独立自更新入口。
 3. `doctor` 无参数是只读检查；`doctor --fix` 直接修复；`--dry-run --fix` 只输出修复计划。
+
+## 12. `src/anolisa` 内落地路径
+
+具体 spec 文档和 TOML 模板已按开发 owner 分配到 `src/anolisa`：
+
+| 路径 | 内容 | 对应 spec |
+|---|---|---|
+| `src/anolisa/README.md` | 本地开发入口和阅读顺序 | 全局 |
+| `src/anolisa/crates/anolisa-cli/SPEC.md` | 命令面、输出、`NOT_IMPLEMENTED` | S1, S2 |
+| `src/anolisa/crates/anolisa-core/SPEC.md` | catalog/resolver/planner/state/central log | S3, S5, S6, S8 |
+| `src/anolisa/crates/anolisa-env/SPEC.md` | EnvFacts、probe、gate | S4 |
+| `src/anolisa/crates/anolisa-platform/SPEC.md` | FsLayout、package manager、distribution install | S7, S8 |
+| `src/anolisa/crates/anolisa-build/SPEC.md` | `--from-source`、runtime build、legacy build backend | S7 |
+| `src/anolisa/manifests/SPEC.md` | Capability/Component/DistributionIndex/TargetProvider manifest 口径 | S3, S7, S9, S10 |
+| `src/anolisa/templates/*.toml` | command、manifest、DistributionIndex、installed state 模板 | S1, S3, S7, S8, S9 |
+
+注意：模板 TOML 不放在 `manifests/runtime`、`manifests/osbase`、`manifests/capabilities` 下，避免当前 loader 将模板当作真实 manifest 读取。

@@ -1,0 +1,60 @@
+# Template: public command spec.
+# Copy into command-specific docs or tests when stabilizing a command.
+
+[command]
+name = "enable"
+layer = "tier1-capability" # tier1-capability | runtime | osbase | target-provider | self | subscription
+audience = ["human", "operator"]
+stability = "stable"      # stable | experimental | hidden
+purpose = "Enable one or more ANOLISA capabilities."
+
+[inputs]
+positionals = ["capabilities"]
+flags = ["--feature", "--with-adapter", "--from-source", "--dry-run"]
+global_flags = ["--install-mode", "--prefix", "--json", "--verbose", "--quiet", "--no-color"]
+
+[output]
+default_human = "summary-first"
+json = "shared-response-model"
+quiet_behavior = "suppress non-error human output"
+verbose_behavior = "include plan details and probe reasons"
+
+[side_effects]
+filesystem_write = true
+state_write = true
+service_change = true
+network = true
+
+[dry_run]
+supported = true
+behavior = "resolve and print plan; do not write files, state, logs, or services"
+
+[idempotency]
+key = "capability + feature + install_mode + target_provider"
+expected = "safe to rerun; already-enabled objects return unchanged status"
+
+[state]
+reads = ["installed-state", "catalog", "env-facts"]
+writes = ["installed-state", "central-log", "backup-store"]
+
+[manifest]
+uses = ["capability", "component", "distribution-index", "target-provider"]
+
+[exit_codes]
+ok = 0
+not_implemented = 2
+invalid_input = 64
+precheck_failed = 70
+transaction_failed = 71
+artifact_not_found = 72
+
+[[examples]]
+command = "anolisa enable agent-observability --dry-run"
+description = "Show the AgentSight enable plan."
+
+[[examples]]
+command = "anolisa enable agent-observability --feature ebpf_tracing"
+description = "Enable the capability and then enable one feature."
+
+[open_questions]
+items = []

@@ -1,0 +1,57 @@
+# Template: DistributionIndex v1.
+# Concrete artifact URL/checksum/signature/backend live here, not in component manifests.
+
+schema_version = 1
+channel = "stable"
+generated_at = "2026-06-01T10:00:00Z"
+expires_at = "2026-07-01T10:00:00Z"
+publisher = "anolisa"
+signature = "cosign"
+
+[[components]]
+name = "agentsight"
+version = "0.5.0"
+manifest_digest = "sha256:replace-with-component-manifest-digest"
+
+[[components.artifacts]]
+artifact_id = "agentsight-0.5.0-alinux4-x86_64-rpm"
+type = "rpm"                 # rpm | deb | tar.gz | zip | npm | oci | source
+backend = "github-release"   # github-release | yum-repo | apt-repo | aliyun-oss | internal-registry | local-file
+url = "https://github.com/casparant/anolisa/releases/download/agentsight-v0.5.0/agentsight-0.5.0.alinux4.x86_64.rpm"
+os = "alinux"
+os_version = ">=4"
+arch = "x86_64"
+libc = "glibc"
+pkg_base = "rpm"
+install_modes = ["system"]
+sha256 = "replace-with-sha256"
+signature_url = "https://github.com/casparant/anolisa/releases/download/agentsight-v0.5.0/agentsight-0.5.0.alinux4.x86_64.rpm.sig"
+size = 12345678
+
+[components.artifacts.dependencies]
+rpm = ["kernel-headers"]
+
+[[components.artifacts]]
+artifact_id = "agentsight-0.5.0-linux-x86_64-tar"
+type = "tar.gz"
+backend = "aliyun-oss"
+url = "https://anolisa.oss-cn-hangzhou.aliyuncs.com/agentsight/0.5.0/agentsight-0.5.0-linux-x86_64.tar.gz"
+os = "linux"
+arch = "x86_64"
+libc = "glibc"
+install_modes = ["user", "system"]
+sha256 = "replace-with-sha256"
+signature_url = "https://anolisa.oss-cn-hangzhou.aliyuncs.com/agentsight/0.5.0/agentsight-0.5.0-linux-x86_64.tar.gz.sig"
+size = 9876543
+
+[[components.artifacts]]
+artifact_id = "agentsight-0.5.0-macos-aarch64-tar"
+type = "tar.gz"
+backend = "github-release"
+url = "https://github.com/casparant/anolisa/releases/download/agentsight-v0.5.0/agentsight-0.5.0-macos-aarch64.tar.gz"
+os = "macos"
+arch = "aarch64"
+install_modes = ["user"]
+sha256 = "replace-with-sha256"
+signature_url = "https://github.com/casparant/anolisa/releases/download/agentsight-v0.5.0/agentsight-0.5.0-macos-aarch64.tar.gz.sig"
+size = 8765432
