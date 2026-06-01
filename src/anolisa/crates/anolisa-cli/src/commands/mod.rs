@@ -5,6 +5,7 @@
 //! - **Tier 2** — independent management surfaces (subscription / adapter / self
 //!   / runtime / osbase). Each surface uses its own appropriate vocabulary.
 
+pub mod common;
 pub mod tier1;
 
 // Tier 2 surfaces

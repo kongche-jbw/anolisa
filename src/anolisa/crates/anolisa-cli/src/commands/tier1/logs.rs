@@ -12,9 +12,9 @@
 use clap::Parser;
 
 use anolisa_core::{CentralLog, LogFilter, LogKind, LogRecord, Severity};
-use anolisa_platform::fs_layout::FsLayout;
 
-use crate::context::{CliContext, InstallMode};
+use crate::commands::common::resolve_layout;
+use crate::context::CliContext;
 use crate::response::{CliError, render_json};
 
 const COMMAND: &str = "logs";
@@ -124,20 +124,6 @@ fn parse_severity(raw: &str) -> Result<Severity, CliError> {
             command: COMMAND.to_string(),
             reason: format!("--severity expects one of debug|info|warn|error, got '{other}'"),
         }),
-    }
-}
-
-/// Resolve the install-mode layout from the shared context, honoring
-/// `--prefix` for system-mode. User-mode resolves `$HOME` via
-/// [`anolisa_env::EnvService::detect`] to stay consistent with the
-/// `env` command's view of the world.
-fn resolve_layout(ctx: &CliContext) -> FsLayout {
-    match ctx.install_mode {
-        InstallMode::System => FsLayout::system(ctx.prefix.clone()),
-        InstallMode::User => {
-            let home = anolisa_env::EnvService::detect().home;
-            FsLayout::user(home)
-        }
     }
 }
 
