@@ -5,6 +5,7 @@ pub mod central_log;
 pub mod component;
 pub mod dependency;
 pub mod distribution;
+pub mod enable_plan;
 pub mod feature_flags;
 pub mod lock;
 pub mod manifest;
@@ -23,6 +24,10 @@ pub use component::{Component, ComponentMeta, ComponentStatus};
 pub use distribution::{
     ArtifactType, DistributionEntry, DistributionError, DistributionIndex, ResolveError,
     ResolveQuery,
+};
+pub use enable_plan::{
+    ArtifactPlan, ComponentPlan, EnablePlan, EnvFactsSummary, LayoutSummary, PLAN_SCHEMA_VERSION,
+    PlanError, PlanStatus, PrecheckResult, plan_enable,
 };
 pub use feature_flags::FeatureStore;
 pub use lock::{InstallLock, LockError};

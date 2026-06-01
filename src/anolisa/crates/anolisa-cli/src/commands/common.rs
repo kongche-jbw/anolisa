@@ -6,7 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
-use anolisa_core::{Catalog, CatalogLayers, InstalledState, ObjectStatus};
+use anolisa_core::{Catalog, CatalogLayers, DistributionIndex, InstalledState, ObjectStatus};
 use anolisa_platform::fs_layout::FsLayout;
 
 use crate::context::{CliContext, InstallMode};
@@ -15,6 +15,12 @@ use crate::response::CliError;
 /// Subdirectory under `datadir` and `etc_dir` where capability/component
 /// manifests live (e.g. `share/anolisa/manifests`, `etc/anolisa/manifests`).
 const MANIFESTS_SUBDIR: &str = "manifests";
+
+/// Subdirectory under `manifests/` that holds DistributionIndex files.
+const DIST_INDEX_SUBDIR: &str = "distribution-index";
+
+/// Default file name for the bundled DistributionIndex.
+const DIST_INDEX_FILE: &str = "index.toml";
 
 /// Build the layout for the active install mode, honoring `--prefix`
 /// (system-mode) and resolving `$HOME` via `EnvService::detect` (user-mode).
@@ -95,6 +101,73 @@ fn dev_tree_manifests() -> Option<PathBuf> {
     candidate.is_dir().then_some(candidate)
 }
 
+/// Load the `DistributionIndex`. Search order mirrors
+/// [`load_bundled_catalog`]'s layering so an overlay can substitute the
+/// index without rebuilding the bundle:
+///
+///   1. `manifests_overlay/distribution-index/index.toml` (e.g.
+///      `/etc/anolisa/manifests/...` in system mode,
+///      `~/.config/anolisa/manifests/...` in user mode).
+///   2. Packaged: `datadir/manifests/distribution-index/index.toml`.
+///   3. Dev-tree fallback so `cargo run` works without an install.
+///
+/// Returns `Ok(None)` when no index file is present anywhere — callers may
+/// treat that as "no prebuilt artifacts known" rather than an error so
+/// fresh checkouts without an index still produce a useful plan. The
+/// `enable --dry-run` handler in particular substitutes an empty
+/// [`DistributionIndex`] in that case so the plan still renders.
+///
+/// Today the overlay fully replaces the bundled index when present (no
+/// per-entry merging). The launch spec leaves merge semantics for a later
+/// milestone; document the current behavior in the user-facing docs.
+pub fn load_distribution_index(
+    ctx: &CliContext,
+    command: &str,
+) -> Result<Option<DistributionIndex>, CliError> {
+    let layout = resolve_layout(ctx);
+    let path = distribution_index_path(&layout);
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    DistributionIndex::load(&path)
+        .map(Some)
+        .map_err(|err| CliError::InvalidArgument {
+            command: command.to_string(),
+            reason: format!(
+                "failed to load distribution index at {}: {err}",
+                path.display(),
+            ),
+        })
+}
+
+fn distribution_index_path(layout: &FsLayout) -> Option<PathBuf> {
+    let overlay_candidate = layout
+        .manifests_overlay
+        .join(DIST_INDEX_SUBDIR)
+        .join(DIST_INDEX_FILE);
+    if overlay_candidate.is_file() {
+        return Some(overlay_candidate);
+    }
+    let manifests_root = packaged_manifests_root(layout).or_else(dev_tree_manifests)?;
+    let candidate = manifests_root.join(DIST_INDEX_SUBDIR).join(DIST_INDEX_FILE);
+    candidate.is_file().then_some(candidate)
+}
+
+/// Construct an empty in-memory [`DistributionIndex`]. Used by handlers
+/// that want a safe fallback when no index file exists so the planner can
+/// still produce a structured `blocked` plan instead of erroring out.
+pub fn empty_distribution_index() -> DistributionIndex {
+    DistributionIndex {
+        schema_version: 1,
+        channel: None,
+        generated_at: None,
+        expires_at: None,
+        publisher: None,
+        signature: None,
+        entries: Vec::new(),
+    }
+}
+
 /// Wire-friendly label for an [`ObjectStatus`] value. Shared between the
 /// `status` and `list` handlers so both surfaces speak the same vocabulary
 /// (matches launch spec §7.1: `installed | degraded | disabled | failed |
@@ -120,6 +193,8 @@ pub(crate) fn status_is_enabled(status_label: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::tempdir;
 
     /// `object_status_str` must cover every variant of `ObjectStatus` and
     /// produce the exact wire vocabulary the spec promises. If a new variant
@@ -142,5 +217,66 @@ mod tests {
         assert!(!status_is_enabled("failed"));
         assert!(!status_is_enabled("not_installed"));
         assert!(!status_is_enabled(""));
+    }
+
+    /// Empty fallback is what `enable --dry-run` substitutes when no
+    /// index file is found. It must be safe to pass straight into the
+    /// resolver (no entries, schema_version set so future migrations can
+    /// detect it).
+    #[test]
+    fn empty_distribution_index_is_empty_and_loadable() {
+        let idx = empty_distribution_index();
+        assert!(idx.entries.is_empty());
+        assert_eq!(idx.schema_version, 1);
+    }
+
+    /// Overlay-distributed `index.toml` must win over the bundled
+    /// (dev-tree) one. We use system-mode with a tmp prefix so the
+    /// overlay sits at a path we control, and a unique `publisher`
+    /// marker so we can distinguish overlay vs bundled.
+    #[test]
+    fn distribution_index_overlay_wins_over_bundled() {
+        let tmp = tempdir().expect("tmpdir");
+        let prefix = tmp.path().to_path_buf();
+        let layout = FsLayout::system(Some(prefix.clone()));
+        let overlay_dir = layout.manifests_overlay.join(DIST_INDEX_SUBDIR);
+        fs::create_dir_all(&overlay_dir).expect("mkdir overlay");
+        let overlay_index = overlay_dir.join(DIST_INDEX_FILE);
+        fs::write(
+            &overlay_index,
+            r#"schema_version = 1
+publisher = "overlay-marker"
+entries = []
+"#,
+        )
+        .expect("write overlay index");
+
+        let resolved = distribution_index_path(&layout).expect("overlay path resolved");
+        assert_eq!(resolved, overlay_index);
+        // Sanity: confirm the loaded index reflects the overlay (not the
+        // dev-tree bundled one) by checking the unique marker.
+        let idx = DistributionIndex::load(&resolved).expect("load");
+        assert_eq!(idx.publisher.as_deref(), Some("overlay-marker"));
+    }
+
+    /// Without an overlay file the lookup must fall through to the
+    /// packaged / dev-tree location — that's how `cargo run` works in
+    /// the source tree today.
+    #[test]
+    fn distribution_index_falls_back_when_overlay_missing() {
+        let tmp = tempdir().expect("tmpdir");
+        let layout = FsLayout::system(Some(tmp.path().to_path_buf()));
+        // No file created under the overlay path. The dev-tree fallback
+        // ships an index.toml, so the resolver must return SOME path —
+        // we only assert that we did fall back (i.e. did not return the
+        // overlay candidate, which doesn't exist).
+        let resolved = distribution_index_path(&layout);
+        assert!(resolved.is_some(), "dev-tree fallback should resolve");
+        let resolved = resolved.unwrap();
+        assert!(
+            !resolved.starts_with(&layout.manifests_overlay),
+            "must not return non-existent overlay path: {}",
+            resolved.display(),
+        );
     }
 }
