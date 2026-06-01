@@ -117,6 +117,9 @@ pub struct LogFilter {
     pub source: Option<String>,
     /// Match exact `component`.
     pub component: Option<String>,
+    /// Match exact `operation_id` (e.g. `op-20260601-001`). Records
+    /// whose `operation_id` is `None` never match.
+    pub operation_id: Option<String>,
     /// Match records whose severity is `>=` this value.
     pub severity_at_least: Option<Severity>,
     /// Match if the value is in `objects[]`, or — for backward
@@ -242,6 +245,12 @@ fn record_matches(record: &LogRecord, filter: &LogFilter) -> bool {
     if let Some(component) = &filter.component {
         match &record.component {
             Some(record_component) if record_component == component => {}
+            _ => return false,
+        }
+    }
+    if let Some(operation_id) = &filter.operation_id {
+        match &record.operation_id {
+            Some(record_op_id) if record_op_id == operation_id => {}
             _ => return false,
         }
     }
@@ -450,6 +459,43 @@ mod tests {
             .expect("query");
         assert_eq!(agentsight_only.len(), 2);
         assert!(agentsight_only.iter().all(|r| r.source == "agentsight"));
+    }
+
+    #[test]
+    fn query_filters_by_operation_id() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let log = CentralLog::open(dir.path().join("audit.jsonl"));
+
+        log.append(&operation_record(
+            "2026-06-01T10:00:00Z",
+            "op-20260601-001",
+            &["agent-observability"],
+            Severity::Info,
+        ))
+        .expect("append");
+        log.append(&operation_record(
+            "2026-06-01T10:00:01Z",
+            "op-20260601-002",
+            &["tokenless"],
+            Severity::Info,
+        ))
+        .expect("append");
+        log.append(&operation_record(
+            "2026-06-01T10:00:02Z",
+            "op-20260601-003",
+            &["ws-ckpt"],
+            Severity::Info,
+        ))
+        .expect("append");
+
+        let hits = log
+            .query(&LogFilter {
+                operation_id: Some("op-20260601-002".to_string()),
+                ..Default::default()
+            })
+            .expect("query");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].operation_id.as_deref(), Some("op-20260601-002"));
     }
 
     #[test]
