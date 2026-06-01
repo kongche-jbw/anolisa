@@ -45,6 +45,10 @@ nix = { version = "0.29", features = ["fs", "process", "user"] }
 # File integrity
 sha2 = "0.10"
 
+# Archive handling
+flate2 = "1"
+tar = "0.4"
+
 # Internal crates
 anolisa-core = { path = "crates/anolisa-core" }
 anolisa-env = { path = "crates/anolisa-env" }

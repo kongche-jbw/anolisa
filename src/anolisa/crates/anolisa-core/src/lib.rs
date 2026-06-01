@@ -5,8 +5,11 @@ pub mod central_log;
 pub mod component;
 pub mod dependency;
 pub mod distribution;
+pub mod download;
+pub mod enable_execute;
 pub mod enable_plan;
 pub mod feature_flags;
+pub mod install_runner;
 pub mod lock;
 pub mod manifest;
 pub mod registry;
@@ -25,11 +28,14 @@ pub use distribution::{
     ArtifactType, DistributionEntry, DistributionError, DistributionIndex, ResolveError,
     ResolveQuery,
 };
+pub use download::{DownloadCache, DownloadError, DownloadedArtifact};
+pub use enable_execute::{ExecuteError, ExecuteInstalledFile, ExecuteOutcome, execute_enable};
 pub use enable_plan::{
     ArtifactPlan, ComponentPlan, EnablePlan, EnvFactsSummary, LayoutSummary, PLAN_SCHEMA_VERSION,
     PlanError, PlanStatus, PrecheckResult, plan_enable,
 };
 pub use feature_flags::FeatureStore;
+pub use install_runner::{InstallError, InstallOutcome, InstallRunner, InstalledFile};
 pub use lock::{InstallLock, LockError};
 pub use manifest::DistributionSelector;
 pub use registry::Registry;

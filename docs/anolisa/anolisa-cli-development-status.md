@@ -4,7 +4,7 @@
 
 - 日期：2026-06-01
 - 分支：`kongche/dev/anolisa-p1`
-- HEAD：P1-E2 完成 + fixup（component env prechecks、missing index 不再致命、overlay 优先、resolved_files 渲染）
+- HEAD：P1-F 完成（enable agent-observability 真实执行路径：download + install + state + central-log + lock）
 - 定位：P1 可开发骨架；不是可安装组件的产品形态
 
 ## 当前结论
@@ -20,8 +20,9 @@
 - `DistributionIndex` 查找顺序与 Catalog 对齐：`manifests_overlay/distribution-index/index.toml`（按 install mode 对应 `/etc` 或 `~/.config`）→ packaged `datadir/manifests/...` → dev-tree。overlay 当前是整文件替换，不做条目合并。
 - `ComponentPlan.resolved_files` 把 manifest 模板（如 `{bindir}/agentsight`）按 `FsLayout` 渲染成真实路径，`files` 字段保留模板原文以表达 manifest intent。
 - Catalog 加载已修正为分层装配：bundled = packaged `datadir/manifests`（缺时回落 dev-tree manifests），overlay = `manifests_overlay` 按 install mode 挂作 `system` 或 `user` 层叠加，不再被 overlay 替代。
-- 所有真实有副作用命令（`enable`（非 dry-run）/`disable`/`restart`/`update`/...）仍返回 `NOT_IMPLEMENTED`。
-- `backup.rs` 仍是 plan-only；因此真实 `enable/install/uninstall/update/restart/rollback` 不能打开执行路径。
+- `enable agent-observability`（无 `--dry-run`，单 capability，无 `--feature` / `--with-adapter` / `--from-source`）已落地为第一条真实执行路径：通过 `DownloadCache` 拉取 artifact（当前仅 `file://`，后续 scheme 待加）、用 `InstallRunner` 将文件落到 ANOLISA-owned roots（`bin_dir` / `etc_dir` / `state_dir` / `lib_dir` / `libexec_dir` / `datadir` / `log_dir` / `cache_dir`）、写入 `InstalledState v1` 的 capability + per-component 对象（含 sha256 / services / files / OperationRecord）、按 `operation_id` 在 `CentralLog` 追加 `started` 与 `succeeded`（失败时 `failed`）、整段操作持有 `InstallLock`；任何中途失败会自清理：unlink 本次 op 写入的 ANOLISA-owned 文件、best-effort 写 `Failed` 日志、释放锁。
+- 其它所有真实有副作用命令（`disable` / `restart` / `update` / `uninstall` / `subscription` / `adapter` / `self` / `runtime *` / `osbase *` / …）仍返回 `NOT_IMPLEMENTED`。
+- `backup.rs` 仍是 plan-only；因此 external-file 修改类的执行路径（adapter 改第三方配置 / rollback 还原外部状态）继续禁止，本里程碑只允许 ANOLISA-owned files。
 
 ## 当前可用命令
 
@@ -41,7 +42,12 @@ cargo run -- status agent-observability --json
 cargo run -- enable agent-observability --dry-run
 cargo run -- enable agent-observability --dry-run --json
 cargo run -- --install-mode system enable agent-observability --dry-run
+cargo run -- --install-mode user enable agent-observability
+cargo run -- --install-mode user enable agent-observability --json
+cargo run -- --install-mode user --verbose enable agent-observability
 ```
+
+> 真实执行需要 distribution-index 里存在 host 可命中的 `agent-observability` artifact。fresh checkout 下 bundled `manifests/distribution-index/index.toml` 当前并不含 macOS / aarch64 二进制，因此在开发机上直接跑（无 overlay）会以 `INVALID_ARGUMENT` + `plan is blocked` 收尾。推荐的 P1-F smoke 流程：搭一个 overlay distribution-index 用 `file://` 指向本地 fake binary，并通过 `--install-mode system --prefix /tmp/anolisa-smoke` 让所有写入落到 tmp 目录里（system mode honors `--prefix`，user mode 不会 — 见 `FsLayout`）。
 
 ### `env`
 
@@ -138,11 +144,69 @@ cargo run -- --install-mode system enable agent-observability --dry-run
 - `kernel_min` 比较是简单的数字前缀语义（`5.15.0-anolis23.x86_64` 取 `5.15.0`），无法解析时回退 `warn`；尚未按 OS 类型 gate（macOS host 的 `25.3.0` 在 numeric 上 >= `5.8`，但 OS precheck 已先一步把整体 plan 标 blocked）。
 - DistributionIndex overlay 当前是整文件替换，不做 entry-level 合并；如果用户需要在 overlay 里追加少量 entry，需要把完整 entry 列表复制到 overlay 文件。
 
+### `enable agent-observability` (no --dry-run)
+
+状态：可用（P1-F）。
+
+能力：
+
+- CLI 形态严格收敛到：单 capability == `agent-observability`、无 `--feature` / `--with-adapter` / `--from-source`、走 `--dry-run` 同款 plan 构建链路（catalog → distribution-index → env → layout → `plan_enable`）。
+- 命中 `plan.status == Ready | Degraded` 后调用 `anolisa_core::execute_enable(plan, layout, actor)`，整段执行包在 `InstallLock`（`state_dir/lock`）里：
+  1. plan == `Blocked` 直接拒绝，不打开锁、不写日志、不动文件；
+  2. 拿到锁后追加 `started` `LogRecord`（`kind=operation`、`status=null`、`severity=info`、`operation_id` 唯一）；
+  3. 依次对每个 component 执行 `DownloadCache.fetch` → `InstallRunner.install`；
+  4. 全部组件成功 → 加载 / 新建 `InstalledState v1`，upsert capability + per-component 对象（component 含 `OwnedFile { path, owner=Anolisa, sha256 }`、`ServiceRef { manager=systemd|systemd-user }`、`status=Installed`、`last_operation_id`），追加 `OperationRecord { status="ok" }` 并 `save`；
+  5. 追加 `succeeded` `LogRecord`（`status=ok`、复制 plan warnings）；释放锁；
+  6. 中途任一步失败：unlink 本次 op 已落盘的 ANOLISA-owned 文件、best-effort 追加 `failed` `LogRecord`（`status=failed`、`severity=error`、message 含原始 error）、释放锁、把原 error 原样返回给 CLI。
+- `actor` 取 `$USER` → `$LOGNAME` → `"cli"` 兜底，统一写入 started / succeeded / failed 三类 `LogRecord` 与 `OperationRecord`。
+- JSON 输出（`ExecutePayload`）：`operation_id` / `capability` / `install_mode` / `components` / `installed_files [{component, path, sha256}]` / `state_path` / `central_log_path` / `warnings`。人类输出按 `enable <cap> succeeded` / `operation_id` / `install_mode` / `components` / `installed_files (N)` / `state` / `log` / `warnings` 分段；默认 sha256 取前 8 字符，`--verbose` 渲染完整 64 位。
+
+错误映射（P1-F 阶段统一收敛到 `INVALID_ARGUMENT` / exit 2，便于不动 `response.rs`）：
+
+| `ExecuteError` | CLI reason 摘要 |
+|---|---|
+| `LockHeld { path }` | `install lock at <path> is held by another process — run again after the other invocation finishes` |
+| `PlanNotExecutable { status, reason }` | `plan is <status>: <reason> — run \`anolisa enable agent-observability --dry-run\` for details and resolve blockers before retrying` |
+| `MissingArtifact { component }` | `component '<c>' has no resolved artifact (catalog vs distribution-index mismatch — check ...)` |
+| `Download { component, source }` | `download for component '<c>' failed: <source>`（含 `ChecksumMismatch` / `UnsupportedScheme` / IO 等） |
+| `Install { component, source }` | `install for component '<c>' failed: <source>`（含 `UnsupportedArtifactType` / `ExternalPath` / IO 等） |
+| `State { source }` | `installed state write failed: <source>` |
+| `Log { source }` | `central log write failed: <source>` |
+| `Lock { source }` | `install lock io: <source>` |
+
+> 真正合适的 exit code 是新增 `EXECUTION_FAILED`（exit 1，与 argument 错误区分）；本里程碑保持 CLI 错误面不变，留 TODO 在 `enable.rs` 里指向 P1-G。
+
+约束：
+
+- 只放行 `agent-observability`；其它 capability 仍 `NOT_IMPLEMENTED`，hint 指向 supported capability。
+- 只支持 `single_binary` / `binary` 与 `tar_gz` artifact（由 `InstallRunner` 决定），其它 backend 落到 `UnsupportedArtifactType`。
+- 只支持 `file://` URL（由 `DownloadCache` 决定），其它 scheme 落到 `UnsupportedScheme`。
+- 拒绝 `Blocked` plan；允许 `Degraded`（视为可执行，spec 与 Sub-C 一致）。
+- 仅写 ANOLISA-owned roots（`bin_dir` / `etc_dir` / `state_dir` / `lib_dir` / `libexec_dir` / `datadir` / `log_dir` / `cache_dir`）。任何 dest 落到根外即 `ExternalPath`；外部文件不进 transaction、不进 backup，整个 milestone 不动。
+- service enablement / systemd reload / health probe 全部不在范围内：写到 state 的 `ServiceRef.enabled = false`，留给后续命令处理。
+
+`InstalledState` 写入：
+
+- `kind=Capability` 对象：`name=plan.capability`、`version=plan.stability`（capability 无独立版本字段）、`status=Installed`、`component_refs=plan.components[].name`、`last_operation_id=<id>`。
+- `kind=Component` 对象：`name=c.name`、`version=c.manifest_version`、`status=Installed`、`files=[OwnedFile { path, Anolisa, sha256 }]`、`services=[ServiceRef { name, manager, restartable=true, enabled=false }]`、`distribution_source=c.artifact.url`、`last_operation_id=<id>`。
+- `OperationRecord { id, command="enable <cap>", status="ok", started_at, finished_at }`。
+
+`CentralLog` 写入：
+
+- 同一 `operation_id` 下追加 `started`（`status=null`，`severity=info`）和 `succeeded` (`status=ok`，`severity=info`，warnings 复制自 plan) 两条记录；失败路径用 `failed`（`status=failed`，`severity=error`）替换 `succeeded`。
+- 查询：`anolisa logs --operation-id <id>` / `--operation-id <id> --json` 即可看到这两条；空 log 文件不视为错误。
+
+限制：
+
+- 不做 transaction / backup / rollback：若 `state.save` 之后 / `succeeded` 写入失败，cleanup 仍会 unlink ANOLISA-owned 文件并追加 `failed` 日志，但已经持久化的 state 文件不会撤销（属于已知的 P1-F 边界）。
+- DownloadCache 当前只接 `file://`；HTTPS / signature verification 在 P1-G。
+- InstallRunner 当前只接 `binary` / `tar_gz`；rpm / deb / oci / file 等 backend 后续里程碑。
+
 ## 当前未实现命令
 
 以下命令已公开命令面，但仍应返回 `NOT_IMPLEMENTED` 或只允许后续 dry-run plan：
 
-- `enable`（仅 `agent-observability --dry-run` 已接入 planner，其余形态仍 `NOT_IMPLEMENTED`）
+- `enable`（`agent-observability` 单 capability + 无 `--feature` / `--with-adapter` / `--from-source` 时 dry-run 与真实执行都已落地；其余 capability / flag 组合仍 `NOT_IMPLEMENTED`）
 - `disable`
 - `doctor`
 - `restart`
@@ -171,12 +235,13 @@ cargo run -- enable agent-observability --dry-run --json
 
 已确认：
 
-- `cargo test --workspace`：99 tests passed（CLI 26 + core 57 + capability_manifest 1 + env 6 + platform 9）。
+- `cargo test --workspace`：124 tests passed（CLI 28 + core 80 + capability_manifest 1 + env 6 + platform 9）。
 - `cargo fmt --all -- --check`：通过。
 - `anolisa env --json`：返回 `ok: true`。
 - `anolisa logs --json`：fresh install 返回 `ok: true, data: []`。
 - `anolisa list --json` / `anolisa status [CAPABILITY] --json`：返回 envelope，未安装条目带 `status: not_installed`。
 - `anolisa enable agent-observability --dry-run --json`：在 macOS host 上返回 `ok: true, data.status: "blocked"`（precheck `os` 失败：expected linux, actual macos），无 panic、不写任何文件。
+- `anolisa --install-mode system --prefix <tmp> enable agent-observability --json`（Smoke A，macOS host）：返回 `ok: false`、`error.code = INVALID_ARGUMENT`、reason 同时包含 `blocked` 与 `--dry-run`、exit code 2，且 `<tmp>/var/lib/anolisa/installed.toml` 与 `<tmp>/var/log/anolisa/central.jsonl` 均未创建（Sub-C 规定 Blocked plan 在 lock / log 之前拒绝）。Linux happy-path Smoke B 在 macOS dev host 上无法直接执行，留待 CI / Linux env 跑：预期 `ok: true, data.operation_id` 非空，`<tmp>` 下出现 `installed.toml`（含 capability + agentsight 对象、`OperationRecord.status="ok"`）+ `central.jsonl`（2 行，同 operation_id，第二行 `status=ok`），`anolisa logs --operation-id <id> --json` 能查询到 started + succeeded。
 
 ## enable 是否是最高优先级
 
@@ -258,7 +323,7 @@ anolisa logs agent-observability
 - ✅ DistributionIndex 查找按 overlay → packaged → dev-tree（与 Catalog 分层一致）。
 - ✅ Smoke：macOS / aarch64 host 上输出结构完整的 `blocked` plan（precheck `os` fail + `agentsight.os` fail + `agentsight.btf` warn），不写文件，不 panic。
 
-### P1-F：enable execute 最小闭环
+### P1-F：enable execute 最小闭环（已完成）
 
 目标：只打开最窄的真实执行路径，不做泛化。
 
@@ -268,14 +333,28 @@ anolisa logs agent-observability
 agent-observability -> agentsight -> prebuilt tar_gz 或 rpm -> user-mode install
 ```
 
-范围限制：
+范围限制（落地版）：
 
-- 先只支持一个 P0 capability。
-- 先只支持预编译 artifact。
-- 先不支持 adapter 自动修改第三方 agent 配置。
-- 先不支持 source build。
-- 先不支持复杂 rollback，只允许安装 ANOLISA-owned files；任何 external file 修改继续禁止。
-- 成功后必须写 `InstalledState` 和 `CentralLog`。
+- ✅ 只支持一个 P0 capability（`agent-observability`），CLI scope 守卫强制。
+- ✅ 只支持预编译 artifact；`--from-source` 显式 `NOT_IMPLEMENTED`。
+- ✅ 不支持 adapter 自动改第三方配置；`--with-adapter` 显式 `NOT_IMPLEMENTED`。
+- ✅ 不支持 source build。
+- ✅ 不支持复杂 rollback，只安装 ANOLISA-owned files；external file 修改继续禁止（`InstallRunner` 抛 `ExternalPath`）。
+- ✅ 成功后写 `InstalledState v1`（capability + 各 component 对象 + `OperationRecord`）与 `CentralLog`（started + succeeded）。
+- ✅ `InstallLock` 端到端使用：整个 execute 段在锁内，contention 直接 `LockHeld` 拒绝。
+- ✅ 下载器（Sub-A，`DownloadCache`，仅 `file://` + sha256）、install runner（Sub-B，`InstallRunner`，仅 `binary` / `tar_gz`）、orchestrator（Sub-C，`enable_execute`，cleanup + failed log）、CLI wiring（Sub-D，本文档对应 commit）全部 green。
+
+### P1-G：execute 路径补齐与对称命令
+
+P1-F 落地后还差几个明确缺口，按落地难度排：
+
+- `CliError::Runtime { command, reason }` + `EXECUTION_FAILED` 错误码（exit 1）：把 download / install / state / log / lock 等 runtime 失败从 `INVALID_ARGUMENT`（exit 2）里独立出来，便于上游脚本区分参数错误 vs 真实执行错误。
+- DownloadCache 加 HTTPS scheme + retry / progress：当前 `file://` only，覆盖 GitHub Release 之类的真实 artifact 源。
+- Signature verification：在 sha256 之外要求 detached signature（首版可走 minisign / cosign），与 distribution-index 已有的 `signature` 字段对齐。
+- 扩 artifact backend：rpm / deb（走系统包管理器、保留 transaction 概念）、oci（image pull）、tar_xz 等。
+- `disable` 对称路径：用同套 `InstallLock` + `CentralLog` 脚手架解绑 state objects，并 unlink ANOLISA-owned files；不在 Sub-D 范围内但库层（state.upsert_object / state.remove_object）已就绪。
+- 首条 external-file adapter case：要求 transaction / backup 真接，从 `backup.rs` 的 plan-only 升级到 copy/restore 能跑通；以一个 well-defined adapter（如 sshd_config 改一行）为目标。
+- `update` / `uninstall`：在 `disable` 落地后基于 InstalledState diff 渐进打开。
 
 ## 待决策问题
 
@@ -289,5 +368,6 @@ agent-observability -> agentsight -> prebuilt tar_gz 或 rpm -> user-mode instal
 
 - ✅ `list` 和 `status` 只读 CLI wiring（P1-E1 已完成）。
 - ✅ `enable agent-observability --dry-run` 接入 `plan_enable`（P1-E2 已完成）。
-- 下一步：打开 `enable agent-observability` 的最小真实安装闭环（P1-F）。需要按依赖序解锁：downloader + checksum → install runner（先 tar_gz / 单 binary）→ `InstalledState` 写入 → `CentralLog` operation 写入 → 最窄 backup/rollback（仅 ANOLISA-owned files）→ `InstallLock` 端到端使用。
-- 所有 mutating 命令在 transaction/backup/rollback 未完成前继续返回 `NOT_IMPLEMENTED`。
+- ✅ `enable agent-observability` 最小真实安装闭环（P1-F 已完成）：`DownloadCache` (`file://` + sha256) → `InstallRunner` (`binary` / `tar_gz`，仅 ANOLISA-owned roots) → `InstalledState v1` capability + component upsert → `CentralLog` started/succeeded/failed → `InstallLock` 整段持有 → 中途失败自清理。
+- 下一步是 P1-G（上面列出的方向：tighter exit code、网络下载、签名校验、disable / uninstall 对称路径）。
+- 其它 mutating 命令（`disable` / `restart` / `update` / `uninstall` / `subscription` / `adapter` / `self` / `runtime *` / `osbase *` 等）在 P1-G 之前继续返回 `NOT_IMPLEMENTED`。
