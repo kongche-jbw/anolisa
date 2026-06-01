@@ -11,6 +11,7 @@
 //! current bundled fixture layout. Unknown keys are silently ignored so that
 //! schema growth in either direction does not break existing artifacts.
 
+use crate::distribution::ArtifactType;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -106,7 +107,11 @@ pub struct ComponentManifest {
     pub schema_version: u32,
     pub component: ComponentMeta,
     pub source: SourceSpec,
-    pub distribution_selectors: Vec<String>,
+    /// Structured selector list. Each entry says "for this install_mode + OS
+    /// family + arch (+optional libc/pkg_base), prefer these artifact types
+    /// in order". The resolver feeds `preferred_artifact_types` into
+    /// `ResolveQuery` as the tiebreaker.
+    pub distribution_selectors: Vec<DistributionSelector>,
     pub build: BuildSpec,
     pub install: InstallSpec,
     pub env_requirements: EnvRequirements,
@@ -114,6 +119,24 @@ pub struct ComponentManifest {
     pub features: Vec<FeatureSpec>,
     pub adapters: Vec<String>,
     pub health: HealthSpec,
+}
+
+/// Structured distribution selector, surfaced for downstream consumers
+/// (resolver, planner, doctor).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DistributionSelector {
+    #[serde(default)]
+    pub install_mode: Option<String>,
+    #[serde(default)]
+    pub os: Vec<String>,
+    #[serde(default)]
+    pub arch: Vec<String>,
+    #[serde(default)]
+    pub libc: Option<String>,
+    #[serde(default)]
+    pub pkg_base: Option<String>,
+    #[serde(default)]
+    pub preferred_artifact_types: Vec<ArtifactType>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -224,6 +247,21 @@ struct DistributionSelectorRaw {
     libc: Option<String>,
     #[serde(default)]
     pkg_base: Option<String>,
+    #[serde(default)]
+    preferred_artifact_types: Vec<ArtifactType>,
+}
+
+impl From<DistributionSelectorRaw> for DistributionSelector {
+    fn from(raw: DistributionSelectorRaw) -> Self {
+        Self {
+            install_mode: raw.install_mode,
+            os: raw.os,
+            arch: raw.arch,
+            libc: raw.libc,
+            pkg_base: raw.pkg_base,
+            preferred_artifact_types: raw.preferred_artifact_types,
+        }
+    }
 }
 
 #[derive(Deserialize, Default)]
@@ -329,8 +367,7 @@ impl From<ComponentManifestRaw> for ComponentManifest {
             .map(|d| {
                 d.selectors
                     .into_iter()
-                    .map(selector_to_string)
-                    .filter(|s| !s.is_empty())
+                    .map(DistributionSelector::from)
                     .collect()
             })
             .unwrap_or_default();
@@ -427,23 +464,6 @@ fn source_from_raw(raw: SourceRaw) -> SourceSpec {
         path: raw.path,
         url: raw.url,
     }
-}
-
-fn selector_to_string(s: DistributionSelectorRaw) -> String {
-    let os = if s.os.is_empty() {
-        "*".to_string()
-    } else {
-        s.os.join("|")
-    };
-    let arch = if s.arch.is_empty() {
-        "*".to_string()
-    } else {
-        s.arch.join("|")
-    };
-    let libc = s.libc.unwrap_or_else(|| "*".to_string());
-    let mode = s.install_mode.unwrap_or_else(|| "any".to_string());
-    let pkg = s.pkg_base.unwrap_or_else(|| "any".to_string());
-    format!("{mode}:{os}/{arch}/{libc}/{pkg}")
 }
 
 // ---------------------------------------------------------------------------

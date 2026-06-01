@@ -12,16 +12,37 @@
 //! It only loads TOML and resolves a query to a single matching entry.
 
 use semver::Version;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::path::Path;
 
 /// Top-level DistributionIndex document.
 ///
 /// This is the in-memory shape used by the resolver. The on-disk TOML uses
 /// `[[entries]]` array-of-tables so each entry is self-describing.
+///
+/// Optional top-level meta fields (`channel`, `generated_at`, `expires_at`,
+/// `publisher`, `signature`) are descriptive: they document the index as a
+/// whole and may default values per `[[entries]]` rows (today only `channel`
+/// participates in resolver matching when explicitly set on a row).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DistributionIndex {
     pub schema_version: u32,
+    /// Default channel for this index. Entries with an explicit
+    /// `channel` override take precedence over this default.
+    #[serde(default)]
+    pub channel: Option<String>,
+    /// ISO-8601 timestamp when this index was published.
+    #[serde(default)]
+    pub generated_at: Option<String>,
+    /// ISO-8601 timestamp after which this index should be considered stale.
+    #[serde(default)]
+    pub expires_at: Option<String>,
+    /// Publishing party (e.g. `"anolisa"`, `"internal-mirror"`).
+    #[serde(default)]
+    pub publisher: Option<String>,
+    /// Index-level signature scheme (e.g. `"cosign"`).
+    #[serde(default)]
+    pub signature: Option<String>,
     #[serde(default)]
     pub entries: Vec<DistributionEntry>,
 }
@@ -54,21 +75,64 @@ pub struct DistributionEntry {
     pub sha256: Option<String>,
     #[serde(default)]
     pub signature: Option<String>,
+    /// Stable artifact identifier (e.g. `"agentsight-0.5.0-alinux4-x86_64-rpm"`).
+    #[serde(default)]
+    pub artifact_id: Option<String>,
+    /// Digest of the component manifest this artifact was built from.
+    #[serde(default)]
+    pub manifest_digest: Option<String>,
+    /// Artifact size in bytes (purely informational).
+    #[serde(default)]
+    pub size: Option<u64>,
+    /// External signature URL (e.g. `*.sig` companion file).
+    #[serde(default)]
+    pub signature_url: Option<String>,
+    /// OS version constraint (e.g. `">=4"`, `"22.04"`).
+    #[serde(default)]
+    pub os_version: Option<String>,
     /// Sibling components this artifact depends on (by component name).
     #[serde(default)]
     pub dependencies: Vec<String>,
 }
 
 /// Supported on-the-wire artifact types.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+///
+/// Wire form is snake_case (`rpm`, `deb`, `tar_gz`, `zip`, `oci`, `file`,
+/// `binary`). The custom `Deserialize` impl is lenient: it accepts the
+/// legacy spellings `tar.gz` and `tar` and normalizes them to [`TarGz`].
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum ArtifactType {
     Rpm,
     Deb,
-    Tar,
+    TarGz,
+    Zip,
     Oci,
     File,
     Binary,
+}
+
+impl<'de> Deserialize<'de> for ArtifactType {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        match raw.as_str() {
+            "rpm" => Ok(Self::Rpm),
+            "deb" => Ok(Self::Deb),
+            // Accept `tar_gz`, `tar.gz`, and the legacy `tar` spelling.
+            "tar_gz" | "tar.gz" | "tar" => Ok(Self::TarGz),
+            "zip" => Ok(Self::Zip),
+            "oci" => Ok(Self::Oci),
+            "file" => Ok(Self::File),
+            "binary" => Ok(Self::Binary),
+            other => Err(serde::de::Error::unknown_variant(
+                other,
+                &["rpm", "deb", "tar_gz", "zip", "oci", "file", "binary"],
+            )),
+        }
+    }
 }
 
 /// Resolver query. Borrowed so callers can build it without allocating.
@@ -84,6 +148,10 @@ pub struct ResolveQuery<'a> {
     pub arch: &'a str,
     pub libc: Option<&'a str>,
     pub pkg_base: Option<&'a str>,
+    /// Ordered tiebreaker. When more than one entry survives version
+    /// selection, the first listed type that matches *any* candidate is
+    /// preferred. An empty slice preserves legacy ambiguity behavior.
+    pub preferred_types: &'a [ArtifactType],
 }
 
 /// Resolver errors. These are vocabulary errors — IO and parse errors live in
@@ -132,14 +200,18 @@ impl DistributionIndex {
     ///
     /// Filter rules (in order):
     ///   1. `component` exact match.
-    ///   2. `channel` exact match (default "stable").
+    ///   2. `channel` exact match (query default "stable").
     ///   3. `install_mode` must appear in the entry's `install_modes`.
     ///   4. `os` exact match.
     ///   5. `arch` exact match OR entry arch == "any".
     ///   6. `libc` and `pkg_base`: if entry has Some, query must match.
     ///      If entry has None, accepted for any query value.
-    ///   7. `version`: if Some, exact match. If None, pick the highest by
-    ///      semver if all candidate versions parse, else lexicographic.
+    ///   7. `version`: if Some, exact match. If None, keep only entries with
+    ///      the highest semver version (lexicographic fallback).
+    ///   8. Tiebreaker: if `preferred_types` is non-empty and more than one
+    ///      candidate remains, the first type in `preferred_types` that
+    ///      matches any candidate wins; non-matching entries are dropped.
+    ///   9. Exactly one candidate -> Ok; zero -> NotFound; more -> Ambiguous.
     pub fn resolve(&self, q: &ResolveQuery<'_>) -> Result<DistributionEntry, ResolveError> {
         let want_channel = q.channel.unwrap_or("stable");
 
@@ -172,28 +244,39 @@ impl DistributionIndex {
             };
         }
 
-        // 7b: version selection.
-        let picked: DistributionEntry = match q.version {
+        // 7b: version selection — narrow `candidates` rather than picking
+        // eagerly, so the preferred-type tiebreaker can run afterwards.
+        match q.version {
             Some(v) => {
-                let filtered: Vec<&DistributionEntry> = candidates
-                    .iter()
-                    .copied()
-                    .filter(|e| e.version == v)
-                    .collect();
-                match filtered.len() {
-                    0 => return Err(ResolveError::NotFound),
-                    1 => filtered[0].clone(),
-                    _ => {
-                        return Err(ResolveError::Ambiguous(
-                            filtered.into_iter().cloned().collect(),
-                        ));
-                    }
+                candidates.retain(|e| e.version == v);
+                if candidates.is_empty() {
+                    return Err(ResolveError::NotFound);
                 }
             }
-            None => pick_highest(&candidates),
-        };
+            None => {
+                retain_highest_version(&mut candidates);
+            }
+        }
 
-        Ok(picked)
+        // 8: preferred-type tiebreaker. Empty preferences keep legacy
+        // behavior — multiple candidates surface as Ambiguous below.
+        if candidates.len() > 1 && !q.preferred_types.is_empty() {
+            for preferred in q.preferred_types {
+                if candidates.iter().any(|e| e.artifact_type == *preferred) {
+                    candidates.retain(|e| e.artifact_type == *preferred);
+                    break;
+                }
+            }
+        }
+
+        // 9: final cardinality check.
+        match candidates.len() {
+            0 => Err(ResolveError::NotFound),
+            1 => Ok(candidates[0].clone()),
+            _ => Err(ResolveError::Ambiguous(
+                candidates.into_iter().cloned().collect(),
+            )),
+        }
     }
 }
 
@@ -206,12 +289,14 @@ fn matches_optional(entry_val: Option<&str>, query_val: Option<&str>) -> bool {
     }
 }
 
-/// Pick the entry with the highest version. Uses semver when every candidate
-/// version parses; otherwise falls back to lexicographic comparison. With
-/// multiple candidates sharing the top version, the first wins (we cannot
-/// raise Ambiguous here because the caller asked for `latest`).
-fn pick_highest(candidates: &[&DistributionEntry]) -> DistributionEntry {
-    debug_assert!(!candidates.is_empty(), "pick_highest needs >=1 candidate");
+/// Narrow `candidates` to the entries that share the highest version. Uses
+/// semver when every candidate version parses; otherwise falls back to
+/// lexicographic comparison. `candidates` is mutated in place and is
+/// guaranteed non-empty on input.
+fn retain_highest_version(candidates: &mut Vec<&DistributionEntry>) {
+    if candidates.len() <= 1 {
+        return;
+    }
 
     let parsed: Option<Vec<Version>> = candidates
         .iter()
@@ -219,20 +304,22 @@ fn pick_highest(candidates: &[&DistributionEntry]) -> DistributionEntry {
         .collect();
 
     if let Some(versions) = parsed {
-        let (best_idx, _) = versions
+        let mut best = versions[0].clone();
+        for v in versions.iter().skip(1) {
+            if *v > best {
+                best = v.clone();
+            }
+        }
+        let best_str = best.to_string();
+        candidates.retain(|e| e.version == best_str);
+    } else {
+        let best = candidates
             .iter()
-            .enumerate()
-            .max_by(|(_, a), (_, b)| a.cmp(b))
-            .unwrap_or((0, &versions[0]));
-        return candidates[best_idx].clone();
+            .map(|e| e.version.clone())
+            .max()
+            .unwrap_or_default();
+        candidates.retain(|e| e.version == best);
     }
-
-    let best = candidates
-        .iter()
-        .max_by(|a, b| a.version.cmp(&b.version))
-        .copied()
-        .unwrap_or(candidates[0]);
-    best.clone()
 }
 
 #[cfg(test)]
@@ -256,6 +343,11 @@ mod tests {
             install_modes: vec!["system".into()],
             sha256: Some("0".repeat(64)),
             signature: None,
+            artifact_id: None,
+            manifest_digest: None,
+            size: None,
+            signature_url: None,
+            os_version: None,
             dependencies: vec!["kernel-headers".into()],
         }
     }
@@ -270,6 +362,7 @@ mod tests {
             arch: "x86_64",
             libc: Some("glibc"),
             pkg_base: Some("anolis23"),
+            preferred_types: &[],
         }
     }
 
@@ -277,6 +370,11 @@ mod tests {
     fn toml_roundtrip_preserves_entries() {
         let index = DistributionIndex {
             schema_version: 1,
+            channel: None,
+            generated_at: None,
+            expires_at: None,
+            publisher: None,
+            signature: None,
             entries: vec![sample_entry()],
         };
 
@@ -309,6 +407,11 @@ mod tests {
     fn resolve_wrong_arch_returns_not_found() {
         let index = DistributionIndex {
             schema_version: 1,
+            channel: None,
+            generated_at: None,
+            expires_at: None,
+            publisher: None,
+            signature: None,
             entries: vec![sample_entry()],
         };
         let mut q = linux_x86_query("agentsight", "system");
@@ -325,6 +428,11 @@ mod tests {
 
         let index = DistributionIndex {
             schema_version: 1,
+            channel: None,
+            generated_at: None,
+            expires_at: None,
+            publisher: None,
+            signature: None,
             entries: vec![sample_entry(), newer.clone()],
         };
 
@@ -345,6 +453,11 @@ mod tests {
 
         let index = DistributionIndex {
             schema_version: 1,
+            channel: None,
+            generated_at: None,
+            expires_at: None,
+            publisher: None,
+            signature: None,
             entries: vec![a, b],
         };
 
@@ -361,6 +474,11 @@ mod tests {
     fn resolve_unsupported_mode_distinguishes_from_not_found() {
         let index = DistributionIndex {
             schema_version: 1,
+            channel: None,
+            generated_at: None,
+            expires_at: None,
+            publisher: None,
+            signature: None,
             entries: vec![sample_entry()],
         };
         let q = linux_x86_query("agentsight", "user");
@@ -371,6 +489,11 @@ mod tests {
     fn load_from_tempfile_roundtrips() {
         let index = DistributionIndex {
             schema_version: 1,
+            channel: None,
+            generated_at: None,
+            expires_at: None,
+            publisher: None,
+            signature: None,
             entries: vec![sample_entry()],
         };
         let toml_str = index.to_toml_string().expect("serialize");
@@ -381,5 +504,165 @@ mod tests {
 
         assert_eq!(loaded.entries.len(), 1);
         assert_eq!(loaded.entries[0], index.entries[0]);
+    }
+
+    #[test]
+    fn template_distribution_index_loads_with_expected_entries() {
+        let template = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../templates/distribution-index.toml");
+        let index = DistributionIndex::load(&template).expect("load template");
+
+        assert_eq!(index.schema_version, 1);
+        assert_eq!(index.channel.as_deref(), Some("stable"));
+        assert_eq!(index.publisher.as_deref(), Some("anolisa"));
+        assert_eq!(index.signature.as_deref(), Some("cosign"));
+        assert_eq!(
+            index.entries.len(),
+            3,
+            "template should ship 3 example entries"
+        );
+        // All template entries should belong to the agentsight component.
+        assert!(index.entries.iter().all(|e| e.component == "agentsight"));
+    }
+
+    fn rpm_and_targz_entries() -> Vec<DistributionEntry> {
+        let rpm = DistributionEntry {
+            component: "agentsight".into(),
+            version: "0.1.0".into(),
+            channel: "stable".into(),
+            artifact_type: ArtifactType::Rpm,
+            backend: "rpm".into(),
+            url: "https://example.invalid/agentsight-0.1.0.rpm".into(),
+            os: "linux".into(),
+            arch: "x86_64".into(),
+            libc: Some("glibc".into()),
+            pkg_base: Some("anolis23".into()),
+            install_modes: vec!["system".into()],
+            sha256: Some("0".repeat(64)),
+            signature: None,
+            artifact_id: None,
+            manifest_digest: None,
+            size: None,
+            signature_url: None,
+            os_version: None,
+            dependencies: vec![],
+        };
+        let mut tar = rpm.clone();
+        tar.artifact_type = ArtifactType::TarGz;
+        tar.backend = "tar".into();
+        tar.url = "https://example.invalid/agentsight-0.1.0.tar.gz".into();
+        vec![rpm, tar]
+    }
+
+    #[test]
+    fn resolve_preferred_types_prefers_rpm_when_listed_first() {
+        let index = DistributionIndex {
+            schema_version: 1,
+            channel: None,
+            generated_at: None,
+            expires_at: None,
+            publisher: None,
+            signature: None,
+            entries: rpm_and_targz_entries(),
+        };
+        let prefs = [ArtifactType::Rpm, ArtifactType::TarGz];
+        let mut q = linux_x86_query("agentsight", "system");
+        q.version = Some("0.1.0");
+        q.preferred_types = &prefs;
+
+        let entry = index.resolve(&q).expect("resolve");
+        assert_eq!(entry.artifact_type, ArtifactType::Rpm);
+    }
+
+    #[test]
+    fn resolve_preferred_types_prefers_tar_gz_when_listed_first() {
+        let index = DistributionIndex {
+            schema_version: 1,
+            channel: None,
+            generated_at: None,
+            expires_at: None,
+            publisher: None,
+            signature: None,
+            entries: rpm_and_targz_entries(),
+        };
+        let prefs = [ArtifactType::TarGz, ArtifactType::Rpm];
+        let mut q = linux_x86_query("agentsight", "system");
+        q.version = Some("0.1.0");
+        q.preferred_types = &prefs;
+
+        let entry = index.resolve(&q).expect("resolve");
+        assert_eq!(entry.artifact_type, ArtifactType::TarGz);
+    }
+
+    #[test]
+    fn resolve_empty_preferred_types_keeps_ambiguous() {
+        let index = DistributionIndex {
+            schema_version: 1,
+            channel: None,
+            generated_at: None,
+            expires_at: None,
+            publisher: None,
+            signature: None,
+            entries: rpm_and_targz_entries(),
+        };
+        let mut q = linux_x86_query("agentsight", "system");
+        q.version = Some("0.1.0");
+
+        match index.resolve(&q) {
+            Err(ResolveError::Ambiguous(list)) => assert_eq!(list.len(), 2),
+            other => panic!("expected Ambiguous, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_picks_highest_version_then_preferred() {
+        // Two versions (0.1.0 and 0.2.0), each with rpm + tar_gz. With no
+        // explicit version, the resolver must first narrow to 0.2.0, then
+        // apply preferred_types.
+        let mut entries = rpm_and_targz_entries();
+        for e in rpm_and_targz_entries() {
+            let mut newer = e;
+            newer.version = "0.2.0".into();
+            newer.url = newer.url.replace("0.1.0", "0.2.0");
+            entries.push(newer);
+        }
+
+        let index = DistributionIndex {
+            schema_version: 1,
+            channel: None,
+            generated_at: None,
+            expires_at: None,
+            publisher: None,
+            signature: None,
+            entries,
+        };
+
+        let prefs = [ArtifactType::TarGz, ArtifactType::Rpm];
+        let mut q = linux_x86_query("agentsight", "system");
+        q.preferred_types = &prefs;
+
+        let entry = index.resolve(&q).expect("resolve");
+        assert_eq!(entry.version, "0.2.0");
+        assert_eq!(entry.artifact_type, ArtifactType::TarGz);
+    }
+
+    #[test]
+    fn artifact_type_deserialize_accepts_legacy_spellings() {
+        // `tar.gz` and `tar` must both normalize to TarGz.
+        let toml_str = r#"
+            schema_version = 1
+            [[entries]]
+            component = "x"
+            version = "0.1.0"
+            channel = "stable"
+            artifact_type = "tar.gz"
+            backend = "tar"
+            url = "https://example.invalid/x.tar.gz"
+            os = "linux"
+            arch = "x86_64"
+            install_modes = ["user"]
+        "#;
+        let index = DistributionIndex::from_str(toml_str).expect("parse");
+        assert_eq!(index.entries[0].artifact_type, ArtifactType::TarGz);
     }
 }

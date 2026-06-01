@@ -437,23 +437,23 @@ signature = "cosign"
 install_mode = "system"
 os = ["alinux", "anolis", "rhel", "centos"]
 pkg_base = "rpm"
-preferred_artifact_types = ["rpm", "tar.gz"]
+preferred_artifact_types = ["rpm", "tar_gz"]
 
 [[distribution.selectors]]
 install_mode = "system"
 os = ["ubuntu", "debian"]
 pkg_base = "deb"
-preferred_artifact_types = ["deb", "tar.gz"]
+preferred_artifact_types = ["deb", "tar_gz"]
 
 [[distribution.selectors]]
 install_mode = "user"
 os = ["linux"]
-preferred_artifact_types = ["tar.gz"]
+preferred_artifact_types = ["tar_gz"]
 
 [[distribution.selectors]]
 install_mode = "user"
 os = ["macos"]
-preferred_artifact_types = ["tar.gz", "zip"]
+preferred_artifact_types = ["tar_gz", "zip"]
 
 [build]
 system = "make"                # cargo | make | npm | static | legacy-script
@@ -592,7 +592,7 @@ https://anolisa.example.com/index/stable/index.toml   # public remote index
 https://<private-mirror>/anolisa/index/stable.toml    # enterprise/private index
 ```
 
-推荐 schema：
+推荐 schema（扁平 `[[entries]]` 数组，一行 artifact 一条记录）：
 
 ```toml
 schema_version = 1
@@ -602,14 +602,13 @@ expires_at = "2026-07-01T10:00:00Z"
 publisher = "anolisa"
 signature = "cosign"
 
-[[components]]
-name = "agentsight"
+[[entries]]
+component = "agentsight"
 version = "0.5.0"
-manifest_digest = "sha256:..."
-
-[[components.artifacts]]
+channel = "stable"
 artifact_id = "agentsight-0.5.0-alinux4-x86_64-rpm"
-type = "rpm"                         # rpm | deb | tar.gz | zip | npm | oci | source
+manifest_digest = "sha256:..."
+artifact_type = "rpm"                # rpm | deb | tar_gz | zip | oci | file | binary
 backend = "github-release"           # github-release | yum-repo | apt-repo | aliyun-oss | internal-registry | local-file
 url = "https://github.com/casparant/anolisa/releases/download/agentsight-v0.5.0/agentsight-0.5.0.alinux4.x86_64.rpm"
 os = "alinux"
@@ -621,13 +620,15 @@ install_modes = ["system"]
 sha256 = "..."
 signature_url = "https://github.com/casparant/anolisa/releases/download/agentsight-v0.5.0/agentsight-0.5.0.alinux4.x86_64.rpm.sig"
 size = 12345678
+dependencies = ["kernel-headers"]
 
-[components.artifacts.dependencies]
-rpm = ["kernel-headers"]
-
-[[components.artifacts]]
+[[entries]]
+component = "agentsight"
+version = "0.5.0"
+channel = "stable"
 artifact_id = "agentsight-0.5.0-linux-x86_64-tar"
-type = "tar.gz"
+manifest_digest = "sha256:..."
+artifact_type = "tar_gz"
 backend = "aliyun-oss"
 url = "https://anolisa.oss-cn-hangzhou.aliyuncs.com/agentsight/0.5.0/agentsight-0.5.0-linux-x86_64.tar.gz"
 os = "linux"
@@ -644,22 +645,25 @@ size = 9876543
 | 字段 | 必填 | 说明 |
 |---|---|---|
 | `schema_version` | 是 | DistributionIndex schema 版本 |
-| `channel` | 是 | `stable/beta/nightly/dev` |
-| `generated_at` | 是 | 生成时间，用于排查版本漂移 |
+| `channel` (顶层) | 否 | 默认 channel；entry 上显式 `channel` 覆盖该默认 |
+| `generated_at` | 否 | 生成时间，用于排查版本漂移 |
 | `expires_at` | 否 | 可选过期时间，企业内网 index 可以不设置 |
-| `publisher` | 是 | 发布主体 |
-| `signature` | 是 | index 签名方式 |
-| `components.name/version` | 是 | 对应 component manifest |
-| `components.manifest_digest` | 是 | component manifest digest，防止 manifest 与 artifact 不一致 |
-| `artifacts.type` | 是 | 产物类型，不等于下载来源 |
-| `artifacts.backend` | 是 | 下载/安装 backend，例如 GitHub Release、yum repo、OSS、internal registry |
-| `artifacts.url` | 是 | 具体 artifact URL 或 repo locator |
-| `artifacts.os/arch` | 是 | resolver 选择依据 |
-| `artifacts.libc/pkg_base` | 条件必填 | Linux artifact 通常需要 `libc`；系统包 artifact 需要 `pkg_base` |
-| `artifacts.install_modes` | 是 | `user/system` |
-| `artifacts.sha256` | 是 | artifact 校验 |
-| `artifacts.signature_url` | 是 | artifact 签名 |
-| `artifacts.dependencies` | 否 | backend-specific 依赖，例如 rpm/deb/npm 包依赖 |
+| `publisher` | 否 | 发布主体 |
+| `signature` | 否 | index 级签名方式 |
+| `entries.component` / `entries.version` | 是 | 对应 component manifest |
+| `entries.channel` | 是 | `stable/beta/nightly/dev` |
+| `entries.artifact_id` | 否 | 稳定 artifact 标识，便于审计 |
+| `entries.manifest_digest` | 否 | component manifest digest，防止 manifest 与 artifact 不一致 |
+| `entries.artifact_type` | 是 | 枚举：`rpm` / `deb` / `tar_gz` / `zip` / `oci` / `file` / `binary`（snake_case，禁止 `tar.gz`） |
+| `entries.backend` | 是 | 下载/安装 backend，例如 GitHub Release、yum repo、OSS、internal registry |
+| `entries.url` | 是 | 具体 artifact URL 或 repo locator |
+| `entries.os` / `entries.os_version` | os 必填 | resolver 选择依据；`os_version` 可为常量或 `>=4` 约束 |
+| `entries.arch` | 是 | `x86_64` / `aarch64` / `any` |
+| `entries.libc` / `entries.pkg_base` | 条件必填 | Linux artifact 通常需要 `libc`；系统包 artifact 需要 `pkg_base` |
+| `entries.install_modes` | 是 | `user/system` |
+| `entries.sha256` / `entries.signature_url` | 推荐 | artifact 校验 / 签名 |
+| `entries.size` | 否 | artifact 字节数（描述性） |
+| `entries.dependencies` | 否 | backend-specific 依赖，例如 rpm/deb/npm 包依赖 |
 
 resolver 规则：
 
@@ -678,8 +682,8 @@ GitHub Release RPM 的使用边界：
 | 开源 MVP / 早期试用 | 合理，可以作为 `type=rpm, backend=github-release` |
 | Alinux/Anolis/RHEL system-mode | 合理，但需要 checksum/signature 和依赖声明 |
 | 批量企业更新 | 建议切到 yum repo、OSS/CDN 或内网制品库，由同一个 DistributionIndex 指向 |
-| rootless/container/user-mode | 不应依赖 RPM，优先 tar.gz/zip/OCI artifact |
-| macOS | 不应依赖 RPM，优先 tar.gz/zip，后续可补 homebrew |
+| rootless/container/user-mode | 不应依赖 RPM，优先 tar_gz/zip/OCI artifact |
+| macOS | 不应依赖 RPM，优先 tar_gz/zip，后续可补 homebrew |
 
 ## 9. Adapter Manifest 字段
 

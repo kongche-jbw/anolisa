@@ -28,18 +28,18 @@ signature = "cosign"
 install_mode = "system"
 os = ["alinux", "anolis", "rhel", "centos"]
 pkg_base = "rpm"
-preferred_artifact_types = ["rpm", "tar.gz"]
+preferred_artifact_types = ["rpm", "tar_gz"]
 
 [[distribution.selectors]]
 install_mode = "system"
 os = ["ubuntu", "debian"]
 pkg_base = "deb"
-preferred_artifact_types = ["deb", "tar.gz"]
+preferred_artifact_types = ["deb", "tar_gz"]
 
 [[distribution.selectors]]
 install_mode = "user"
 os = ["linux"]
-preferred_artifact_types = ["tar.gz"]
+preferred_artifact_types = ["tar_gz"]
 
 [build]
 system = "make"              # cargo | make | npm | static | legacy-script
