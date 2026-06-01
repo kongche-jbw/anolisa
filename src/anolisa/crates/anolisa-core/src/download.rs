@@ -1,8 +1,8 @@
 //! Cache-only artifact downloader.
 //!
-//! Milestone scope: file:// only; sha256 verification when an expected hash
-//! is supplied; cache is overwrite-on-conflict, no content addressing.
-//! Network schemes will be added in a later milestone.
+//! Milestone scope: file:// plus HTTP(S); sha256 verification when an
+//! expected hash is supplied; cache is overwrite-on-conflict, no content
+//! addressing.
 //!
 //! The cache writes through a sibling `.tmp` file and renames into place so
 //! a partial fetch never leaves a half-written entry visible at the cached
@@ -11,6 +11,7 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use sha2::{Digest, Sha256};
 
@@ -27,11 +28,17 @@ pub struct DownloadedArtifact {
 /// Errors raised by [`DownloadCache::fetch`].
 #[derive(Debug, thiserror::Error)]
 pub enum DownloadError {
-    #[error("unsupported URL scheme '{scheme}' — only file:// is supported in this milestone")]
+    #[error("unsupported URL scheme '{scheme}' — supported schemes: file, http, https")]
     UnsupportedScheme { scheme: String },
 
     #[error("malformed URL '{url}': {reason}")]
     MalformedUrl { url: String, reason: String },
+
+    #[error("http status {status} while fetching {url}")]
+    HttpStatus { url: String, status: u16 },
+
+    #[error("network error while fetching {url}: {reason}")]
+    Network { url: String, reason: String },
 
     #[error("io error while accessing {path}: {source}")]
     Io {
@@ -69,7 +76,7 @@ impl DownloadCache {
         &self.root
     }
 
-    /// Fetch `url` (currently file:// only). Verifies sha256 when
+    /// Fetch `url` (file:// or HTTP(S)). Verifies sha256 when
     /// `expected_sha256` is Some — mismatches return [`DownloadError::ChecksumMismatch`]
     /// and the cache file is removed before returning. When `expected_sha256`
     /// is None the bytes are still hashed and returned, but no verification
@@ -83,7 +90,7 @@ impl DownloadCache {
         url: &str,
         expected_sha256: Option<&str>,
     ) -> Result<DownloadedArtifact, DownloadError> {
-        let source_path = parse_file_url(url)?;
+        let scheme = scheme_of(url)?;
         let cached_path = self.cached_path_for(url);
 
         let downloads_dir = cached_path
@@ -96,7 +103,14 @@ impl DownloadCache {
         })?;
 
         let tmp_path = tmp_sibling(&cached_path);
-        let sha256 = match stream_copy_and_hash(&source_path, &tmp_path) {
+        let sha256 = match scheme {
+            "file" => stream_copy_file_and_hash(&parse_file_url(url)?, &tmp_path),
+            "http" | "https" => stream_http_and_hash(url, &tmp_path),
+            other => Err(DownloadError::UnsupportedScheme {
+                scheme: other.to_string(),
+            }),
+        };
+        let sha256 = match sha256 {
             Ok(h) => h,
             Err(err) => {
                 // Best-effort: drop the partial .tmp so we don't leak it.
@@ -134,7 +148,13 @@ impl DownloadCache {
     }
 
     fn cached_path_for(&self, url: &str) -> PathBuf {
-        let basename = url.rsplit('/').next().unwrap_or("");
+        let basename = url
+            .rsplit('/')
+            .next()
+            .unwrap_or("")
+            .split(['?', '#'])
+            .next()
+            .unwrap_or("");
         let name = if basename.is_empty() {
             format!("url-{}", short_hash_of(url))
         } else {
@@ -144,13 +164,18 @@ impl DownloadCache {
     }
 }
 
-fn parse_file_url(url: &str) -> Result<PathBuf, DownloadError> {
+fn scheme_of(url: &str) -> Result<&str, DownloadError> {
     let Some(idx) = url.find("://") else {
         return Err(DownloadError::MalformedUrl {
             url: url.to_string(),
             reason: "missing scheme separator '://'".to_string(),
         });
     };
+    Ok(&url[..idx])
+}
+
+fn parse_file_url(url: &str) -> Result<PathBuf, DownloadError> {
+    let idx = url.find("://").expect("scheme already parsed by caller");
     let scheme = &url[..idx];
     let rest = &url[idx + 3..];
     if scheme != "file" {
@@ -174,11 +199,60 @@ fn tmp_sibling(cached_path: &Path) -> PathBuf {
     PathBuf::from(s)
 }
 
-fn stream_copy_and_hash(src: &Path, dst: &Path) -> Result<String, DownloadError> {
+fn stream_copy_file_and_hash(src: &Path, dst: &Path) -> Result<String, DownloadError> {
     let mut input = File::open(src).map_err(|source| DownloadError::Io {
         path: src.to_path_buf(),
         source,
     })?;
+    stream_reader_and_hash(&mut input, dst, src)
+}
+
+fn stream_http_and_hash(url: &str, dst: &Path) -> Result<String, DownloadError> {
+    let mut last_error = None;
+    for attempt in 1..=3 {
+        let _ = fs::remove_file(dst);
+        match stream_http_once_and_hash(url, dst) {
+            Ok(hash) => return Ok(hash),
+            Err(err @ DownloadError::Network { .. }) if attempt < 3 => {
+                last_error = Some(err);
+                std::thread::sleep(Duration::from_secs(attempt));
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    Err(last_error.expect("retry loop stores the last network error"))
+}
+
+fn stream_http_once_and_hash(url: &str, dst: &Path) -> Result<String, DownloadError> {
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(10))
+        .timeout_read(Duration::from_secs(60))
+        .build();
+    let response = agent.get(url).call().map_err(|err| match err {
+        ureq::Error::Status(status, _) => DownloadError::HttpStatus {
+            url: url.to_string(),
+            status,
+        },
+        ureq::Error::Transport(transport) => DownloadError::Network {
+            url: url.to_string(),
+            reason: transport.to_string(),
+        },
+    })?;
+    let mut input = response.into_reader();
+    stream_reader_and_hash(&mut input, dst, Path::new(url)).map_err(|err| match err {
+        DownloadError::Io { source, .. } => DownloadError::Network {
+            url: url.to_string(),
+            reason: source.to_string(),
+        },
+        other => other,
+    })
+}
+
+fn stream_reader_and_hash<R: Read>(
+    input: &mut R,
+    dst: &Path,
+    read_path: &Path,
+) -> Result<String, DownloadError> {
     // Same hardening as InstallRunner::stream_write_and_hash: open the
     // tmp sibling with O_CREAT|O_EXCL (+ O_NOFOLLOW on Unix) so a
     // pre-placed `.tmp` symlink can't redirect the cache write through
@@ -199,7 +273,7 @@ fn stream_copy_and_hash(src: &Path, dst: &Path) -> Result<String, DownloadError>
     let mut buf = [0u8; 8 * 1024];
     loop {
         let n = input.read(&mut buf).map_err(|source| DownloadError::Io {
-            path: src.to_path_buf(),
+            path: read_path.to_path_buf(),
             source,
         })?;
         if n == 0 {
@@ -241,6 +315,8 @@ fn short_hash_of(s: &str) -> String {
 mod tests {
     use super::*;
     use std::fs;
+    use std::net::TcpListener;
+    use std::thread;
     use tempfile::tempdir;
 
     fn write_source(dir: &Path, name: &str, bytes: &[u8]) -> PathBuf {
@@ -257,6 +333,44 @@ mod tests {
         let mut h = Sha256::new();
         h.update(bytes);
         to_lower_hex(&h.finalize())
+    }
+
+    fn serve_once(status: &str, body: &'static [u8]) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let addr = listener.local_addr().expect("local addr");
+        let status = status.to_string();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept one request");
+            let mut buf = [0u8; 1024];
+            let _ = stream.read(&mut buf);
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).expect("write head");
+            stream.write_all(body).expect("write body");
+        });
+        format!("http://{addr}/agentsight")
+    }
+
+    fn serve_drop_then_ok(body: &'static [u8]) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let addr = listener.local_addr().expect("local addr");
+        thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept dropped request");
+            drop(stream);
+
+            let (mut stream, _) = listener.accept().expect("accept retry request");
+            let mut buf = [0u8; 1024];
+            let _ = stream.read(&mut buf);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).expect("write head");
+            stream.write_all(body).expect("write body");
+        });
+        format!("http://{addr}/agentsight")
     }
 
     #[test]
@@ -329,18 +443,47 @@ mod tests {
     }
 
     #[test]
-    fn fetch_https_returns_unsupported_scheme() {
+    fn fetch_http_url_with_matching_sha_succeeds() {
         let cache_dir = tempdir().unwrap();
         let cache = DownloadCache::new(cache_dir.path().to_path_buf());
+        let content = b"hello from release";
+        let url = serve_once("200 OK", content);
 
-        let err = cache
-            .fetch("https://example.invalid/x.bin", None)
-            .expect_err("must error");
+        let expected = sha256_of(content);
+        let got = cache.fetch(&url, Some(&expected)).expect("fetch ok");
+
+        assert!(got.cached_path.exists());
+        assert_eq!(got.sha256, expected);
+        assert_eq!(fs::read(got.cached_path).unwrap(), content);
+    }
+
+    #[test]
+    fn fetch_http_non_success_returns_status_error() {
+        let cache_dir = tempdir().unwrap();
+        let cache = DownloadCache::new(cache_dir.path().to_path_buf());
+        let url = serve_once("404 Not Found", b"missing");
+
+        let err = cache.fetch(&url, None).expect_err("must error");
 
         match err {
-            DownloadError::UnsupportedScheme { scheme } => assert_eq!(scheme, "https"),
-            other => panic!("expected UnsupportedScheme, got {other:?}"),
+            DownloadError::HttpStatus { status, .. } => assert_eq!(status, 404),
+            other => panic!("expected HttpStatus, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn fetch_http_retries_transient_network_error() {
+        let cache_dir = tempdir().unwrap();
+        let cache = DownloadCache::new(cache_dir.path().to_path_buf());
+        let content = b"retry payload";
+        let url = serve_drop_then_ok(content);
+
+        let got = cache
+            .fetch(&url, Some(&sha256_of(content)))
+            .expect("retry should recover");
+
+        assert_eq!(got.sha256, sha256_of(content));
+        assert_eq!(fs::read(got.cached_path).unwrap(), content);
     }
 
     #[test]

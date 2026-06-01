@@ -4,7 +4,7 @@
 
 - 日期：2026-06-02
 - 分支：`kongche/dev/anolisa-p1`
-- HEAD：P1-G0 完成（demo-ready：`scripts/demo-agent-observability.sh` Linux 端到端 smoke + `EXECUTION_FAILED` (exit 1) 与 `INVALID_ARGUMENT` (exit 2) 分桶）
+- HEAD：P1-G1 进行中（P1-G0 demo-ready 基础上，补齐 GitHub Release HTTP(S) artifact 下载、timeout 和 transient retry）
 - 定位：P1 可开发骨架；不是可安装组件的产品形态
 
 ## 当前结论
@@ -20,7 +20,7 @@
 - `DistributionIndex` 查找顺序与 Catalog 对齐：`manifests_overlay/distribution-index/index.toml`（按 install mode 对应 `/etc` 或 `~/.config`）→ packaged `datadir/manifests/...` → dev-tree。overlay 当前是整文件替换，不做条目合并。
 - `ComponentPlan.resolved_files` 把 manifest 模板（如 `{bindir}/agentsight`）按 `FsLayout` 渲染成真实路径，`files` 字段保留模板原文以表达 manifest intent。
 - Catalog 加载已修正为分层装配：bundled = packaged `datadir/manifests`（缺时回落 dev-tree manifests），overlay = `manifests_overlay` 按 install mode 挂作 `system` 或 `user` 层叠加，不再被 overlay 替代。
-- `enable agent-observability`（无 `--dry-run`，单 capability，无 `--feature` / `--with-adapter` / `--from-source`）已落地为第一条真实执行路径：通过 `DownloadCache` 拉取 artifact（当前仅 `file://`，后续 scheme 待加）、用 `InstallRunner` 将文件落到 ANOLISA-owned roots（`bin_dir` / `etc_dir` / `state_dir` / `lib_dir` / `libexec_dir` / `datadir` / `log_dir` / `cache_dir`）、写入 `InstalledState v1` 的 capability + per-component 对象（含 sha256 / services / files / OperationRecord）、按 `operation_id` 在 `CentralLog` 追加 `started` 与 `succeeded`（失败时 `failed`）、整段操作持有 `InstallLock`；任何中途失败会自清理：unlink 本次 op 写入的 ANOLISA-owned 文件、best-effort 写 `Failed` 日志、释放锁。
+- `enable agent-observability`（无 `--dry-run`，单 capability，无 `--feature` / `--with-adapter` / `--from-source`）已落地为第一条真实执行路径：通过 `DownloadCache` 拉取 artifact（`file://` / `http://` / `https://`，HTTP(S) 带 connect/read timeout 和 transient retry）、用 `InstallRunner` 将文件落到 ANOLISA-owned roots（`bin_dir` / `etc_dir` / `state_dir` / `lib_dir` / `libexec_dir` / `datadir` / `log_dir` / `cache_dir`）、写入 `InstalledState v1` 的 capability + per-component 对象（含 sha256 / services / files / OperationRecord）、按 `operation_id` 在 `CentralLog` 追加 `started` 与 `succeeded`（失败时 `failed`）、整段操作持有 `InstallLock`；任何中途失败会自清理：unlink 本次 op 写入的 ANOLISA-owned 文件、best-effort 写 `Failed` 日志、释放锁。
 - 其它所有真实有副作用命令（`disable` / `restart` / `update` / `uninstall` / `subscription` / `adapter` / `self` / `runtime *` / `osbase *` / …）仍返回 `NOT_IMPLEMENTED`。
 - `backup.rs` 仍是 plan-only；因此 external-file 修改类的执行路径（adapter 改第三方配置 / rollback 还原外部状态）继续禁止，本里程碑只允许 ANOLISA-owned files。
 
@@ -49,7 +49,7 @@ cargo run -- --install-mode user --verbose enable agent-observability
 
 > 真实执行需要 distribution-index 里存在 host 可命中的 `agent-observability` artifact。fresh checkout 下 bundled `manifests/distribution-index/index.toml` 当前并不含 macOS / aarch64 二进制，因此在开发机上直接跑（无 overlay）会以 `INVALID_ARGUMENT` + `plan is blocked` 收尾。推荐的 P1-F/P1-G0 smoke 流程：搭一个 overlay distribution-index 用 `file://` 指向本地 fake binary，并通过 `--install-mode system --prefix /tmp/anolisa-smoke` 让所有写入落到 tmp 目录里（system mode honors `--prefix`，user mode 不会 — 见 `FsLayout`）。
 >
-> **P1-G0 已经把上面这套流程脚本化**：`src/anolisa/scripts/demo-agent-observability.sh` 一次性完成造 fake binary → 写 overlay index → 跑 `env/list/status/logs/enable` 全链路 → 校验落盘文件，DEMO_ROOT 不清理便于人工 `ls $DEMO_ROOT/usr/local/bin/` / `cat $DEMO_ROOT/var/log/anolisa/central.jsonl` 查看。脚本要求：Linux 主机、`jq`、`sha256sum`。非 Linux host（含 macOS）脚本会在第一步退出码 1 拒绝执行，并提示改用 `cargo run -- enable agent-observability --dry-run --json`。aarch64 主机仍会跑，但 agentsight 组件 manifest 写死 `requires_arch = ["x86_64"]`，所以 install 步骤会按 plan blocked 拒绝（脚本会原样把 JSON code/reason 抛出）。
+> **P1-G0 已经把上面这套流程脚本化**：`src/anolisa/scripts/demo-agent-observability.sh` 一次性完成造 fake binary → 写 overlay index → 跑 `env/list/status/logs/enable` 全链路 → 校验落盘文件，DEMO_ROOT 不清理便于人工 `ls $DEMO_ROOT/usr/local/bin/` / `cat $DEMO_ROOT/var/log/anolisa/central.jsonl` 查看。脚本要求：Linux x86_64 主机、`jq`、`sha256sum`。非 Linux host（含 macOS）或非 x86_64 主机会在第一步退出码 1 拒绝执行，并提示改用 `cargo run -- enable agent-observability --dry-run --json` 查看 blocked plan。
 
 ### `env`
 
@@ -183,7 +183,7 @@ cargo run -- --install-mode user --verbose enable agent-observability
 
 - 只放行 `agent-observability`；其它 capability 仍 `NOT_IMPLEMENTED`，hint 指向 supported capability。
 - 只支持 `single_binary` / `binary` 与 `tar_gz` artifact（由 `InstallRunner` 决定），其它 backend 落到 `UnsupportedArtifactType`。
-- 只支持 `file://` URL（由 `DownloadCache` 决定），其它 scheme 落到 `UnsupportedScheme`。
+- 支持 `file://`、`http://`、`https://` URL（由 `DownloadCache` 决定）；其它 scheme 落到 `UnsupportedScheme`。
 - 拒绝 `Blocked` plan；允许 `Degraded`（视为可执行，spec 与 Sub-C 一致）。
 - 仅写 ANOLISA-owned roots（`bin_dir` / `etc_dir` / `state_dir` / `lib_dir` / `libexec_dir` / `datadir` / `log_dir` / `cache_dir`）。任何 dest 落到根外即 `ExternalPath`；外部文件不进 transaction、不进 backup，整个 milestone 不动。
 - service enablement / systemd reload / health probe 全部不在范围内：写到 state 的 `ServiceRef.enabled = false`，留给后续命令处理。
@@ -202,7 +202,7 @@ cargo run -- --install-mode user --verbose enable agent-observability
 限制：
 
 - 不做完整 transaction / backup / rollback：P1-F 已对 `installed.toml` 做 pre-op snapshot/restore，若 `state.save` 或之后的 `succeeded` 日志写入失败，cleanup 会 unlink 本次写入的 ANOLISA-owned 文件、best-effort 追加 `failed` 日志，并恢复 `installed.toml` 到 pre-op 状态；真正的文件级 backup/restore、跨步骤事务边界和外部文件回滚仍留到 P1-G。
-- DownloadCache 当前只接 `file://`；HTTPS / signature verification 在 P1-G。
+- DownloadCache 当前支持 `file://` / `http://` / `https://`；signature verification 在 P1-G 后续阶段。
 - InstallRunner 当前只接 `binary` / `tar_gz`；rpm / deb / oci / file 等 backend 后续里程碑。
 
 ## 当前未实现命令
@@ -289,7 +289,7 @@ anolisa logs agent-observability
 | catalog load | `anolisa-core::Catalog` | 库可用，CLI `list` / `status` 已接入 |
 | capability resolve | `CapabilityService` / planner | dry-run planner + 真实 executor 均已接入（P1-E2/P1-F） |
 | distribution resolve | `DistributionIndex` resolver | 库可用，P1-F review fixup 后缺 sha256 直接 `Blocked`，不再 `Degraded`；fixup-2 再加 executor 层硬校验作为公共 API 兜底 |
-| artifact fetch | downloader/cache/checksum/signature | P1-F：`DownloadCache`（`file://` + sha256 streaming verify）；fixup-2 后 `execute_enable` 缺 sha256 直接拒绝（`ExecuteError::MissingChecksum`）；fixup-3 后 cache `.tmp` 写入 `create_new` + Unix `O_NOFOLLOW`，拒绝符号链接劫持；HTTPS / signature 留待 P1-G |
+| artifact fetch | downloader/cache/checksum/signature | P1-F：`DownloadCache`（`file://` + sha256 streaming verify）；fixup-2 后 `execute_enable` 缺 sha256 直接拒绝（`ExecuteError::MissingChecksum`）；fixup-3 后 cache `.tmp` 写入 `create_new` + Unix `O_NOFOLLOW`，拒绝符号链接劫持；P1-G1 已补 `http://` / `https://`；signature 留待后续 |
 | install runner | rpm/deb/tar_gz/binary/file backend | P1-F：`InstallRunner`（`binary` + `tar_gz`）；ANOLISA-owned roots only；review fixup 后 fresh-install only（拒绝已存在目标）；fixup-2 后拒绝 `..`/`.` 段、canonicalize parent/root 防符号链接逃逸、`symlink_metadata` 替代 `exists()`；fixup-3 后 `.tmp` 写入用 `create_new` + Unix `O_NOFOLLOW`，预放的 `{dest}.tmp` 符号链接被拒，不会写穿到外部；rpm/deb/file 留待 P1-G |
 | lock | `InstallLock` | 库可用，P1-F 端到端使用，contention → `LockHeld` |
 | backup | backup copy/restore | 当前仍 plan-only；ANOLISA-owned 文件 P1-F 通过 fresh-install 守卫规避冲突，真正 backup/restore 留待 P1-G |
@@ -346,7 +346,7 @@ agent-observability -> agentsight -> prebuilt tar_gz 或 rpm -> user-mode instal
 - ✅ 不支持复杂 rollback，只安装 ANOLISA-owned files；external file 修改继续禁止（`InstallRunner` 抛 `ExternalPath`）。
 - ✅ 成功后写 `InstalledState v1`（capability + 各 component 对象 + `OperationRecord`）与 `CentralLog`（started + succeeded）。
 - ✅ `InstallLock` 端到端使用：整个 execute 段在锁内，contention 直接 `LockHeld` 拒绝。
-- ✅ 下载器（Sub-A，`DownloadCache`，仅 `file://` + sha256）、install runner（Sub-B，`InstallRunner`，仅 `binary` / `tar_gz`）、orchestrator（Sub-C，`enable_execute`，cleanup + failed log）、CLI wiring（Sub-D，本文档对应 commit）全部 green。
+- ✅ 下载器（Sub-A，`DownloadCache`，`file://` / `http://` / `https://` + sha256）、install runner（Sub-B，`InstallRunner`，仅 `binary` / `tar_gz`）、orchestrator（Sub-C，`enable_execute`，cleanup + failed log）、CLI wiring（Sub-D，本文档对应 commit）全部 green。
 
 #### P1-F review fixup（已完成）
 
@@ -382,7 +382,7 @@ Fixup-2 把 dest 一侧的路径安全收紧到位后，下一轮 review 指出�
 
 ### P1-G0：demo readiness（已完成）
 
-目标：让 P1-F 真实执行路径**可被人当场跑一遍**，并把错误码语义收紧到便于脚本化判断。不引入新的功能面（无 HTTPS / 无签名校验 / 无 rpm/deb backend / 无 disable / 无 uninstall）。
+目标：让 P1-F 真实执行路径**可被人当场跑一遍**，并把错误码语义收紧到便于脚本化判断。P1-G0 本身不引入新的功能面（无签名校验 / 无 rpm/deb backend / 无 disable / 无 uninstall）；HTTP(S) 下载在后续 P1-G1 补齐。
 
 已落地：
 
@@ -392,17 +392,17 @@ Fixup-2 把 dest 一侧的路径安全收紧到位后，下一轮 review 指出�
 - ✅ **macOS host 上的语义验证**：本机（Darwin 25.x）跑 `demo-agent-observability.sh` 命中 host gate，按设计退出码 1 拒绝执行（不写文件）；`cargo run -- enable agent-observability --json`（无 `--dry-run`，无 `--prefix`）由于 `os` precheck 失败仍按 P1-F 行为拒绝，但 wire 错误码已经由旧的 `INVALID_ARGUMENT` 切到 P1-G0 拆桶后的语义：plan blocked → `INVALID_ARGUMENT` (exit 2)；runtime IO failures → `EXECUTION_FAILED` (exit 1)。脚本里 `enable` 失败时会从 JSON 直接打印 `code=...`，便于操作人现场区分。
 - ✅ **doc 同步**：本文件 §"enable agent-observability (no --dry-run)" 错误映射表换成新版 (code · exit) 双列；`templates/command-spec.toml` `[exit_codes]` 同步；§"当前可用命令" 加上 demo 脚本入口。
 
-不在 P1-G0 范围内（继续留给后续里程碑）：
+不在 P1-G0 范围内（继续留给后续里程碑；其中 HTTP(S) 下载已在 P1-G1 补齐）：
 
 - 真实 AgentSight 二进制：当前 demo 用的是一行 shell 脚本作为 fake binary；真实构建产物的 distribution-index 接入留给 P1-G 的 backend 扩展。
 - `disable` / `uninstall` / `update`：仍 `NOT_IMPLEMENTED`，等 backup/restore 接通后再做。
-- DownloadCache HTTPS / signature verification、InstallRunner rpm/deb/oci backend、per-phase audit log、env probe bypass：所有这些功能项都不在 P1-G0 范围；本里程碑专注"把已有路径做得可演示且错误码语义清晰"。
+- DownloadCache signature verification、InstallRunner rpm/deb/oci backend、per-phase audit log、env probe bypass：所有这些功能项都不在 P1-G0 范围；本里程碑专注"把已有路径做得可演示且错误码语义清晰"。HTTP(S) 下载已在 P1-G1 接通。
 
 ### P1-G：execute 路径补齐与对称命令
 
 P1-F + P1-G0 落地后还差几个明确缺口，按落地难度排：
 
-- DownloadCache 加 HTTPS scheme + retry / progress：当前 `file://` only，覆盖 GitHub Release 之类的真实 artifact 源。
+- DownloadCache progress / 更细错误分类：HTTP(S) scheme、connect/read timeout 和 transient retry 已接通，后续需要进度展示和更细错误分类。
 - Signature verification：在 sha256 之外要求 detached signature（首版可走 minisign / cosign），与 distribution-index 已有的 `signature` 字段对齐。
 - 扩 artifact backend：rpm / deb（走系统包管理器、保留 transaction 概念）、oci（image pull）、tar_xz 等。
 - Per-phase CentralLog 记录：当前 `execute_enable` 只写 operation 级 `started` / `succeeded` / `failed`；P1-G 需补 download 起停、install 起停、state-write 起停的 phase 级记录，方便 `anolisa logs` 定位具体失败阶段。
@@ -423,7 +423,7 @@ P1-F + P1-G0 落地后还差几个明确缺口，按落地难度排：
 
 - ✅ `list` 和 `status` 只读 CLI wiring（P1-E1 已完成）。
 - ✅ `enable agent-observability --dry-run` 接入 `plan_enable`（P1-E2 已完成）。
-- ✅ `enable agent-observability` 最小真实安装闭环（P1-F 已完成，含 review fixup + fixup-2 + fixup-3）：`DownloadCache` (`file://` + sha256，`.tmp` 写入 `create_new`+`O_NOFOLLOW`) → `InstallRunner` (`binary` / `tar_gz`，仅 ANOLISA-owned roots，fresh-install only，拒绝 `..`/`.` 与符号链接逃逸，`.tmp` 写入同样 `create_new`+`O_NOFOLLOW`) → `InstalledState v1` capability + component upsert（cleanup 走真实 prior-state snapshot/restore）→ `CentralLog` started/succeeded/failed → `InstallLock` 整段持有 → 中途失败自清理 + 缺 sha256 在 planner 与 executor 两层都拒绝。
+- ✅ `enable agent-observability` 最小真实安装闭环（P1-F 已完成，含 review fixup + fixup-2 + fixup-3；P1-G1 补 HTTP(S)）：`DownloadCache` (`file://` / `http://` / `https://` + sha256，`.tmp` 写入 `create_new`+`O_NOFOLLOW`) → `InstallRunner` (`binary` / `tar_gz`，仅 ANOLISA-owned roots，fresh-install only，拒绝 `..`/`.` 与符号链接逃逸，`.tmp` 写入同样 `create_new`+`O_NOFOLLOW`) → `InstalledState v1` capability + component upsert（cleanup 走真实 prior-state snapshot/restore）→ `CentralLog` started/succeeded/failed → `InstallLock` 整段持有 → 中途失败自清理 + 缺 sha256 在 planner 与 executor 两层都拒绝。
 - ✅ P1-G0 demo readiness：`EXECUTION_FAILED` (exit 1) 与 `INVALID_ARGUMENT` (exit 2) 拆桶，routing 单测覆盖每个 `ExecuteError` 变体；`scripts/demo-agent-observability.sh` 在 Linux 一条命令跑完 fake-binary overlay → enable → status → logs 全链路，DEMO_ROOT 不清理便于人工验证。
 - 下一步是 P1-G（上面列出的方向：网络下载、签名校验、per-phase audit 记录、succeeded-log 失败的注入测试、ANOLISA-owned 文件 backup/restore、disable / uninstall 对称路径）。
 - 其它 mutating 命令（`disable` / `restart` / `update` / `uninstall` / `subscription` / `adapter` / `self` / `runtime *` / `osbase *` 等）在 P1-G 之前继续返回 `NOT_IMPLEMENTED`。

@@ -14,6 +14,7 @@ petgraph.workspace = true
 semver.workspace = true
 chrono.workspace = true
 sha2.workspace = true
+ureq.workspace = true
 flate2.workspace = true
 tar.workspace = true
 fs2 = "0.4"
