@@ -198,7 +198,7 @@ cargo run -- --install-mode user --verbose enable agent-observability
 
 限制：
 
-- 不做 transaction / backup / rollback：若 `state.save` 之后 / `succeeded` 写入失败，cleanup 仍会 unlink ANOLISA-owned 文件并追加 `failed` 日志，但已经持久化的 state 文件不会撤销（属于已知的 P1-F 边界）。
+- 不做完整 transaction / backup / rollback：P1-F 已对 `installed.toml` 做 pre-op snapshot/restore，若 `state.save` 或之后的 `succeeded` 日志写入失败，cleanup 会 unlink 本次写入的 ANOLISA-owned 文件、best-effort 追加 `failed` 日志，并恢复 `installed.toml` 到 pre-op 状态；真正的文件级 backup/restore、跨步骤事务边界和外部文件回滚仍留到 P1-G。
 - DownloadCache 当前只接 `file://`；HTTPS / signature verification 在 P1-G。
 - InstallRunner 当前只接 `binary` / `tar_gz`；rpm / deb / oci / file 等 backend 后续里程碑。
 
@@ -235,7 +235,7 @@ cargo run -- enable agent-observability --dry-run --json
 
 已确认：
 
-- `cargo test --workspace`：124 tests passed（CLI 28 + core 80 + capability_manifest 1 + env 6 + platform 9）。
+- `cargo test --workspace`：137 tests passed（CLI 28 + core 93 + capability_manifest 1 + env 6 + platform 9）。
 - `cargo fmt --all -- --check`：通过。
 - `anolisa env --json`：返回 `ok: true`。
 - `anolisa logs --json`：fresh install 返回 `ok: true, data: []`。
@@ -285,8 +285,8 @@ anolisa logs agent-observability
 | catalog load | `anolisa-core::Catalog` | 库可用，CLI `list` / `status` 已接入 |
 | capability resolve | `CapabilityService` / planner | dry-run planner + 真实 executor 均已接入（P1-E2/P1-F） |
 | distribution resolve | `DistributionIndex` resolver | 库可用，P1-F review fixup 后缺 sha256 直接 `Blocked`，不再 `Degraded`；fixup-2 再加 executor 层硬校验作为公共 API 兜底 |
-| artifact fetch | downloader/cache/checksum/signature | P1-F：`DownloadCache`（`file://` + sha256 streaming verify）；fixup-2 后 `execute_enable` 缺 sha256 直接拒绝（`ExecuteError::MissingChecksum`）；HTTPS / signature 留待 P1-G |
-| install runner | rpm/deb/tar_gz/binary/file backend | P1-F：`InstallRunner`（`binary` + `tar_gz`）；ANOLISA-owned roots only；review fixup 后 fresh-install only（拒绝已存在目标）；fixup-2 后拒绝 `..`/`.` 段、canonicalize parent/root 防符号链接逃逸、`symlink_metadata` 替代 `exists()`；rpm/deb/file 留待 P1-G |
+| artifact fetch | downloader/cache/checksum/signature | P1-F：`DownloadCache`（`file://` + sha256 streaming verify）；fixup-2 后 `execute_enable` 缺 sha256 直接拒绝（`ExecuteError::MissingChecksum`）；fixup-3 后 cache `.tmp` 写入 `create_new` + Unix `O_NOFOLLOW`，拒绝符号链接劫持；HTTPS / signature 留待 P1-G |
+| install runner | rpm/deb/tar_gz/binary/file backend | P1-F：`InstallRunner`（`binary` + `tar_gz`）；ANOLISA-owned roots only；review fixup 后 fresh-install only（拒绝已存在目标）；fixup-2 后拒绝 `..`/`.` 段、canonicalize parent/root 防符号链接逃逸、`symlink_metadata` 替代 `exists()`；fixup-3 后 `.tmp` 写入用 `create_new` + Unix `O_NOFOLLOW`，预放的 `{dest}.tmp` 符号链接被拒，不会写穿到外部；rpm/deb/file 留待 P1-G |
 | lock | `InstallLock` | 库可用，P1-F 端到端使用，contention → `LockHeld` |
 | backup | backup copy/restore | 当前仍 plan-only；ANOLISA-owned 文件 P1-F 通过 fresh-install 守卫规避冲突，真正 backup/restore 留待 P1-G |
 | transaction | apply/verify/rollback boundary | P1-F：cleanup 段 = unlink ANOLISA-owned files + 恢复 `installed.toml` snapshot；完整 transaction boundary 留待 P1-G |
@@ -362,7 +362,15 @@ P1-F happy path 接起来后，code review 指出三个收紧项，已一并落�
 - ✅ **`execute_enable` 增加 checksum 硬校验**：planner 已升格 `Blocked`，但 `execute_enable` 是 `pub fn`，手工构造的 plan 仍能塞 `artifact.sha256 = None`。新增 `ExecuteError::MissingChecksum { component }`，在 per-component 循环中先于 `cache.fetch` 拦截；CLI `execute_err_to_cli` 对应新增提示文案。"防线必须沉到拥有副作用的最低层"原则的兑现。
 - ✅ **state-save 回归测试改造**：原 `state_save_failure_restores_prior_installed_toml` 写的 prior 是注释字符串，碰巧也能被 `InstalledState::load` 解析为空 state —— 名义上验证"任意字节存活"，并未真正验证"已安装机器的真实 state 字节存活"。改成 `InstalledState::default().save(&state_path)` 生成 valid prior，snapshot 字节后跑失败路径，再 `assert_eq!` 字节相等并 belt-and-suspenders 重新 `InstalledState::load` 一次确认未被截断。
 
-回归测试（fixup-2 新增）：install runner `binary_install_dotdot_segment_rejected` / `binary_install_dotdot_at_tail_rejected` / `binary_install_refuses_broken_symlink_dest`（Unix）/ `binary_install_symlink_ancestor_escapes_root_rejected`（Unix）；executor `missing_checksum_in_artifact_returns_missing_checksum_error_with_no_install`；并改写 `state_save_failure_restores_prior_installed_toml` 使用真实 prior state。`cargo test --workspace` 134 passed（baseline 129 + 5）。
+回归测试（fixup-2 新增）：install runner `binary_install_dotdot_segment_rejected` / `binary_install_dotdot_at_tail_rejected` / `binary_install_refuses_broken_symlink_dest`（Unix）/ `binary_install_symlink_ancestor_escapes_root_rejected`（Unix）；executor `missing_checksum_in_artifact_returns_missing_checksum_error_with_no_install`；并改写 `state_save_failure_restores_prior_installed_toml` 使用真实 prior state。
+
+#### P1-F review fixup-3（已完成）
+
+Fixup-2 把 dest 一侧的路径安全收紧到位后，下一轮 review 指出还有一个对称漏洞：**tmp 文件依然跟符号链接**。
+
+- ✅ **`.tmp` 写入使用 `O_CREAT|O_EXCL` + Unix `O_NOFOLLOW`**：`InstallRunner::stream_write_and_hash` 与 `DownloadCache::stream_copy_and_hash` 都把 `File::create(tmp)` 换成 `OpenOptions::new().write(true).create_new(true)` + Unix `custom_flags(nix::libc::O_NOFOLLOW)`。原 `File::create` 走 `O_TRUNC` 且跟随符号链接，攻击者预放 `agentsight.tmp -> /outside/victim` 即可让 `InstallRunner` / `DownloadCache` 把内容写出 ANOLISA-owned root —— 把 fixup-1/2 加的 dest 路径校验整套绕过。`create_new` 确保 tmp 存在即报错（EEXIST/ELOOP），Unix `O_NOFOLLOW` 作为 belt-and-suspenders，防止 race 下 kernel 解析符号链接。`nix` 仅在 Unix target 引入（`[target.'cfg(unix)'.dependencies]`），不污染潜在的 Windows 移植路径。
+
+回归测试（fixup-3 新增）：install runner `binary_install_refuses_when_tmp_sibling_is_a_symlink`（Unix）+ `tar_gz_install_refuses_when_tmp_sibling_is_a_symlink`（Unix）；download `fetch_refuses_when_tmp_sibling_is_a_symlink_and_does_not_corrupt_target`（Unix）。每个用例都断言三件事：返回 `Io { path == tmp_plant }`、外部 victim 文件字节未变、最终 dest / cached_path 不存在。`cargo test --workspace` 137 passed（fixup-2 baseline 134 + 3）。
 
 仍未补齐的小项（继续放进 P1-G，避免越界）：
 
@@ -395,6 +403,6 @@ P1-F 落地后还差几个明确缺口，按落地难度排：
 
 - ✅ `list` 和 `status` 只读 CLI wiring（P1-E1 已完成）。
 - ✅ `enable agent-observability --dry-run` 接入 `plan_enable`（P1-E2 已完成）。
-- ✅ `enable agent-observability` 最小真实安装闭环（P1-F 已完成，含 review fixup + fixup-2）：`DownloadCache` (`file://` + sha256) → `InstallRunner` (`binary` / `tar_gz`，仅 ANOLISA-owned roots，fresh-install only，拒绝 `..`/`.` 与符号链接逃逸) → `InstalledState v1` capability + component upsert（cleanup 走真实 prior-state snapshot/restore）→ `CentralLog` started/succeeded/failed → `InstallLock` 整段持有 → 中途失败自清理 + 缺 sha256 在 planner 与 executor 两层都拒绝。
+- ✅ `enable agent-observability` 最小真实安装闭环（P1-F 已完成，含 review fixup + fixup-2 + fixup-3）：`DownloadCache` (`file://` + sha256，`.tmp` 写入 `create_new`+`O_NOFOLLOW`) → `InstallRunner` (`binary` / `tar_gz`，仅 ANOLISA-owned roots，fresh-install only，拒绝 `..`/`.` 与符号链接逃逸，`.tmp` 写入同样 `create_new`+`O_NOFOLLOW`) → `InstalledState v1` capability + component upsert（cleanup 走真实 prior-state snapshot/restore）→ `CentralLog` started/succeeded/failed → `InstallLock` 整段持有 → 中途失败自清理 + 缺 sha256 在 planner 与 executor 两层都拒绝。
 - 下一步是 P1-G（上面列出的方向：tighter exit code（含 `EXECUTION_FAILED`）、网络下载、签名校验、per-phase audit 记录、succeeded-log 失败的注入测试、ANOLISA-owned 文件 backup/restore、disable / uninstall 对称路径）。
 - 其它 mutating 命令（`disable` / `restart` / `update` / `uninstall` / `subscription` / `adapter` / `self` / `runtime *` / `osbase *` 等）在 P1-G 之前继续返回 `NOT_IMPLEMENTED`。

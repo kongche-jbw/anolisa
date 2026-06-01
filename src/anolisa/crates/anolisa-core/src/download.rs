@@ -8,7 +8,7 @@
 //! a partial fetch never leaves a half-written entry visible at the cached
 //! path.
 
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -179,7 +179,19 @@ fn stream_copy_and_hash(src: &Path, dst: &Path) -> Result<String, DownloadError>
         path: src.to_path_buf(),
         source,
     })?;
-    let mut output = File::create(dst).map_err(|source| DownloadError::Io {
+    // Same hardening as InstallRunner::stream_write_and_hash: open the
+    // tmp sibling with O_CREAT|O_EXCL (+ O_NOFOLLOW on Unix) so a
+    // pre-placed `.tmp` symlink can't redirect the cache write through
+    // to a path the attacker chose. `File::create` (the old code) used
+    // O_TRUNC and followed symlinks, which is the hole this closes.
+    let mut opts = OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.custom_flags(nix::libc::O_NOFOLLOW);
+    }
+    let mut output = opts.open(dst).map_err(|source| DownloadError::Io {
         path: dst.to_path_buf(),
         source,
     })?;
@@ -349,6 +361,53 @@ mod tests {
         let cache_dir = tempdir().unwrap();
         let cache = DownloadCache::new(cache_dir.path().to_path_buf());
         assert_eq!(cache.root(), cache_dir.path());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fetch_refuses_when_tmp_sibling_is_a_symlink_and_does_not_corrupt_target() {
+        // The cache writes through `<cached>.tmp` before renaming into
+        // place. A pre-placed `.tmp` symlink targeting any file the
+        // attacker chooses would, under the old `File::create` path, be
+        // followed and overwritten — defeating every other safety in
+        // the runner. With O_CREAT|O_EXCL + O_NOFOLLOW the open itself
+        // fails and the external file is untouched.
+        let src_dir = tempdir().unwrap();
+        let cache_dir = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        let src = write_source(src_dir.path(), "x.bin", b"new-cache-bytes");
+        let cache = DownloadCache::new(cache_dir.path().to_path_buf());
+
+        // Compute the cached_path and plant `.tmp` as a symlink to
+        // an external "victim" file before calling fetch.
+        let downloads = cache_dir.path().join("downloads");
+        fs::create_dir_all(&downloads).unwrap();
+        let cached = downloads.join("x.bin");
+        let outside_target = outside.path().join("victim");
+        fs::write(&outside_target, b"untouched-bytes").unwrap();
+        let tmp_plant = {
+            let mut s = cached.as_os_str().to_os_string();
+            s.push(".tmp");
+            PathBuf::from(s)
+        };
+        std::os::unix::fs::symlink(&outside_target, &tmp_plant).unwrap();
+
+        let err = cache
+            .fetch(&file_url(&src), None)
+            .expect_err("must refuse to write through symlinked tmp");
+        match err {
+            DownloadError::Io { path, .. } => assert_eq!(path, tmp_plant),
+            other => panic!("expected Io on tmp, got {other:?}"),
+        }
+
+        // External file is untouched.
+        let victim_bytes = fs::read(&outside_target).expect("external file readable");
+        assert_eq!(
+            victim_bytes, b"untouched-bytes",
+            "the symlink target must not be written through",
+        );
+        // Cached entry was never produced.
+        assert!(!cached.exists(), "no cache file may exist after refusal");
     }
 
     #[test]

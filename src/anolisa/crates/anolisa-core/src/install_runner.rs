@@ -14,7 +14,7 @@
 //! deleting just the paths it returns.
 
 use std::collections::BTreeMap;
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -356,7 +356,23 @@ fn write_dest_atomic(dest: &Path, bytes: &[u8]) -> Result<InstalledFile, Install
 }
 
 fn stream_write_and_hash(tmp: &Path, bytes: &[u8]) -> Result<String, InstallError> {
-    let mut out = File::create(tmp).map_err(|source| InstallError::Io {
+    // Security-critical: open the tmp sibling with O_CREAT|O_EXCL so a
+    // pre-placed symlink (or any other existing entry) fails the open
+    // with EEXIST/ELOOP instead of letting us write through it to a
+    // path outside the ANOLISA-owned roots. On Unix we additionally pass
+    // O_NOFOLLOW as belt-and-suspenders: even on a kernel that resolves
+    // O_CREAT|O_EXCL race-y vs a concurrently-planted symlink, the final
+    // component cannot be followed. `File::create` (the old code) did
+    // NOT do either — it opened with O_TRUNC and followed symlinks,
+    // which is exactly the hole this hardens against.
+    let mut opts = OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.custom_flags(nix::libc::O_NOFOLLOW);
+    }
+    let mut out = opts.open(tmp).map_err(|source| InstallError::Io {
         path: tmp.to_path_buf(),
         source,
     })?;
@@ -779,6 +795,95 @@ mod tests {
             !outside.path().join("file").exists(),
             "must not write through the symlink",
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn binary_install_refuses_when_tmp_sibling_is_a_symlink() {
+        // The atomic-write step writes to `{dest}.tmp` and then rename(2)s
+        // it into place. If `{dest}.tmp` is a pre-placed symlink to a file
+        // outside the ANOLISA-owned roots, the old code (`File::create`)
+        // would follow it and corrupt that external file — bypassing
+        // every dest-side guard we just added. The fix opens with
+        // O_CREAT|O_EXCL (+ O_NOFOLLOW on Unix) so the open itself fails.
+        let home = tempdir().unwrap();
+        let cache = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        let layout = layout_for(home.path());
+        let runner = InstallRunner::new(&layout);
+        let cached = write_cached(cache.path(), "agentsight", b"new-bytes");
+
+        let dest = layout.bin_dir.join("agentsight");
+        fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        // The plant lives at `{dest}.tmp` — the exact path
+        // `tmp_sibling(dest)` returns — and targets an external file.
+        let outside_target = outside.path().join("victim");
+        fs::write(&outside_target, b"untouched-bytes").unwrap();
+        let tmp_plant = {
+            let mut s = dest.as_os_str().to_os_string();
+            s.push(".tmp");
+            PathBuf::from(s)
+        };
+        std::os::unix::fs::symlink(&outside_target, &tmp_plant).unwrap();
+
+        let err = runner
+            .install("binary", &cached, &[dest.clone()])
+            .expect_err("must refuse to write through symlinked tmp");
+        match err {
+            InstallError::Io { path, .. } => assert_eq!(path, tmp_plant),
+            other => panic!("expected Io on tmp, got {other:?}"),
+        }
+
+        // External file is untouched (the most important invariant).
+        let victim_bytes = fs::read(&outside_target).expect("external file readable");
+        assert_eq!(
+            victim_bytes, b"untouched-bytes",
+            "the symlink target must not be written through",
+        );
+        // Destination was never created.
+        assert!(!dest.exists(), "dest must not be installed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tar_gz_install_refuses_when_tmp_sibling_is_a_symlink() {
+        // Same defense applies to the tar_gz backend — it routes through
+        // the same `write_dest_atomic` helper so a single fix covers both,
+        // but we lock that down with an explicit regression test so a
+        // future refactor that splits the helpers cannot regress one
+        // backend without tripping a test.
+        let home = tempdir().unwrap();
+        let cache = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        let layout = layout_for(home.path());
+        let runner = InstallRunner::new(&layout);
+
+        let gz = build_tar_gz(&[("bin/agentsight", b"new-bytes")]);
+        let cached = cache.path().join("payload.tar.gz");
+        fs::write(&cached, &gz).unwrap();
+
+        let dest = layout.bin_dir.join("agentsight");
+        fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        let outside_target = outside.path().join("victim");
+        fs::write(&outside_target, b"untouched-bytes").unwrap();
+        let tmp_plant = {
+            let mut s = dest.as_os_str().to_os_string();
+            s.push(".tmp");
+            PathBuf::from(s)
+        };
+        std::os::unix::fs::symlink(&outside_target, &tmp_plant).unwrap();
+
+        let err = runner
+            .install("tar_gz", &cached, &[dest.clone()])
+            .expect_err("must refuse to write through symlinked tmp");
+        match err {
+            InstallError::Io { path, .. } => assert_eq!(path, tmp_plant),
+            other => panic!("expected Io on tmp, got {other:?}"),
+        }
+
+        let victim_bytes = fs::read(&outside_target).expect("external file readable");
+        assert_eq!(victim_bytes, b"untouched-bytes");
+        assert!(!dest.exists());
     }
 
     #[test]

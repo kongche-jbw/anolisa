@@ -59,6 +59,7 @@ dependencies = [
  "chrono",
  "flate2",
  "fs2",
+ "nix",
  "petgraph",
  "semver",
  "serde",
