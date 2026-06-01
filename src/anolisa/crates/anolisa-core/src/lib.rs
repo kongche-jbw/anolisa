@@ -24,6 +24,7 @@ pub use distribution::{
 };
 pub use feature_flags::FeatureStore;
 pub use lock::{InstallLock, LockError};
+pub use manifest::DistributionSelector;
 pub use registry::Registry;
 pub use state::{
     CapabilityRecord, ComponentRecord, InstalledState, STATE_SCHEMA_VERSION, StateError,

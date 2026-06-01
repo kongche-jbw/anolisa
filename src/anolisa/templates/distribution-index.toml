@@ -1,5 +1,13 @@
-# Template: DistributionIndex v1.
-# Concrete artifact URL/checksum/signature/backend live here, not in component manifests.
+# Template: DistributionIndex v1 (flat `[[entries]]` schema).
+#
+# Concrete artifact URL / checksum / signature / backend live here, never in
+# component manifests. One `[[entries]]` row per (component, version, channel,
+# target) artifact binding. Consumed by
+# `anolisa_core::distribution::DistributionIndex`.
+#
+# `artifact_type` values use snake_case (`rpm`, `deb`, `tar_gz`, `zip`, `oci`,
+# `file`, `binary`). Legacy `tar.gz` / `tar` strings are still accepted by the
+# loader but normalized to `tar_gz`; new templates should use `tar_gz`.
 
 schema_version = 1
 channel = "stable"
@@ -8,15 +16,17 @@ expires_at = "2026-07-01T10:00:00Z"
 publisher = "anolisa"
 signature = "cosign"
 
-[[components]]
-name = "agentsight"
+# -----------------------------------------------------------------------------
+# agentsight 0.5.0 — Alinux x86_64 RPM (system mode)
+# -----------------------------------------------------------------------------
+[[entries]]
+component = "agentsight"
 version = "0.5.0"
-manifest_digest = "sha256:replace-with-component-manifest-digest"
-
-[[components.artifacts]]
+channel = "stable"
 artifact_id = "agentsight-0.5.0-alinux4-x86_64-rpm"
-type = "rpm"                 # rpm | deb | tar.gz | zip | npm | oci | source
-backend = "github-release"   # github-release | yum-repo | apt-repo | aliyun-oss | internal-registry | local-file
+manifest_digest = "sha256:replace-with-component-manifest-digest"
+artifact_type = "rpm"             # rpm | deb | tar_gz | zip | oci | file | binary
+backend = "github-release"        # github-release | yum-repo | apt-repo | aliyun-oss | internal-registry | local-file
 url = "https://github.com/casparant/anolisa/releases/download/agentsight-v0.5.0/agentsight-0.5.0.alinux4.x86_64.rpm"
 os = "alinux"
 os_version = ">=4"
@@ -27,13 +37,18 @@ install_modes = ["system"]
 sha256 = "replace-with-sha256"
 signature_url = "https://github.com/casparant/anolisa/releases/download/agentsight-v0.5.0/agentsight-0.5.0.alinux4.x86_64.rpm.sig"
 size = 12345678
+dependencies = ["kernel-headers"]
 
-[components.artifacts.dependencies]
-rpm = ["kernel-headers"]
-
-[[components.artifacts]]
+# -----------------------------------------------------------------------------
+# agentsight 0.5.0 — generic Linux x86_64 tarball (user + system mode)
+# -----------------------------------------------------------------------------
+[[entries]]
+component = "agentsight"
+version = "0.5.0"
+channel = "stable"
 artifact_id = "agentsight-0.5.0-linux-x86_64-tar"
-type = "tar.gz"
+manifest_digest = "sha256:replace-with-component-manifest-digest"
+artifact_type = "tar_gz"
 backend = "aliyun-oss"
 url = "https://anolisa.oss-cn-hangzhou.aliyuncs.com/agentsight/0.5.0/agentsight-0.5.0-linux-x86_64.tar.gz"
 os = "linux"
@@ -43,10 +58,18 @@ install_modes = ["user", "system"]
 sha256 = "replace-with-sha256"
 signature_url = "https://anolisa.oss-cn-hangzhou.aliyuncs.com/agentsight/0.5.0/agentsight-0.5.0-linux-x86_64.tar.gz.sig"
 size = 9876543
+dependencies = []
 
-[[components.artifacts]]
+# -----------------------------------------------------------------------------
+# agentsight 0.5.0 — macOS aarch64 tarball (user mode only)
+# -----------------------------------------------------------------------------
+[[entries]]
+component = "agentsight"
+version = "0.5.0"
+channel = "stable"
 artifact_id = "agentsight-0.5.0-macos-aarch64-tar"
-type = "tar.gz"
+manifest_digest = "sha256:replace-with-component-manifest-digest"
+artifact_type = "tar_gz"
 backend = "github-release"
 url = "https://github.com/casparant/anolisa/releases/download/agentsight-v0.5.0/agentsight-0.5.0-macos-aarch64.tar.gz"
 os = "macos"
@@ -55,3 +78,4 @@ install_modes = ["user"]
 sha256 = "replace-with-sha256"
 signature_url = "https://github.com/casparant/anolisa/releases/download/agentsight-v0.5.0/agentsight-0.5.0-macos-aarch64.tar.gz.sig"
 size = 8765432
+dependencies = []
