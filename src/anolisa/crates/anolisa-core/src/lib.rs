@@ -29,5 +29,7 @@ pub use lock::{InstallLock, LockError};
 pub use manifest::DistributionSelector;
 pub use registry::Registry;
 pub use state::{
-    CapabilityRecord, ComponentRecord, InstalledState, STATE_SCHEMA_VERSION, StateError,
+    BackupRecord, ExternalModifiedFile, FileOwner, HealthEntry, InstallMode, InstalledObject,
+    InstalledState, ObjectKind, ObjectStatus, OperationRecord, OwnedFile, STATE_SCHEMA_VERSION,
+    ServiceRef, StateError, SubscriptionScope,
 };
