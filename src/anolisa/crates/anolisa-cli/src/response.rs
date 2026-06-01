@@ -13,6 +13,14 @@
 //!   exact value, so we pick a non-zero reserved code and document it
 //!   here for future tightening).
 //! - `INVALID_ARGUMENT` -> 2 (POSIX convention shared with clap).
+//! - `EXECUTION_FAILED` -> 1 (generic non-zero "the command ran but the
+//!   underlying operation failed at runtime"). Distinct from
+//!   `INVALID_ARGUMENT` so callers can tell "I gave you bad input" apart
+//!   from "you tried and something on the machine refused": download
+//!   IO, install IO, state-write IO, log-write IO, lock IO. Plan-time
+//!   refusals (e.g. blocked plan, unknown capability) stay
+//!   `INVALID_ARGUMENT` — they tell the caller to fix the input or the
+//!   environment before retrying.
 
 use std::process::ExitCode;
 
@@ -60,6 +68,14 @@ pub enum CliError {
     /// Caller-supplied arguments violated a contract.
     #[error("invalid argument: {reason}")]
     InvalidArgument { command: String, reason: String },
+
+    /// The command was well-formed but the underlying operation failed
+    /// at runtime (download IO, install IO, state-write IO, log-write
+    /// IO, install-lock contention/IO, etc.). Surfaced as exit code 1
+    /// so wrapping scripts can distinguish "bad input" (exit 2) from
+    /// "the machine refused" (exit 1).
+    #[error("execution failed: {reason}")]
+    Runtime { command: String, reason: String },
 }
 
 impl CliError {
@@ -67,6 +83,7 @@ impl CliError {
         match self {
             Self::NotImplemented { .. } => "NOT_IMPLEMENTED",
             Self::InvalidArgument { .. } => "INVALID_ARGUMENT",
+            Self::Runtime { .. } => "EXECUTION_FAILED",
         }
     }
 
@@ -74,6 +91,7 @@ impl CliError {
         match self {
             Self::NotImplemented { .. } => 64,
             Self::InvalidArgument { .. } => 2,
+            Self::Runtime { .. } => 1,
         }
     }
 
@@ -81,6 +99,7 @@ impl CliError {
         match self {
             Self::NotImplemented { command, .. } => command,
             Self::InvalidArgument { command, .. } => command,
+            Self::Runtime { command, .. } => command,
         }
     }
 
@@ -88,6 +107,7 @@ impl CliError {
         match self {
             Self::NotImplemented { hint, .. } => hint.as_deref(),
             Self::InvalidArgument { .. } => None,
+            Self::Runtime { .. } => None,
         }
     }
 
@@ -97,6 +117,7 @@ impl CliError {
                 format!("command '{command}' is not implemented")
             }
             Self::InvalidArgument { reason, .. } => reason.clone(),
+            Self::Runtime { reason, .. } => reason.clone(),
         }
     }
 

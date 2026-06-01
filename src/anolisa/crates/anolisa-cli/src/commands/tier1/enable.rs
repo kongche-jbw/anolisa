@@ -146,41 +146,73 @@ pub fn handle(args: EnableArgs, ctx: &CliContext) -> Result<(), CliError> {
     Ok(())
 }
 
-/// Translate an [`ExecuteError`] into the CLI's existing error surface.
+/// Translate an [`ExecuteError`] into the CLI error surface.
 ///
-/// TODO(P1-G): introduce a dedicated `CliError::Runtime` variant with code
-/// `EXECUTION_FAILED` (exit code 1) so runtime failures are
-/// distinguishable from argument errors on the wire. For this milestone
-/// every variant collapses onto `INVALID_ARGUMENT` (exit 2) to keep the
-/// CLI surface unchanged.
+/// Two buckets:
+///
+/// * **`INVALID_ARGUMENT` (exit 2)** — plan-time refusals the caller
+///   could have prevented: `PlanNotExecutable` (plan was Blocked) and
+///   `MissingArtifact` / `MissingChecksum` (catalog vs distribution-index
+///   mismatch). These all point the user at `--dry-run` to diagnose the
+///   plan; the machine itself never moved.
+/// * **`EXECUTION_FAILED` (exit 1)** — runtime IO failures inside the
+///   real-execute body: `Download`, `Install`, `State`, `Log`, `Lock`,
+///   `LockHeld`. The plan was acceptable; the machine refused.
+///
+/// Splitting the two lets wrapping scripts distinguish "fix your input"
+/// from "the machine couldn't complete it" — the P1-G0 graduation
+/// criterion. `NOT_IMPLEMENTED` is reserved upstream of this routing
+/// for surfaces the CLI scope-gate has not opened yet.
 fn execute_err_to_cli(err: ExecuteError) -> CliError {
-    let reason = match &err {
-        ExecuteError::LockHeld { path } => format!(
-            "install lock at {} is held by another process — run again after the other invocation finishes",
-            path.display(),
-        ),
-        ExecuteError::PlanNotExecutable { status, reason } => format!(
-            "plan is {status}: {reason} — run `anolisa enable agent-observability --dry-run` for details and resolve blockers before retrying",
-        ),
-        ExecuteError::MissingArtifact { component } => format!(
-            "component '{component}' has no resolved artifact (catalog vs distribution-index mismatch — check `anolisa enable agent-observability --dry-run`)",
-        ),
-        ExecuteError::MissingChecksum { component } => format!(
-            "component '{component}' has no sha256 in the distribution index — refuse to install without verification (regenerate the index with checksums and retry)",
-        ),
-        ExecuteError::Download { component, source } => {
-            format!("download for component '{component}' failed: {source}")
-        }
-        ExecuteError::Install { component, source } => {
-            format!("install for component '{component}' failed: {source}")
-        }
-        ExecuteError::State { source } => format!("installed state write failed: {source}"),
-        ExecuteError::Log { source } => format!("central log write failed: {source}"),
-        ExecuteError::Lock { source } => format!("install lock io: {source}"),
-    };
-    CliError::InvalidArgument {
-        command: COMMAND.to_string(),
-        reason,
+    match &err {
+        // — INVALID_ARGUMENT: the plan ruled it out before any IO. —
+        ExecuteError::PlanNotExecutable { status, reason } => CliError::InvalidArgument {
+            command: COMMAND.to_string(),
+            reason: format!(
+                "plan is {status}: {reason} — run `anolisa enable agent-observability --dry-run` for details and resolve blockers before retrying",
+            ),
+        },
+        ExecuteError::MissingArtifact { component } => CliError::InvalidArgument {
+            command: COMMAND.to_string(),
+            reason: format!(
+                "component '{component}' has no resolved artifact (catalog vs distribution-index mismatch — check `anolisa enable agent-observability --dry-run`)",
+            ),
+        },
+        ExecuteError::MissingChecksum { component } => CliError::InvalidArgument {
+            command: COMMAND.to_string(),
+            reason: format!(
+                "component '{component}' has no sha256 in the distribution index — refuse to install without verification (regenerate the index with checksums and retry)",
+            ),
+        },
+
+        // — EXECUTION_FAILED: the plan was acceptable; the machine refused. —
+        ExecuteError::LockHeld { path } => CliError::Runtime {
+            command: COMMAND.to_string(),
+            reason: format!(
+                "install lock at {} is held by another process — run again after the other invocation finishes",
+                path.display(),
+            ),
+        },
+        ExecuteError::Download { component, source } => CliError::Runtime {
+            command: COMMAND.to_string(),
+            reason: format!("download for component '{component}' failed: {source}"),
+        },
+        ExecuteError::Install { component, source } => CliError::Runtime {
+            command: COMMAND.to_string(),
+            reason: format!("install for component '{component}' failed: {source}"),
+        },
+        ExecuteError::State { source } => CliError::Runtime {
+            command: COMMAND.to_string(),
+            reason: format!("installed state write failed: {source}"),
+        },
+        ExecuteError::Log { source } => CliError::Runtime {
+            command: COMMAND.to_string(),
+            reason: format!("central log write failed: {source}"),
+        },
+        ExecuteError::Lock { source } => CliError::Runtime {
+            command: COMMAND.to_string(),
+            reason: format!("install lock io: {source}"),
+        },
     }
 }
 
@@ -354,6 +386,8 @@ mod tests {
     use super::*;
 
     use crate::context::InstallMode;
+    use anolisa_core::{CentralLogError, DownloadError, InstallError, LockError, StateError};
+    use std::io;
     use std::path::PathBuf;
     use tempfile::tempdir;
 
@@ -508,5 +542,115 @@ mod tests {
         let err = handle(a, &ctx(false, false, InstallMode::System)).expect_err("must error");
         assert_eq!(err.code(), "NOT_IMPLEMENTED");
         assert!(err.hint().unwrap_or("").contains("--from-source"));
+    }
+
+    // ── execute_err_to_cli routing (P1-G0) ────────────────────────────
+    //
+    // The split between EXECUTION_FAILED (exit 1) and INVALID_ARGUMENT
+    // (exit 2) is the user-facing contract that wrapping scripts depend
+    // on. These tests pin the routing of every `ExecuteError` variant
+    // so a future refactor of `execute_enable` cannot silently flip a
+    // bucket without breaking a test.
+
+    #[test]
+    fn execute_err_download_maps_to_execution_failed_exit_1() {
+        let err = execute_err_to_cli(ExecuteError::Download {
+            component: "agentsight".to_string(),
+            source: DownloadError::UnsupportedScheme {
+                scheme: "https".to_string(),
+            },
+        });
+        assert_eq!(err.code(), "EXECUTION_FAILED");
+        assert_eq!(err.exit_code(), 1);
+        assert!(err.reason().contains("agentsight"));
+    }
+
+    #[test]
+    fn execute_err_install_maps_to_execution_failed_exit_1() {
+        let err = execute_err_to_cli(ExecuteError::Install {
+            component: "agentsight".to_string(),
+            source: InstallError::UnsupportedArtifactType("oci".to_string()),
+        });
+        assert_eq!(err.code(), "EXECUTION_FAILED");
+        assert_eq!(err.exit_code(), 1);
+        assert!(err.reason().contains("agentsight"));
+    }
+
+    #[test]
+    fn execute_err_state_maps_to_execution_failed_exit_1() {
+        let err = execute_err_to_cli(ExecuteError::State {
+            source: StateError::Io {
+                path: PathBuf::from("/tmp/installed.toml"),
+                source: io::Error::new(io::ErrorKind::PermissionDenied, "denied"),
+            },
+        });
+        assert_eq!(err.code(), "EXECUTION_FAILED");
+        assert_eq!(err.exit_code(), 1);
+    }
+
+    #[test]
+    fn execute_err_log_maps_to_execution_failed_exit_1() {
+        let err = execute_err_to_cli(ExecuteError::Log {
+            source: CentralLogError::Io {
+                path: PathBuf::from("/tmp/central.jsonl"),
+                source: io::Error::new(io::ErrorKind::PermissionDenied, "denied"),
+            },
+        });
+        assert_eq!(err.code(), "EXECUTION_FAILED");
+        assert_eq!(err.exit_code(), 1);
+    }
+
+    #[test]
+    fn execute_err_lock_held_maps_to_execution_failed_exit_1() {
+        let err = execute_err_to_cli(ExecuteError::LockHeld {
+            path: PathBuf::from("/var/lib/anolisa/lock"),
+        });
+        assert_eq!(err.code(), "EXECUTION_FAILED");
+        assert_eq!(err.exit_code(), 1);
+        assert!(err.reason().contains("/var/lib/anolisa/lock"));
+    }
+
+    #[test]
+    fn execute_err_lock_io_maps_to_execution_failed_exit_1() {
+        let err = execute_err_to_cli(ExecuteError::Lock {
+            source: LockError::Io {
+                path: PathBuf::from("/var/lib/anolisa/lock"),
+                source: io::Error::new(io::ErrorKind::PermissionDenied, "denied"),
+            },
+        });
+        assert_eq!(err.code(), "EXECUTION_FAILED");
+        assert_eq!(err.exit_code(), 1);
+    }
+
+    #[test]
+    fn execute_err_plan_not_executable_stays_invalid_argument_exit_2() {
+        let err = execute_err_to_cli(ExecuteError::PlanNotExecutable {
+            status: "blocked".to_string(),
+            reason: "test blocker".to_string(),
+        });
+        assert_eq!(err.code(), "INVALID_ARGUMENT");
+        assert_eq!(err.exit_code(), 2);
+        // Conservative routing: a Blocked plan is "fix your input/env",
+        // not "the machine refused to run". The reason must still point
+        // at --dry-run so users know how to inspect the block.
+        assert!(err.reason().contains("dry-run"));
+    }
+
+    #[test]
+    fn execute_err_missing_artifact_stays_invalid_argument_exit_2() {
+        let err = execute_err_to_cli(ExecuteError::MissingArtifact {
+            component: "agentsight".to_string(),
+        });
+        assert_eq!(err.code(), "INVALID_ARGUMENT");
+        assert_eq!(err.exit_code(), 2);
+    }
+
+    #[test]
+    fn execute_err_missing_checksum_stays_invalid_argument_exit_2() {
+        let err = execute_err_to_cli(ExecuteError::MissingChecksum {
+            component: "agentsight".to_string(),
+        });
+        assert_eq!(err.code(), "INVALID_ARGUMENT");
+        assert_eq!(err.exit_code(), 2);
     }
 }

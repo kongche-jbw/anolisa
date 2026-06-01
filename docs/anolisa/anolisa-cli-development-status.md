@@ -2,14 +2,14 @@
 
 本文记录 `anolisa` CLI 当前开发状态、可用功能边界和下一步优先级。更新基准：
 
-- 日期：2026-06-01
+- 日期：2026-06-02
 - 分支：`kongche/dev/anolisa-p1`
-- HEAD：P1-F 完成（enable agent-observability 真实执行路径：download + install + state + central-log + lock）
+- HEAD：P1-G0 完成（demo-ready：`scripts/demo-agent-observability.sh` Linux 端到端 smoke + `EXECUTION_FAILED` (exit 1) 与 `INVALID_ARGUMENT` (exit 2) 分桶）
 - 定位：P1 可开发骨架；不是可安装组件的产品形态
 
 ## 当前结论
 
-- CLI 命令面、全局参数、JSON envelope、`NOT_IMPLEMENTED` / `INVALID_ARGUMENT` 错误码已经稳定。
+- CLI 命令面、全局参数、JSON envelope、`NOT_IMPLEMENTED` / `INVALID_ARGUMENT` / `EXECUTION_FAILED` 错误码已经稳定。
 - 已落地的基础库包括 `EnvService`、`FsLayout`、`Catalog`、`DistributionIndex` resolver、`InstalledState v1`、`CentralLog`、install lock、backup plan skeleton、`EnablePlan` planner（P1-E2 新增）。
 - 当前可真实使用的命令：`env`、`logs`、`list`、`status`、`enable <cap> --dry-run`。
 - `list` 接入 bundled `Catalog` + `InstalledState v1`，支持 `--enabled`；`--available` 已布线但当前恒为 `true`，等 EnvFacts gating 落地后再收紧。每行带真实 `status` 字段（`installed | degraded | disabled | failed | adopted | not_installed`），`--enabled` 只放过 `installed | degraded | adopted`。
@@ -47,7 +47,9 @@ cargo run -- --install-mode user enable agent-observability --json
 cargo run -- --install-mode user --verbose enable agent-observability
 ```
 
-> 真实执行需要 distribution-index 里存在 host 可命中的 `agent-observability` artifact。fresh checkout 下 bundled `manifests/distribution-index/index.toml` 当前并不含 macOS / aarch64 二进制，因此在开发机上直接跑（无 overlay）会以 `INVALID_ARGUMENT` + `plan is blocked` 收尾。推荐的 P1-F smoke 流程：搭一个 overlay distribution-index 用 `file://` 指向本地 fake binary，并通过 `--install-mode system --prefix /tmp/anolisa-smoke` 让所有写入落到 tmp 目录里（system mode honors `--prefix`，user mode 不会 — 见 `FsLayout`）。
+> 真实执行需要 distribution-index 里存在 host 可命中的 `agent-observability` artifact。fresh checkout 下 bundled `manifests/distribution-index/index.toml` 当前并不含 macOS / aarch64 二进制，因此在开发机上直接跑（无 overlay）会以 `INVALID_ARGUMENT` + `plan is blocked` 收尾。推荐的 P1-F/P1-G0 smoke 流程：搭一个 overlay distribution-index 用 `file://` 指向本地 fake binary，并通过 `--install-mode system --prefix /tmp/anolisa-smoke` 让所有写入落到 tmp 目录里（system mode honors `--prefix`，user mode 不会 — 见 `FsLayout`）。
+>
+> **P1-G0 已经把上面这套流程脚本化**：`src/anolisa/scripts/demo-agent-observability.sh` 一次性完成造 fake binary → 写 overlay index → 跑 `env/list/status/logs/enable` 全链路 → 校验落盘文件，DEMO_ROOT 不清理便于人工 `ls $DEMO_ROOT/usr/local/bin/` / `cat $DEMO_ROOT/var/log/anolisa/central.jsonl` 查看。脚本要求：Linux 主机、`jq`、`sha256sum`。非 Linux host（含 macOS）脚本会在第一步退出码 1 拒绝执行，并提示改用 `cargo run -- enable agent-observability --dry-run --json`。aarch64 主机仍会跑，但 agentsight 组件 manifest 写死 `requires_arch = ["x86_64"]`，所以 install 步骤会按 plan blocked 拒绝（脚本会原样把 JSON code/reason 抛出）。
 
 ### `env`
 
@@ -161,20 +163,21 @@ cargo run -- --install-mode user --verbose enable agent-observability
 - `actor` 取 `$USER` → `$LOGNAME` → `"cli"` 兜底，统一写入 started / succeeded / failed 三类 `LogRecord` 与 `OperationRecord`。
 - JSON 输出（`ExecutePayload`）：`operation_id` / `capability` / `install_mode` / `components` / `installed_files [{component, path, sha256}]` / `state_path` / `central_log_path` / `warnings`。人类输出按 `enable <cap> succeeded` / `operation_id` / `install_mode` / `components` / `installed_files (N)` / `state` / `log` / `warnings` 分段；默认 sha256 取前 8 字符，`--verbose` 渲染完整 64 位。
 
-错误映射（P1-F 阶段统一收敛到 `INVALID_ARGUMENT` / exit 2，便于不动 `response.rs`）：
+错误映射（P1-G0 起拆成 `INVALID_ARGUMENT` / exit 2 与 `EXECUTION_FAILED` / exit 1 两桶；`NOT_IMPLEMENTED` / exit 64 仍由 CLI scope 守卫单独控制）：
 
-| `ExecuteError` | CLI reason 摘要 |
-|---|---|
-| `LockHeld { path }` | `install lock at <path> is held by another process — run again after the other invocation finishes` |
-| `PlanNotExecutable { status, reason }` | `plan is <status>: <reason> — run \`anolisa enable agent-observability --dry-run\` for details and resolve blockers before retrying` |
-| `MissingArtifact { component }` | `component '<c>' has no resolved artifact (catalog vs distribution-index mismatch — check ...)` |
-| `Download { component, source }` | `download for component '<c>' failed: <source>`（含 `ChecksumMismatch` / `UnsupportedScheme` / IO 等） |
-| `Install { component, source }` | `install for component '<c>' failed: <source>`（含 `UnsupportedArtifactType` / `ExternalPath` / IO 等） |
-| `State { source }` | `installed state write failed: <source>` |
-| `Log { source }` | `central log write failed: <source>` |
-| `Lock { source }` | `install lock io: <source>` |
+| `ExecuteError` | CLI code · exit | CLI reason 摘要 |
+|---|---|---|
+| `PlanNotExecutable { status, reason }` | `INVALID_ARGUMENT` · 2 | `plan is <status>: <reason> — run \`anolisa enable agent-observability --dry-run\` for details and resolve blockers before retrying` |
+| `MissingArtifact { component }` | `INVALID_ARGUMENT` · 2 | `component '<c>' has no resolved artifact (catalog vs distribution-index mismatch — check ...)` |
+| `MissingChecksum { component }` | `INVALID_ARGUMENT` · 2 | `component '<c>' has no sha256 in the distribution index — refuse to install without verification ...` |
+| `LockHeld { path }` | `EXECUTION_FAILED` · 1 | `install lock at <path> is held by another process — run again after the other invocation finishes` |
+| `Download { component, source }` | `EXECUTION_FAILED` · 1 | `download for component '<c>' failed: <source>`（含 `ChecksumMismatch` / `UnsupportedScheme` / IO 等） |
+| `Install { component, source }` | `EXECUTION_FAILED` · 1 | `install for component '<c>' failed: <source>`（含 `UnsupportedArtifactType` / `ExternalPath` / IO 等） |
+| `State { source }` | `EXECUTION_FAILED` · 1 | `installed state write failed: <source>` |
+| `Log { source }` | `EXECUTION_FAILED` · 1 | `central log write failed: <source>` |
+| `Lock { source }` | `EXECUTION_FAILED` · 1 | `install lock io: <source>` |
 
-> 真正合适的 exit code 是新增 `EXECUTION_FAILED`（exit 1，与 argument 错误区分）；本里程碑保持 CLI 错误面不变，留 TODO 在 `enable.rs` 里指向 P1-G。
+> 分桶原则：plan-time refusals（`PlanNotExecutable` / `MissingArtifact` / `MissingChecksum`）落在 `INVALID_ARGUMENT`，告诉调用方"先修 input 或环境"；runtime IO failures（`Download` / `Install` / `State` / `Log` / `Lock` / `LockHeld`）落在 `EXECUTION_FAILED`，告诉调用方"plan 没问题，机器拒绝执行"。CLI 单测 `execute_err_*_maps_to_*` 系列锁住 routing，防止未来重构悄悄翻桶。`templates/command-spec.toml` 的 `[exit_codes]` 表同步更新（含 P1-G 留位的 `precheck_failed` / `transaction_failed` / `artifact_not_found`，未来再细分）。
 
 约束：
 
@@ -235,13 +238,14 @@ cargo run -- enable agent-observability --dry-run --json
 
 已确认：
 
-- `cargo test --workspace`：137 tests passed（CLI 28 + core 93 + capability_manifest 1 + env 6 + platform 9）。
+- `cargo test --workspace`：146 tests passed（CLI 37 + core 93 + capability_manifest 1 + env 6 + platform 9）。P1-G0 新增 9 条 `execute_err_*_maps_to_*` routing 用例（CLI 28 → 37）；core / env / platform 无回归。
 - `cargo fmt --all -- --check`：通过。
 - `anolisa env --json`：返回 `ok: true`。
 - `anolisa logs --json`：fresh install 返回 `ok: true, data: []`。
 - `anolisa list --json` / `anolisa status [CAPABILITY] --json`：返回 envelope，未安装条目带 `status: not_installed`。
 - `anolisa enable agent-observability --dry-run --json`：在 macOS host 上返回 `ok: true, data.status: "blocked"`（precheck `os` 失败：expected linux, actual macos），无 panic、不写任何文件。
-- `anolisa --install-mode system --prefix <tmp> enable agent-observability --json`（Smoke A，macOS host）：返回 `ok: false`、`error.code = INVALID_ARGUMENT`、reason 同时包含 `blocked` 与 `--dry-run`、exit code 2，且 `<tmp>/var/lib/anolisa/installed.toml` 与 `<tmp>/var/log/anolisa/central.jsonl` 均未创建（Sub-C 规定 Blocked plan 在 lock / log 之前拒绝）。Linux happy-path Smoke B 在 macOS dev host 上无法直接执行，留待 CI / Linux env 跑：预期 `ok: true, data.operation_id` 非空，`<tmp>` 下出现 `installed.toml`（含 capability + agentsight 对象、`OperationRecord.status="ok"`）+ `central.jsonl`（2 行，同 operation_id，第二行 `status=ok`），`anolisa logs --operation-id <id> --json` 能查询到 started + succeeded。
+- `anolisa --install-mode system --prefix <tmp> enable agent-observability --json`（Smoke A，macOS host）：返回 `ok: false`、`error.code = INVALID_ARGUMENT`、reason 同时包含 `blocked` 与 `--dry-run`、exit code 2，且 `<tmp>/var/lib/anolisa/installed.toml` 与 `<tmp>/var/log/anolisa/central.jsonl` 均未创建（Sub-C 规定 Blocked plan 在 lock / log 之前拒绝）。该 routing 由 P1-G0 单测 `execute_err_plan_not_executable_stays_invalid_argument_exit_2` 锁死。
+- `scripts/demo-agent-observability.sh` (Smoke B，Linux happy-path)：在 **macOS dev host 上未执行**，脚本本身的 host gate 在 macOS 上以 exit 1 拒绝运行（已验证），把实际 happy-path 留给 Linux CI / VM。Linux 上的预期：`enable --json` 返回 `ok: true` 且 `.data.operation_id` 非空；`$DEMO_ROOT/usr/local/bin/agentsight` 出现且可执行；`$DEMO_ROOT/var/lib/anolisa/installed.toml` 含 capability + agentsight 对象、`OperationRecord.status="ok"`；`$DEMO_ROOT/var/log/anolisa/central.jsonl` 至少 2 行，同 operation_id，第二行 `status=ok`；`logs --operation-id <id> --json` 至少返回 2 条记录。脚本里每一步都会在失败时打印 `error.code` / `error.reason` 并保留 DEMO_ROOT 供 post-mortem。
 
 ## enable 是否是最高优先级
 
@@ -375,13 +379,29 @@ Fixup-2 把 dest 一侧的路径安全收紧到位后，下一轮 review 指出�
 仍未补齐的小项（继续放进 P1-G，避免越界）：
 
 - `succeeded`-log append 失败的注入测试。`CentralLog::append` 每次重新打开文件，外部很难干净造一次"只让第二次 append 失败、第一次 OK"。需要把 `CentralLog` 暴露为 trait 让 executor 注入 mock；放进 P1-G 的 audit/transaction 加固里一起做。
-- `CliError::Runtime` + `EXECUTION_FAILED` 错误码：当前所有 executor 错误（含新的 `MissingChecksum`）仍折叠到 `INVALID_ARGUMENT`（exit 2）。改造后 P1-G 才能让上游脚本区分 "参数错误" vs "执行运行时错误"。
+
+### P1-G0：demo readiness（已完成）
+
+目标：让 P1-F 真实执行路径**可被人当场跑一遍**，并把错误码语义收紧到便于脚本化判断。不引入新的功能面（无 HTTPS / 无签名校验 / 无 rpm/deb backend / 无 disable / 无 uninstall）。
+
+已落地：
+
+- ✅ **`EXECUTION_FAILED` (exit 1) 错误码**：`CliError` 新增 `Runtime { command, reason }` 变体，`code() = "EXECUTION_FAILED"`、`exit_code() = 1`。`execute_err_to_cli` 把 `Download` / `Install` / `State` / `Log` / `Lock` / `LockHeld` routes 到 `Runtime`；plan-time refusals（`PlanNotExecutable` / `MissingArtifact` / `MissingChecksum`）保留 `INVALID_ARGUMENT` (exit 2)。`NOT_IMPLEMENTED` (exit 64) 仍由 CLI scope 守卫单独控制。`templates/command-spec.toml` 的 `[exit_codes]` 表同步更新。
+- ✅ **routing 单测锁定**：`commands::tier1::enable::tests` 新增 9 条 `execute_err_*_maps_to_*` 用例，对每个 `ExecuteError` 变体断言 `(code, exit_code)`，未来重构 executor 不能悄悄翻桶。同 `enable_with_zero_capabilities_is_rejected_by_clap`（多 capability → INVALID_ARGUMENT）+ `enable_execute_without_dry_run_other_capability_still_not_implemented`（其它 capability → NOT_IMPLEMENTED）覆盖 P1-G0 要求的三类入口校验。
+- ✅ **`scripts/demo-agent-observability.sh` 端到端 smoke**：Linux 专用、自检 `jq` / `sha256sum`；在 `/tmp/anolisa-demo-XXXXXX` 下造一个 fake AgentSight 可执行 + overlay DistributionIndex（`file://`、`artifact_type="binary"`、`backend="binary"`、`install_modes=["system"]`、`os="linux"`、normalized `arch`、强制 sha256），然后用 `--install-mode system --prefix $DEMO_ROOT` 依次跑 `env` → `enable --dry-run` → `enable` → `status` → `list --enabled` → `logs` → `logs --operation-id $OP`，最后断言 `$DEMO_ROOT/usr/local/bin/agentsight` 可执行、`installed.toml` 与 `central.jsonl` 已生成、`logs --operation-id` 至少返回 2 条记录。DEMO_ROOT 不自动清理，路径作为最后一行 stdout 供人手动 `ls` / `cat` 验证。非 Linux host 提前退出并指引到 `cargo run -- enable agent-observability --dry-run --json`。
+- ✅ **macOS host 上的语义验证**：本机（Darwin 25.x）跑 `demo-agent-observability.sh` 命中 host gate，按设计退出码 1 拒绝执行（不写文件）；`cargo run -- enable agent-observability --json`（无 `--dry-run`，无 `--prefix`）由于 `os` precheck 失败仍按 P1-F 行为拒绝，但 wire 错误码已经由旧的 `INVALID_ARGUMENT` 切到 P1-G0 拆桶后的语义：plan blocked → `INVALID_ARGUMENT` (exit 2)；runtime IO failures → `EXECUTION_FAILED` (exit 1)。脚本里 `enable` 失败时会从 JSON 直接打印 `code=...`，便于操作人现场区分。
+- ✅ **doc 同步**：本文件 §"enable agent-observability (no --dry-run)" 错误映射表换成新版 (code · exit) 双列；`templates/command-spec.toml` `[exit_codes]` 同步；§"当前可用命令" 加上 demo 脚本入口。
+
+不在 P1-G0 范围内（继续留给后续里程碑）：
+
+- 真实 AgentSight 二进制：当前 demo 用的是一行 shell 脚本作为 fake binary；真实构建产物的 distribution-index 接入留给 P1-G 的 backend 扩展。
+- `disable` / `uninstall` / `update`：仍 `NOT_IMPLEMENTED`，等 backup/restore 接通后再做。
+- DownloadCache HTTPS / signature verification、InstallRunner rpm/deb/oci backend、per-phase audit log、env probe bypass：所有这些功能项都不在 P1-G0 范围；本里程碑专注"把已有路径做得可演示且错误码语义清晰"。
 
 ### P1-G：execute 路径补齐与对称命令
 
-P1-F 落地后还差几个明确缺口，按落地难度排：
+P1-F + P1-G0 落地后还差几个明确缺口，按落地难度排：
 
-- `CliError::Runtime { command, reason }` + `EXECUTION_FAILED` 错误码（exit 1）：把 download / install / state / log / lock 等 runtime 失败从 `INVALID_ARGUMENT`（exit 2）里独立出来，便于上游脚本区分参数错误 vs 真实执行错误。
 - DownloadCache 加 HTTPS scheme + retry / progress：当前 `file://` only，覆盖 GitHub Release 之类的真实 artifact 源。
 - Signature verification：在 sha256 之外要求 detached signature（首版可走 minisign / cosign），与 distribution-index 已有的 `signature` 字段对齐。
 - 扩 artifact backend：rpm / deb（走系统包管理器、保留 transaction 概念）、oci（image pull）、tar_xz 等。
@@ -404,5 +424,6 @@ P1-F 落地后还差几个明确缺口，按落地难度排：
 - ✅ `list` 和 `status` 只读 CLI wiring（P1-E1 已完成）。
 - ✅ `enable agent-observability --dry-run` 接入 `plan_enable`（P1-E2 已完成）。
 - ✅ `enable agent-observability` 最小真实安装闭环（P1-F 已完成，含 review fixup + fixup-2 + fixup-3）：`DownloadCache` (`file://` + sha256，`.tmp` 写入 `create_new`+`O_NOFOLLOW`) → `InstallRunner` (`binary` / `tar_gz`，仅 ANOLISA-owned roots，fresh-install only，拒绝 `..`/`.` 与符号链接逃逸，`.tmp` 写入同样 `create_new`+`O_NOFOLLOW`) → `InstalledState v1` capability + component upsert（cleanup 走真实 prior-state snapshot/restore）→ `CentralLog` started/succeeded/failed → `InstallLock` 整段持有 → 中途失败自清理 + 缺 sha256 在 planner 与 executor 两层都拒绝。
-- 下一步是 P1-G（上面列出的方向：tighter exit code（含 `EXECUTION_FAILED`）、网络下载、签名校验、per-phase audit 记录、succeeded-log 失败的注入测试、ANOLISA-owned 文件 backup/restore、disable / uninstall 对称路径）。
+- ✅ P1-G0 demo readiness：`EXECUTION_FAILED` (exit 1) 与 `INVALID_ARGUMENT` (exit 2) 拆桶，routing 单测覆盖每个 `ExecuteError` 变体；`scripts/demo-agent-observability.sh` 在 Linux 一条命令跑完 fake-binary overlay → enable → status → logs 全链路，DEMO_ROOT 不清理便于人工验证。
+- 下一步是 P1-G（上面列出的方向：网络下载、签名校验、per-phase audit 记录、succeeded-log 失败的注入测试、ANOLISA-owned 文件 backup/restore、disable / uninstall 对称路径）。
 - 其它 mutating 命令（`disable` / `restart` / `update` / `uninstall` / `subscription` / `adapter` / `self` / `runtime *` / `osbase *` 等）在 P1-G 之前继续返回 `NOT_IMPLEMENTED`。

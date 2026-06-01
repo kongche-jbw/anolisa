@@ -41,12 +41,18 @@ writes = ["installed-state", "central-log", "backup-store"]
 uses = ["capability", "component", "distribution-index", "target-provider"]
 
 [exit_codes]
-ok = 0
-not_implemented = 64
-invalid_input = 2
-precheck_failed = 70
-transaction_failed = 71
-artifact_not_found = 72
+# Stable wire codes (P1-G0 onward — surfaced by `CliError` in
+# `crates/anolisa-cli/src/response.rs`):
+ok = 0                      # operation succeeded
+execution_failed = 1        # command well-formed; runtime IO/lock/state/log/install/download failed
+invalid_input = 2           # caller-supplied args, plan blocker, or catalog/index mismatch
+not_implemented = 64        # surface exists but the handler is not wired yet
+
+# Reserved for future tightening (not emitted today; see
+# launch spec §4 for the design intent):
+precheck_failed = 70        # planned: dedicated code for hard env/precheck failures
+transaction_failed = 71     # planned: post-backup transaction rollback
+artifact_not_found = 72     # planned: distribution-index returns no candidate
 
 [[examples]]
 command = "anolisa enable agent-observability --dry-run"
