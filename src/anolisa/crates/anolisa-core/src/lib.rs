@@ -3,6 +3,7 @@ pub mod capability;
 pub mod central_log;
 pub mod component;
 pub mod dependency;
+pub mod distribution;
 pub mod feature_flags;
 pub mod lock;
 pub mod manifest;
@@ -15,6 +16,10 @@ pub use backup::{BackupEntry, BackupSet};
 pub use capability::{CapabilityError, CapabilityManifest, CapabilityResolver, ResolvedPlan};
 pub use central_log::{CentralLog, CentralLogError, LogFilter, LogRecord};
 pub use component::{Component, ComponentMeta, ComponentStatus};
+pub use distribution::{
+    ArtifactType, DistributionEntry, DistributionError, DistributionIndex, ResolveError,
+    ResolveQuery,
+};
 pub use feature_flags::FeatureStore;
 pub use lock::{InstallLock, LockError};
 pub use manifest::Manifest;
