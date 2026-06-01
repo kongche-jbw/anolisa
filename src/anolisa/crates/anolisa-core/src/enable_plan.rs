@@ -835,12 +835,10 @@ fn first_blocker(prechecks: &[PrecheckResult], components: &[ComponentPlan]) -> 
 
 fn next_actions_for(status: PlanStatus, capability: &str) -> Vec<String> {
     match status {
-        PlanStatus::Ready => vec![format!(
-            "run `anolisa enable {capability}` to execute (currently NOT_IMPLEMENTED)"
-        )],
+        PlanStatus::Ready => vec![format!("run `anolisa enable {capability}` to execute")],
         PlanStatus::Degraded => vec![
             "review warnings above".to_string(),
-            format!("run `anolisa enable {capability}` to execute (currently NOT_IMPLEMENTED)"),
+            format!("run `anolisa enable {capability}` to execute after reviewing warnings"),
         ],
         PlanStatus::Blocked => vec![format!(
             "resolve the blocker above before running `anolisa enable {capability}`"

@@ -76,14 +76,23 @@ esac
 
 if [ "$NORM_ARCH" != "x86_64" ]; then
   cat >&2 <<EOF
-[demo] host arch is $NORM_ARCH; agentsight component manifest pins
-       requires_arch = ["x86_64"]. The DistributionIndex entry below
-       will use os=linux arch=$NORM_ARCH so the resolver matches, but
-       the planner will still report the plan as Blocked at the
-       component-level \`agentsight.arch\` precheck. The script will
-       continue so you can see the JSON output, but the install step
-       will not run.
+[demo] refusing to run on arch=$NORM_ARCH.
+
+The agentsight component manifest pins requires_arch = ["x86_64"], so
+even with a valid DistributionIndex entry the planner would mark the
+plan Blocked and execute_enable would refuse to install. Letting the
+script continue would just produce a misleading "happy-path smoke
+fails at the install step" run — not what this demo is meant to show.
+
+To dry-run the planner on this host (it will report blocked at the
+agentsight.arch precheck and exit 0), run from $ANOLISA_DIR:
+
+  cargo run -- enable agent-observability --dry-run --json
+
+To run this smoke end-to-end, retry on a Linux/x86_64 host (a Linux
+container or VM counts).
 EOF
+  exit 1
 fi
 
 # --- prerequisites -----------------------------------------------------------
@@ -178,14 +187,22 @@ step "enable agent-observability --dry-run --json"
 run_cli enable agent-observability --dry-run --json
 
 step "enable agent-observability --json"
+# `set -e` would abort the script the moment `run_cli` returns non-zero,
+# which means the carefully-crafted error-bucket diagnostic below would
+# never run. Drop into `set +e` just for the capture so we always see the
+# CLI's JSON envelope, then restore. ENABLE_RC carries the real exit
+# code (1 = EXECUTION_FAILED, 2 = INVALID_ARGUMENT, 64 = NOT_IMPLEMENTED).
+set +e
 ENABLE_OUT="$(run_cli enable agent-observability --json)"
+ENABLE_RC=$?
+set -e
 echo "$ENABLE_OUT"
 
 OK="$(printf '%s' "$ENABLE_OUT" | jq -r '.ok')"
 if [ "$OK" != "true" ]; then
   CODE="$(printf '%s' "$ENABLE_OUT" | jq -r '.error.code // "?"')"
   REASON="$(printf '%s' "$ENABLE_OUT" | jq -r '.error.reason // "?"')"
-  echo "[demo] enable FAILED — code=$CODE reason=$REASON" >&2
+  echo "[demo] enable FAILED — code=$CODE reason=$REASON exit=$ENABLE_RC" >&2
   echo "[demo] DEMO_ROOT preserved for inspection: $DEMO_ROOT" >&2
   exit 1
 fi

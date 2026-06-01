@@ -11,10 +11,10 @@
 
 - CLI 命令面、全局参数、JSON envelope、`NOT_IMPLEMENTED` / `INVALID_ARGUMENT` / `EXECUTION_FAILED` 错误码已经稳定。
 - 已落地的基础库包括 `EnvService`、`FsLayout`、`Catalog`、`DistributionIndex` resolver、`InstalledState v1`、`CentralLog`、install lock、backup plan skeleton、`EnablePlan` planner（P1-E2 新增）。
-- 当前可真实使用的命令：`env`、`logs`、`list`、`status`、`enable <cap> --dry-run`。
+- 当前可真实使用的命令：`env`、`logs`、`list`、`status`、`enable agent-observability --dry-run`、以及 P1-F 起接通的 `enable agent-observability`（无 `--dry-run`，单 capability、无 feature/adapter/from-source）。
 - `list` 接入 bundled `Catalog` + `InstalledState v1`，支持 `--enabled`；`--available` 已布线但当前恒为 `true`，等 EnvFacts gating 落地后再收紧。每行带真实 `status` 字段（`installed | degraded | disabled | failed | adopted | not_installed`），`--enabled` 只放过 `installed | degraded | adopted`。
 - `status [CAPABILITY]` 接入 `InstalledState v1`：fresh install / 未安装 capability 返回 ok 空集（或 `not_installed`），非错误。直接投出 state 里的 `component_refs` / `enabled_features` / `health`，不依赖 resolver。
-- `enable <cap> --dry-run` 接入 `anolisa_core::plan_enable`：纯只读，不下载、不写 state、不写 central log。当前只在 CLI 层放行 `agent-observability`；其它 capability 返回 `NOT_IMPLEMENTED`（带明确 scope hint）。`--feature` / `--with-adapter` / `--from-source` 在 `--dry-run` 下显式返回 `NOT_IMPLEMENTED`。无 `--dry-run` 的 `enable` 继续返回 `NOT_IMPLEMENTED`。
+- `enable <cap> --dry-run` 接入 `anolisa_core::plan_enable`：纯只读，不下载、不写 state、不写 central log。当前只在 CLI 层放行 `agent-observability`；其它 capability 返回 `NOT_IMPLEMENTED`（带明确 scope hint）。`--feature` / `--with-adapter` / `--from-source` 在 `--dry-run` 下显式返回 `NOT_IMPLEMENTED`。无 `--dry-run` 的真实 `enable` 见下方 P1-F 段落。
 - planner 同时评估 capability 与 **component-level** `env_requirements`：`kernel_min` / `btf` / `cap_bpf` / `libc` / `pkg_base` 都会变成 precheck 行（component 检查带 `<component>.<name>` 命名空间）。`unknown` 一律降级为 `warn` 而不是默认 ok。
 - 缺失 `distribution-index/index.toml` 不再返回 `INVALID_ARGUMENT`：planner 用空 index 继续出 plan，顶层 warning + per-component `blocked_reason = "no prebuilt artifact for …"` 让用户能直接看出缺什么。
 - `DistributionIndex` 查找顺序与 Catalog 对齐：`manifests_overlay/distribution-index/index.toml`（按 install mode 对应 `/etc` 或 `~/.config`）→ packaged `datadir/manifests/...` → dev-tree。overlay 当前是整文件替换，不做条目合并。
@@ -124,7 +124,7 @@ cargo run -- --install-mode user --verbose enable agent-observability
 
 ### `enable`
 
-状态：仅 `--dry-run` 可用（P1-E2）。
+状态：`--dry-run` 可用（P1-E2）；无 `--dry-run` 的真实执行路径见下方 `enable agent-observability` (no --dry-run) 段落（P1-F + P1-G0）。
 
 能力：
 
@@ -142,7 +142,7 @@ cargo run -- --install-mode user --verbose enable agent-observability
 
 - 当前 CLI 层只允许 `agent-observability`，其它 capability 显式 `NOT_IMPLEMENTED`（planner 本身已通用，扩展只需放开 scope 守卫）。
 - `--feature` / `--with-adapter` / `--from-source` 在 `--dry-run` 下显式 `NOT_IMPLEMENTED`。
-- 无 `--dry-run` 的 `enable` 仍返回 `NOT_IMPLEMENTED`：下载器 / install runner / transaction / backup / rollback / state + central-log 写入链路均未接通。
+- 无 `--dry-run` 的 `enable` 已在 P1-F 接通（下方独立段落记录其范围与守卫）；其它 capability、`--feature` / `--with-adapter` / `--from-source` 组合仍返回 `NOT_IMPLEMENTED`。
 - `kernel_min` 比较是简单的数字前缀语义（`5.15.0-anolis23.x86_64` 取 `5.15.0`），无法解析时回退 `warn`；尚未按 OS 类型 gate（macOS host 的 `25.3.0` 在 numeric 上 >= `5.8`，但 OS precheck 已先一步把整体 plan 标 blocked）。
 - DistributionIndex overlay 当前是整文件替换，不做 entry-level 合并；如果用户需要在 overlay 里追加少量 entry，需要把完整 entry 列表复制到 overlay 文件。
 
@@ -322,7 +322,7 @@ anolisa logs agent-observability
 - ✅ Plan 暴露 capability 名称 + stability + install_mode、component 列表 + 命中的 artifact（type / backend / version / url / sha256）、env facts、prechecks、layout 摘要、warnings、next_actions、resolved_files。
 - ✅ Precheck 同时评估 capability **与** component 两层 env_requirements（`kernel_min` / `btf` / `cap_bpf` / `libc` / `pkg_base`）；component 检查带命名空间，`unknown` 探针一律 warn 而非默认 ok。
 - ✅ 状态聚合：fail / 任一 component blocked → `blocked`；warn / 版本漂移 / 空 index / component degraded → `degraded`；否则 `ready`。`blocked` 仍以 exit 0 + envelope 返回。（P1-F review fixup：缺 sha256 升格为 `blocked`，详见下文。）
-- ✅ CLI scope 守卫：仅 `agent-observability` 放行；多 capability → `INVALID_ARGUMENT`；`--feature` / `--with-adapter` / `--from-source` / 非 `--dry-run` → 显式 `NOT_IMPLEMENTED`。
+- ✅ CLI scope 守卫：仅 `agent-observability` 放行；多 capability → `INVALID_ARGUMENT`；`--feature` / `--with-adapter` / `--from-source` → 显式 `NOT_IMPLEMENTED`。P1-E2 当时非 `--dry-run` 仍未执行；P1-F 已接通 `enable agent-observability` 的真实执行路径。
 - ✅ 缺失 distribution index 不再致命：用空 index 出 plan、顶层 warning、组件 `blocked`。
 - ✅ DistributionIndex 查找按 overlay → packaged → dev-tree（与 Catalog 分层一致）。
 - ✅ Smoke：macOS / aarch64 host 上输出结构完整的 `blocked` plan（precheck `os` fail + `agentsight.os` fail + `agentsight.btf` warn），不写文件，不 panic。
