@@ -87,6 +87,14 @@ Skills，只把用得到的技能放进上下文，[AgentSight](src/agentsight/R
   </sub>
 </p>
 
+### 3 分钟体验 Token-less
+
+安装 Token-less，将它接入你正在使用的 Agent，运行一次工具密集型任务，并在本地
+确认压缩前后的 Token 记录。
+
+[开始 Token-less 快速体验 →](docs/user-guide/zh/token-saving/tokenless/QUICKSTART.md)
+· [阅读完整用户手册](docs/user-guide/zh/token-saving/tokenless/user-manual.md)
+
 <p align="center">
   <img
     src="docs/images/readme/tokenless-response.png"
@@ -105,8 +113,6 @@ Skills，只把用得到的技能放进上下文，[AgentSight](src/agentsight/R
 
 节省比例针对进入上下文的工具响应，不代表整个会话的账单。具体工作负载的估算方法
 见 [Token-less README](src/tokenless/README_zh.md)。
-
-[查看 Token-less 用户手册 →](docs/user-guide/zh/token-saving/tokenless/user-manual.md)
 
 <p align="center"><strong>03 · EXECUTION RUNTIME</strong></p>
 

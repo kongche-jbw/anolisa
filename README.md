@@ -92,6 +92,14 @@ demand so only the relevant ones enter the context, and
   </sub>
 </p>
 
+### Try Token-less in 3 minutes
+
+Install Token-less, connect it to the Agent you already use, run one
+tool-heavy task, and verify the before/after Token record locally.
+
+[Start the Token-less Quick Start →](docs/user-guide/en/token-saving/tokenless/QUICKSTART.md)
+· [Read the user manual](docs/user-guide/en/token-saving/tokenless/user-manual.md)
+
 <p align="center">
   <img
     src="docs/images/readme/tokenless-response.png"
@@ -112,8 +120,6 @@ through a `<<tokenless:KEY>>` marker, which keeps the compression reversible.
 Savings apply to the tool responses entering the context, not to the whole
 session bill — the [Token-less README](src/tokenless/README.md) explains how to
 estimate the effect for a given workload.
-
-[Read the Token-less user manual →](docs/user-guide/en/token-saving/tokenless/user-manual.md)
 
 <p align="center"><strong>03 · EXECUTION RUNTIME</strong></p>
 
