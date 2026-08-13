@@ -1550,6 +1550,7 @@ build_sec_core() {
 build_cosh_ng() {
     step "Building cosh-ng"
     local dir="$PROJECT_ROOT/src/cosh-ng"
+    local cosh_ng_toolchain="${COSH_NG_RUST_TOOLCHAIN:-1.88.0}"
     [[ -d "$dir" ]] || die "Directory not found: $dir"
 
     local component_root bin source
@@ -1557,8 +1558,8 @@ build_cosh_ng() {
 
     if $DRY_RUN; then
         echo "DRY-RUN: rm -rf $component_root"
-        echo "DRY-RUN: CARGO_NET_GIT_FETCH_WITH_CLI=true cargo build --manifest-path $dir/Cargo.toml --workspace --release"
-        for bin in cosh-cli cosh-core cosh-shell; do
+        echo "DRY-RUN: CARGO_NET_GIT_FETCH_WITH_CLI=true rustup run $cosh_ng_toolchain cargo build --manifest-path $dir/Cargo.toml --workspace --release"
+        for bin in cosh-cli cosh-core cosh-gateway cosh-shell; do
             echo "DRY-RUN: install $dir/target/release/$bin -> $component_root/bin/$bin"
         done
         ok "cosh-ng build plan generated"
@@ -1574,9 +1575,10 @@ build_cosh_ng() {
     run_logged_timeout "${COSH_NG_BUILD_TIMEOUT:-1200}" \
         "cargo build (cosh-ng workspace)" \
         env CARGO_NET_GIT_FETCH_WITH_CLI=true \
-        cargo build --manifest-path "$dir/Cargo.toml" --workspace --release
+        rustup run "$cosh_ng_toolchain" cargo build \
+            --manifest-path "$dir/Cargo.toml" --workspace --release
 
-    for bin in cosh-cli cosh-core cosh-shell; do
+    for bin in cosh-cli cosh-core cosh-gateway cosh-shell; do
         source="$dir/target/release/$bin"
         copy_file "$source" "$component_root/bin/$bin" 0755
     done
@@ -1892,14 +1894,14 @@ install_cosh_ng() {
     staged="$(component_target_dir cosh-ng)/bin"
 
     if $DRY_RUN; then
-        for bin in cosh-cli cosh-core cosh-shell; do
+        for bin in cosh-cli cosh-core cosh-gateway cosh-shell; do
             echo "DRY-RUN: install -p -m 0755 $staged/$bin $INSTALL_BIN_DIR/$bin"
         done
         ok "cosh-ng install plan generated for ${INSTALL_BIN_DIR}/"
         return 0
     fi
 
-    for bin in cosh-cli cosh-core cosh-shell; do
+    for bin in cosh-cli cosh-core cosh-gateway cosh-shell; do
         [[ -f "$staged/$bin" ]] || die "Built cosh-ng binary not found: $staged/$bin"
         target="$INSTALL_BIN_DIR/$bin"
         if [[ "$INSTALL_MODE" == "system" ]]; then
@@ -1911,7 +1913,7 @@ install_cosh_ng() {
         fi
     done
 
-    ok "cosh-ng installed to ${INSTALL_BIN_DIR}/{cosh-cli,cosh-core,cosh-shell}"
+    ok "cosh-ng installed to ${INSTALL_BIN_DIR}/{cosh-cli,cosh-core,cosh-gateway,cosh-shell}"
     info "Start cosh-ng with: ${INSTALL_BIN_DIR}/cosh-shell"
     info "The existing cosh launcher was not changed."
 }
@@ -2076,7 +2078,7 @@ uninstall_cosh_ng() {
     step "Uninstalling cosh-ng"
     local bin
 
-    for bin in cosh-cli cosh-core cosh-shell; do
+    for bin in cosh-cli cosh-core cosh-gateway cosh-shell; do
         if $DRY_RUN; then
             echo "DRY-RUN: rm -f $INSTALL_BIN_DIR/$bin"
         elif [[ "$INSTALL_MODE" == "system" ]]; then

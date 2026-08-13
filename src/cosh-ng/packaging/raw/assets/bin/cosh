@@ -39,9 +39,14 @@ for runtime_dir in \
     "/usr/libexec/anolisa/cosh-ng"; do
     if [ -n "$runtime_dir" ] && \
         [ -x "$runtime_dir/cosh-shell" ] && \
-        [ -x "$runtime_dir/cosh-core" ]; then
+        [ -x "$runtime_dir/cosh-core" ] && \
+        [ -x "$runtime_dir/cosh-gateway" ]; then
         export PATH="$runtime_dir:$PATH"
         case "${1:-}" in
+            agent)
+                shift
+                exec "$runtime_dir/cosh-gateway" "$@"
+                ;;
             -c | -- | --help | --version)
                 exec "$runtime_dir/cosh-shell" "$@"
                 ;;

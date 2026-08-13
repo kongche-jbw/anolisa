@@ -726,11 +726,13 @@ name = "cosh-gateway"
 version = "0.15.0"
 dependencies = [
  "agent-client-protocol",
+ "clap",
  "cosh-gateway-contracts",
  "nix 0.29.0",
  "rusqlite",
  "serde",
  "serde_json",
+ "signal-hook",
  "tempfile",
  "thiserror 2.0.18",
  "wait-timeout",
