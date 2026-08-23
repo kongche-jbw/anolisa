@@ -15,8 +15,8 @@
 
 | 阶段 | 状态 | Commit | 下一阶段入口 |
 |---|---|---|---|
-| 1. Memory Protocol | Complete | This commit | RuntimeAdapter 只消费协议类型 |
-| 2. Cosh RuntimeAdapter | Pending | — | Hook 生命周期映射完成 |
+| 1. Memory Protocol | Complete | `c2dfd0b1` | RuntimeAdapter 只消费协议类型 |
+| 2. Cosh RuntimeAdapter | Complete | This commit | 以 durable backend 替换开发期 backend |
 | 3. Typed Local Backend | Pending | — | ContextView 可持久化与解释 |
 | 4. ManT Provider | Pending | — | Provider 可卸载、可失效 |
 | 5. Cosh UX | Pending | — | 30 秒体验路径 |
@@ -81,3 +81,60 @@
 - Session close 可以安全重放；idempotency alias、primary object 和 RecallTrace 均有硬上限。
 - 阶段 2 实现 Cosh RuntimeAdapter，并坚持用户任务 fail-open、Memory identity fail-closed。
 - 任何尚未由 Cosh commit 的 model output 都不得成为 Fact 或 TaskState。
+
+## 阶段 2 Handoff：Cosh RuntimeAdapter
+
+### 已完成
+
+- 新增仅依赖 `MemoryBackend` 的 `CoshRuntimeAdapter<B>`，backend 可以在不改 Hook
+  映射的情况下替换。
+- `SessionStart` 执行 open + `session_resume` recall；`UserPromptSubmit` 执行幂等懒
+  open + raw logical prompt 的 `turn` recall。
+- `PostToolUse` 和 `PostToolUseFailure` 先懒打开 session，再以 session/run/tool
+  维度幂等捕获脱敏、有界、带 ref/hash 的不可变证据。
+- `AfterModel` 和 `Stop` 明确为零 capture，也没有注册到 extension manifest。
+- 整次 Hook 共用 trace ID 和绝对 deadline。同步 backend 放到 worker thread，
+  adapter 按 deadline 返回 fail-open 结果，不继续阻塞用户 turn。
+- ContextView 经过二次 item/byte admission、secret redaction、prompt-injection
+  quarantine 和固定 untrusted-data wrapper，再转成 `additionalContext`。
+- 以实际注入结果上报 admitted/dropped；outcome telemetry 失败不会丢掉已经
+  通过安全 admission 的上下文。
+- 新增 one-shot stdio Hook binary 和 strict v1 extension manifest，作为阶段 3 的打包
+  输入。
+- 新增中英文 RuntimeAdapter 设计文档。
+
+### 信任与降级契约
+
+- 管理面 identity 由宿主配置；model 和 event data 不能覆盖 tenant/team/user/
+  agent/workspace。
+- 本地 binary 使用 effective Unix UID 作 principal，canonical cwd 的指纹只是
+  本地 workspace scope key，不是 B 端 ACL。
+- Memory 身份与数据访问 fail-closed；用户任务对 backend unavailable、deadline、
+  malformed frame 和 capture failure fail-open。
+- 召回内容永远是 data，不会作为裸 system instruction。
+- 阶段 2 不把 process-local backend 宣传成跨 Hook 记忆，所以 Makefile/RPM 暂不
+  安装 Hook binary 与 manifest。阶段 3 接通 durable backend 后再开放包装。
+
+### 验证
+
+- `cargo test --locked --test cosh_adapter_test --test cosh_hook_wire_test`
+  - 11 passed，覆盖 lazy activation、raw prompt、上下文脱敏/转义/隔离、证据
+    幂等、pre-commit 零 capture、真实 deadline 切断、空/错误/超长 stdio frame。
+- `cargo test --locked`
+  - 376 passed，0 failed，0 ignored。
+- `cargo clippy --locked --lib --bins --test cosh_adapter_test --test cosh_hook_wire_test -- -D warnings`
+- `RUSTDOCFLAGS='-D warnings' cargo doc --locked --no-deps`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- 独立测试 Agent 用当前 `cosh-core` strict v1 registry 载入真实 manifest，确认
+  schema v1、health healthy、0 diagnostics 和 4 个 Hook capability。
+- 独立架构 review 提出的 process-local 假闭环、同步阻塞和自然语言注入三个
+  P1 已通过“暂不发布 + lazy open”、worker deadline 和 quarantine 关闭。
+
+### 阶段 3 入口
+
+- 新增独立 typed SQLite backend，不复用旧 Markdown/BM25 store 的隐式语义。
+- 需要 WAL、schema version、事务 ACK、修订冲突、幂等 replay、RecallTrace/outcome
+  持久化以及 process reopen/cold-resume 测试。
+- Hook binary 默认打开 local backend，然后才在 Makefile/RPM 中安装 binary 和
+  `/usr/share/anolisa/extensions/anolisa.agent-memory/cosh-extension.json`。

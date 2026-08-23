@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "name": "anolisa.agent-memory",
+  "version": "0.2.6",
+  "description": "Fail-open Cosh-ng adapter for versioned Agent Memory backends.",
+  "compatibility": {
+    "cosh": ">=0.19.0, <0.20.0"
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "name": "memory-session-start",
+            "command": "agent-memory-cosh-hook",
+            "description": "Opens memory scope and recalls bounded resume context.",
+            "fail_open": true
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "name": "memory-turn-recall",
+            "command": "agent-memory-cosh-hook",
+            "description": "Recalls bounded context for the raw logical user prompt.",
+            "fail_open": true
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "name": "memory-tool-evidence",
+            "command": "agent-memory-cosh-hook",
+            "description": "Captures bounded evidence after a successful tool call.",
+            "fail_open": true
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "name": "memory-tool-failure",
+            "command": "agent-memory-cosh-hook",
+            "description": "Captures bounded evidence after a failed tool call.",
+            "fail_open": true
+          }
+        ]
+      }
+    ]
+  }
+}

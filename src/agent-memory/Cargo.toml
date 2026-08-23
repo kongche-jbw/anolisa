@@ -84,6 +84,10 @@ path = "src/main.rs"
 name = "agent-memory-backend"
 path = "src/bin/agent-memory-backend.rs"
 
+[[bin]]
+name = "agent-memory-cosh-hook"
+path = "src/bin/agent-memory-cosh-hook.rs"
+
 [[example]]
 name = "mcp-harness"
 path = "examples/mcp_harness.rs"

@@ -17,6 +17,7 @@
 // them — opt out crate-wide.
 #![allow(clippy::collapsible_if)]
 
+pub mod adapter;
 pub mod audit;
 pub mod cgroup;
 pub mod config;
