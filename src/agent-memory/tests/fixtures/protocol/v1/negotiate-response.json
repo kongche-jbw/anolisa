@@ -1,0 +1,25 @@
+{
+  "status": "ok",
+  "protocol_version": 1,
+  "request_id": "golden-negotiate-1",
+  "response": {
+    "operation": "negotiated",
+    "output": {
+      "manifest": {
+        "backend_id": "ephemeral",
+        "display_name": "Ephemeral conformance backend",
+        "protocol_version": 1,
+        "capabilities": [
+          "session",
+          "capture",
+          "recall",
+          "checkpoint",
+          "explain",
+          "outcome",
+          "forget"
+        ],
+        "durability": "process_local"
+      }
+    }
+  }
+}

@@ -80,6 +80,10 @@ toml = "0.8"
 name = "agent-memory"
 path = "src/main.rs"
 
+[[bin]]
+name = "agent-memory-backend"
+path = "src/bin/agent-memory-backend.rs"
+
 [[example]]
 name = "mcp-harness"
 path = "examples/mcp_harness.rs"

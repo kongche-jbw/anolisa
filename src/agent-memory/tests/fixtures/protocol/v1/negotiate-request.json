@@ -1,0 +1,27 @@
+{
+  "protocol_version": 1,
+  "request_id": "golden-negotiate-1",
+  "trace_id": "golden-trace-1",
+  "run_id": null,
+  "task_id": null,
+  "turn_id": null,
+  "deadline_at_ms": null,
+  "identity": {
+    "tenant_id": null,
+    "team_id": null,
+    "user_id": "unix:1000",
+    "agent_id": "cosh-ng",
+    "session_id": "session-1",
+    "workspace_id": "workspace-1"
+  },
+  "request": {
+    "operation": "negotiate",
+    "input": {
+      "required": [
+        "session",
+        "recall",
+        "explain"
+      ]
+    }
+  }
+}

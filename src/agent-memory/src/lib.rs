@@ -28,6 +28,7 @@ pub mod index;
 pub mod mcp_server;
 pub mod mount;
 pub mod ns;
+pub mod protocol;
 pub mod safe_fs;
 pub mod safety;
 pub mod service;
