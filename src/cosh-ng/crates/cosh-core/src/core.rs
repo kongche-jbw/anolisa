@@ -132,7 +132,9 @@ impl CoshCore {
             self.config.skills = Default::default();
             self.config.agent.allowed_tools.clear();
             self.config.agent.approval_mode = ApprovalMode::Recommend;
-            self.hook_system = HookSystem::from_config(&self.config.hooks);
+            let mut hook_system = HookSystem::from_config(&self.config.hooks);
+            hook_system.set_workspace_root(self.project_root.to_string_lossy().into_owned());
+            self.hook_system = hook_system;
             self.extension_context = None;
         }
     }

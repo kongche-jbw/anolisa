@@ -199,6 +199,7 @@ install: ## Install binary, config, and adapter to PREFIX
 	@if [ ! -f target/release/$(NAME) ] \
 		|| [ ! -f target/release/agent-memory-backend ] \
 		|| [ ! -f target/release/agent-memory-cosh-hook ] \
+		|| [ ! -f target/release/agent-memory-ctl ] \
 		|| [ "$(FORCE_BUILD)" = "1" ]; then \
 		echo "==> Binary not found, building..."; \
 		$(MAKE) build; \
@@ -216,6 +217,7 @@ install: ## Install binary, config, and adapter to PREFIX
 	install -p -m 0755 target/release/$(NAME) $(DESTDIR)$(BINDIR)/
 	install -p -m 0755 target/release/agent-memory-backend $(DESTDIR)$(BINDIR)/
 	install -p -m 0755 target/release/agent-memory-cosh-hook $(DESTDIR)$(BINDIR)/
+	install -p -m 0755 target/release/agent-memory-ctl $(DESTDIR)$(BINDIR)/
 	install -d -m 0755 $(DESTDIR)$(DATADIR)/agent-memory
 	install -p -m 0644 config/default.toml $(DESTDIR)$(DATADIR)/agent-memory/
 	install -d -m 0755 $(DESTDIR)$(DATADIR)/mcp-servers
@@ -251,6 +253,7 @@ uninstall: ## Remove installed files
 	rm -f $(DESTDIR)$(BINDIR)/$(NAME)
 	rm -f $(DESTDIR)$(BINDIR)/agent-memory-backend
 	rm -f $(DESTDIR)$(BINDIR)/agent-memory-cosh-hook
+	rm -f $(DESTDIR)$(BINDIR)/agent-memory-ctl
 	rm -f $(DESTDIR)$(DATADIR)/agent-memory/default.toml
 	rm -f $(DESTDIR)$(DATADIR)/mcp-servers/agent-memory.json
 	rm -f $(DESTDIR)$(COSH_EXTENSION_DIR)/cosh-extension.json

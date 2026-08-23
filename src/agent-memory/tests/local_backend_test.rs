@@ -10,10 +10,10 @@ use agent_memory::knowledge::{
 };
 use agent_memory::protocol::{
     BackendRequestContext, ContextBudget, EvidenceRef, FeedbackOutcome, IdentityContext,
-    KnowledgeProviderBinding, KnowledgeRef, LocalMemoryBackend, MemoryAuthority, MemoryBackend,
-    MemoryCapability, MemoryDurability, MemoryEvent, MemoryEventKind, MemoryEventOutcome,
-    MemoryObjectKind, ProtocolErrorCode, RecallBinding, RecallPurpose, RuntimeContext,
-    SessionOutcome, TaskState,
+    KnowledgeProviderBinding, KnowledgeRef, LocalManagementContext, LocalMemoryBackend,
+    MemoryAuthority, MemoryBackend, MemoryCapability, MemoryDurability, MemoryEvent,
+    MemoryEventKind, MemoryEventOutcome, MemoryObjectKind, ProtocolErrorCode, RecallBinding,
+    RecallPurpose, RuntimeContext, SessionOutcome, TaskState,
 };
 use rusqlite::Connection;
 
@@ -899,6 +899,178 @@ fn forget_cascades_indexes_without_cross_kind_leaks() {
     assert_eq!(stats.event_count, 0);
     assert_eq!(stats.task_count, 0);
     assert_eq!(stats.view_count, 0);
+}
+
+#[test]
+fn management_lists_explains_and_cascades_owned_view() {
+    let root = tempfile::tempdir().expect("temp root");
+    let path = database_path(root.path());
+    let backend = LocalMemoryBackend::open(&path).expect("backend");
+    let owner = context("user-a", "workspace-a", "session-a", "trace-management");
+    open(&backend, &owner);
+    backend
+        .checkpoint_task(&owner, "checkpoint", &task(1, "managed task"), None, &[])
+        .expect("checkpoint");
+    let view = backend
+        .materialize_context(
+            &owner,
+            RecallPurpose::Turn,
+            &RecallBinding::default(),
+            "managed task",
+            budget(),
+        )
+        .expect("materialize owned view");
+    let admitted = view
+        .items
+        .iter()
+        .map(|item| item.item_id.clone())
+        .collect::<Vec<_>>();
+    backend
+        .report_recall_outcome(
+            &owner,
+            "management-outcome",
+            &view.context_view_id,
+            &admitted,
+            &[],
+            FeedbackOutcome::Useful,
+        )
+        .expect("report outcome");
+
+    let management =
+        LocalManagementContext::from_identity(&owner.identity).expect("management context");
+    let summaries = backend
+        .list_owned_views(&management, 10)
+        .expect("list owned views");
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0].context_view_id, view.context_view_id);
+    assert_eq!(summaries[0].outcome, Some(FeedbackOutcome::Useful));
+    assert!(summaries[0].candidate_count >= summaries[0].admitted_count);
+
+    let trace = backend
+        .explain_owned_view(&management, &view.context_view_id)
+        .expect("explain owned view");
+    assert_eq!(trace.context_view_id, view.context_view_id);
+    assert_eq!(
+        trace.outcome_report.map(|report| report.outcome),
+        Some(FeedbackOutcome::Useful)
+    );
+    assert!(
+        backend
+            .forget_owned(
+                &management,
+                MemoryObjectKind::ContextView,
+                &view.context_view_id,
+            )
+            .expect("forget owned view")
+    );
+    assert!(
+        backend
+            .list_owned_views(&management, 10)
+            .expect("list after forget")
+            .is_empty()
+    );
+    assert_eq!(
+        backend
+            .explain_owned_view(&management, &view.context_view_id)
+            .expect_err("forgotten trace must be absent")
+            .code,
+        ProtocolErrorCode::NotFound
+    );
+
+    let observer = Connection::open(&path).expect("observer connection");
+    let view_rows: u64 = observer
+        .query_row("SELECT COUNT(*) FROM views", [], |row| row.get(0))
+        .expect("view rows");
+    let outcome_rows: u64 = observer
+        .query_row("SELECT COUNT(*) FROM outcome_idempotency", [], |row| {
+            row.get(0)
+        })
+        .expect("outcome rows");
+    assert_eq!(view_rows, 0);
+    assert_eq!(outcome_rows, 0);
+}
+
+#[test]
+fn management_keeps_cross_workspace_views_invisible() {
+    let root = tempfile::tempdir().expect("temp root");
+    let backend = LocalMemoryBackend::open(database_path(root.path())).expect("backend");
+    let owner = context("user-a", "workspace-a", "session-a", "trace-owner-view");
+    open(&backend, &owner);
+    let view = backend
+        .materialize_context(
+            &owner,
+            RecallPurpose::SessionResume,
+            &RecallBinding::default(),
+            "resume",
+            budget(),
+        )
+        .expect("materialize owner view");
+    let owner_management =
+        LocalManagementContext::from_identity(&owner.identity).expect("owner management");
+    let foreign = context("user-a", "workspace-b", "session-a", "trace-foreign-view");
+    let foreign_management =
+        LocalManagementContext::from_identity(&foreign.identity).expect("foreign management");
+
+    assert!(
+        backend
+            .list_owned_views(&foreign_management, 10)
+            .expect("foreign list")
+            .is_empty()
+    );
+    assert_eq!(
+        backend
+            .explain_owned_view(&foreign_management, &view.context_view_id)
+            .expect_err("foreign why must not reveal the view")
+            .code,
+        ProtocolErrorCode::NotFound
+    );
+    assert!(
+        !backend
+            .forget_owned(
+                &foreign_management,
+                MemoryObjectKind::ContextView,
+                &view.context_view_id,
+            )
+            .expect("foreign forget must be indistinguishable from absent")
+    );
+    assert_eq!(
+        backend
+            .list_owned_views(&owner_management, 10)
+            .expect("owner list")
+            .len(),
+        1
+    );
+    assert_eq!(
+        backend
+            .explain_owned_view(&owner_management, &view.context_view_id)
+            .expect("owner why")
+            .context_view_id,
+        view.context_view_id
+    );
+}
+
+#[test]
+fn management_rejects_ambiguous_event_id_without_deleting() {
+    let root = tempfile::tempdir().expect("temp root");
+    let backend = LocalMemoryBackend::open(database_path(root.path())).expect("backend");
+    let first = context("user-a", "workspace-a", "session-a", "trace-first-event");
+    let second = context("user-a", "workspace-a", "session-b", "trace-second-event");
+    open(&backend, &first);
+    open(&backend, &second);
+    backend
+        .append_event(&first, "first-event", &event("first session event"))
+        .expect("first event");
+    backend
+        .append_event(&second, "second-event", &event("second session event"))
+        .expect("second event");
+    let management =
+        LocalManagementContext::from_identity(&first.identity).expect("management context");
+
+    let error = backend
+        .forget_owned(&management, MemoryObjectKind::Event, "event-1")
+        .expect_err("ambiguous event identity must not be guessed");
+    assert_eq!(error.code, ProtocolErrorCode::Conflict);
+    assert_eq!(backend.stats().expect("stats").event_count, 2);
 }
 
 #[test]

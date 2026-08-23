@@ -30,7 +30,7 @@ agent-memory 是 ANOLISA 的文件形态记忆 MCP 服务器，为 AI Agent 提�
 anolisa install agent-memory
 ```
 
-安装产物：`agent-memory` 二进制、默认配置、MCP 服务描述符、systemd user 模板、tmpfiles 规则、OpenClaw 适配器 bundle。
+安装产物：`agent-memory`、`agent-memory-ctl`、backend 和 Cosh Hook 二进制，默认配置、MCP 服务描述符、systemd user 模板、tmpfiles 规则、OpenClaw 适配器 bundle 和 Cosh extension。
 
 ### RPM 包（AnolisOS / RHEL 系）
 
@@ -42,7 +42,8 @@ RPM 安装到系统级 FHS 路径：
 
 | 用途 | 路径 |
 |------|------|
-| 服务二进制 | `/usr/bin/agent-memory` |
+| 服务与本地管理二进制 | `/usr/bin/agent-memory`、`/usr/bin/agent-memory-ctl` |
+| Cosh 适配器二进制与 extension | `/usr/bin/agent-memory-cosh-hook`、`/usr/share/anolisa/extensions/agent-memory/` |
 | 默认配置 | `/usr/share/anolisa/agent-memory/default.toml` |
 | MCP 服务描述符（自动发现） | `/usr/share/anolisa/mcp-servers/agent-memory.json` |
 | systemd user 模板 | `/usr/lib/systemd/user/anolisa-memory@.service` |
@@ -74,6 +75,15 @@ make remote-test    # 同上 + 跑测试 + clippy
 ---
 
 ## 集成配置
+
+### cosh-ng 生命周期 Memory
+
+安装包会在 MCP server 之外同时安装 cosh-ng extension 和
+`agent-memory-ctl`。这条路径会捕获有界的工具 evidence，从持久化本地后端
+召回相关内容，并在 Memory 不可用时继续用户任务。接入过程不需要配置 MCP。
+
+按照 [Cosh Agent Memory 指南](cosh-agent-memory.md)，大约 30 秒即可验证完整
+链路，并使用 `why` 检查一次召回的选择依据。
 
 ### Claude Code / Cursor / Continue / 任意 stdio MCP 客户端
 

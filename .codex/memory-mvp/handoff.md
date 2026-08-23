@@ -7,7 +7,8 @@
 
 - Branch: `feature/memory/cosh-ng-integration`
 - Base: `3b7f6ebc5a463d968db7cf049a5e0e10b9ab3478`
-- Components: `src/agent-memory` 为实现主体，Cosh-ng 仅通过既有 Extension Hook 接入。
+- Components: `src/agent-memory` 为实现主体；Cosh-ng Hook wire 仅 additive 增加固定
+  `workspace_root`，其余 Memory 语义留在 adapter/protocol/backend。
 - User loop: capture、recall、inject、explain、resume。
 - Invariant: Cosh adapter 只依赖 versioned Memory Protocol；ManT 是可卸载 Provider。
 
@@ -18,8 +19,8 @@
 | 1. Memory Protocol | Complete | `c2dfd0b1` | RuntimeAdapter 只消费协议类型 |
 | 2. Cosh RuntimeAdapter | Complete | `5dc23c73` | 以 durable backend 替换开发期 backend |
 | 3. Typed Local Backend | Complete | `1af8136c` | ContextView 可持久化与解释 |
-| 4. ManT Provider | Complete | This commit | Provider 可卸载、可失效 |
-| 5. Cosh UX | Pending | — | 30 秒体验路径 |
+| 4. ManT Provider | Complete | `63d3ea48` | Provider 可卸载、可失效 |
+| 5. Cosh UX | Complete | This commit | 30 秒体验路径与验收报告 |
 
 ## 基线验证
 
@@ -254,3 +255,75 @@
   密码学完整性证明。
 - Cosh 用户需要看到 recall 条数、token、view ID，并能用独立管理 CLI 运行
   status/doctor/demo/why/forget；管理面不能要求用户猜 owning session。
+
+## 阶段 5 Handoff：Cosh 用户体验与管理 CLI
+
+### 已完成
+
+- 新增正式安装的 `agent-memory-ctl`，提供 `status`、`doctor`、`demo`、`why` 和
+  `forget`，每个 command 都支持 `--json`。
+- `doctor` 检查私有 local store、必需的 Cosh Hook、可选 Cosh runtime，并对 PATH 或
+  `ANOLISA_MANT_PATH` 中的 ManT 执行真实 v0.9 protocol probe；ManT 缺失不影响健康。
+- `demo` 捕获唯一的合成 evidence，drop 并冷重开 backend，在第二个 session 中召回，
+  记录 Useful outcome，并打印 `cold_reopen_ms`、ContextView ID 和可复制的 `why` command。
+- Cosh 只有在安全 admission 后才显示固定的 user notice，内容限于 item 数、估算 Token、
+  view ID 和 `why` command；backend failure 或空 recall 不显示误导性命中。
+- 新增可信 local management scope。`why` 和 `forget` 由 backend 根据 euid、Agent 和
+  canonical workspace fingerprint 解析 owner，不要求 CLI 猜 session；foreign scope
+  与 absent 对用户不可区分。
+- Cosh Hook wire additive 携带固定 project root，与可变 shell cwd 分离。Git worktree
+  内统一使用 canonical root，因此在 repo 子目录 capture、另一子目录 recall、repo root
+  执行 `why/forget` 都属于同一 scope；相邻 workspace 不串。
+- `forget` 必须显式 `--yes`。ContextView 删除会级联清理 RecallTrace/outcome；跨 session
+  event ID 歧义返回 Conflict，不会任选一条删除。
+- `status` 报告 SQLite logical/physical bytes、对象数/硬容量、7/30 天生命周期，以及
+  最近 1000 个 ContextView 的 backend admission、reported outcome 和 useful outcome；
+  synthetic CLI view 单独计数并从真实漏斗排除。
+- Cargo、Make install/uninstall 和 RPM `%install/%files` 都纳入 `agent-memory-ctl`。
+- ANOLISA raw/registry component layout 同步纳入 `bin/agent-memory-ctl`，确保
+  `anolisa install agent-memory` 与 RPM/Make 三条安装路径一致。
+- 新增仓库级中英文 Cosh Agent Memory 用户指南，并更新 Agent Memory README 和主用户
+  指南入口；完整验收报告保存在 `.codex/memory-mvp/acceptance-report.md`。
+
+### 指标语义
+
+- `recall_with_items` 是 backend ContextView 中有 item 的 view，不是“最终回答用了记忆”。
+- `reported_outcomes` 只统计 Runtime 已明确上报的 outcome；`useful_outcomes` 不把 unknown
+  当作命中。Cosh 自动路径当前可靠上报 admitted/dropped，demo 才主动标 Useful。
+- `cold_reopen_ms` 只测 SQLite backend drop/open；不代表 PTY、process、fd、model state
+  或 provider KV cache 的完整 cold Agent 恢复。
+- Provider API 下真实 KV cache GB 仍是 `unknown(provider-managed)`，不得由 token 数伪算。
+
+### 验证
+
+- `cargo test --locked`
+  - 413 passed，0 failed，0 ignored；其中 local backend 18 项、CLI process 7 项、Cosh
+    adapter 9 项、真实 Hook wire 4 项、ManT provider 10 项。
+- `cargo clippy --workspace --all-targets --locked -- -D warnings`
+- `RUSTDOCFLAGS='-D warnings' cargo doc --workspace --locked --no-deps`
+- `cargo fmt --all -- --check`
+- `python3 scripts/docs-link-check.py`
+- `cargo test --locked --package cosh-core` 的 fixed workspace-root 与 safe extension reload
+  两项 targeted test 均通过；`cargo clippy --locked --package cosh-core --all-targets --
+  -D warnings` 通过。
+- `cargo test --locked --package anolisa-core
+  manifest::tests::existing_manifests_still_parse_after_schema_extension -- --exact` 通过。
+- 隔离 `DESTDIR` release install smoke：installed `agent-memory-ctl` 依次运行
+  `doctor -> demo -> status` 成功，随后 `make uninstall` 确认 binary 被删除。
+- `rpmspec/rpmbuild` 在当前环境不存在，因此真实 RPM build 未运行；spec 的 install/files
+  静态 contract 已验证。
+- `git diff --check`
+- 独立 Stage 5 review 提出的 raw install 漏装 CLI、synthetic demo 污染真实命中漏斗、
+  可变 cwd 分裂 workspace，以及 safe extension reload 丢失 fixed root 四个 P1 均已
+  关闭；最终 P0/P1 复核清零。
+
+### 最终已知边界
+
+- Cosh 还没有 durable `TurnCommitted` + outbox。本阶段不会把 `AfterModel` 或 `Stop`
+  候选输出写成最终 Fact/TaskState，也不宣称“自动保存最终回答”。
+- Local management identity 适用于可信单机 host。B 端需由 gateway 注入 tenant/team/
+  user/agent/workspace principal，并使用服务端 ACL，不能复用本地 argv/env 作为授权。
+- Local broker v1 同时绑定一个 KnowledgeProvider；SPI 支持替换，后续多 Provider fan-out
+  需要独立 deadline、配额、排名归一化和贡献 trace。
+- 下一阶段优先做 TurnCommitted durable outbox、真实 Cosh task benchmark、remote backend/
+  ACL，以及 cold recovery 和 Memory-assisted Task Success dashboard。

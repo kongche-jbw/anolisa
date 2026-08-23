@@ -73,6 +73,7 @@ impl CoshCore {
         }
 
         let mut hook_system = HookSystem::from_config(&config.hooks);
+        hook_system.set_workspace_root(project_root.to_string_lossy().into_owned());
         hook_system.register_extension_hooks(&snapshot.hooks);
         let extension_context = snapshot.context.rendered().map(str::to_string);
         let tools = Arc::clone(&snapshot.tools);
@@ -138,8 +139,10 @@ impl CoshCore {
         }
         self.tools = Arc::clone(&snapshot.tools);
         self.extension_context = snapshot.context.rendered().map(str::to_string);
-        self.hook_system = HookSystem::from_config(&self.config.hooks);
-        self.hook_system.register_extension_hooks(&snapshot.hooks);
+        let mut hook_system = HookSystem::from_config(&self.config.hooks);
+        hook_system.set_workspace_root(self.project_root.to_string_lossy().into_owned());
+        hook_system.register_extension_hooks(&snapshot.hooks);
+        self.hook_system = hook_system;
         self.bound_extension_generation = snapshot.generation.id;
     }
 }

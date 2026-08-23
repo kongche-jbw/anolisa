@@ -89,6 +89,8 @@ pub struct CoshHookInput {
     pub run_id: Option<String>,
     /// Current working directory; never used as an authorization identity.
     pub cwd: String,
+    /// Fixed Runtime project boundary, independent from shell navigation.
+    pub workspace_root: Option<String>,
     /// Exact Cosh lifecycle event name.
     pub hook_event_name: String,
     /// RFC 3339 observation time emitted by Cosh.
@@ -109,6 +111,9 @@ pub struct CoshHookOutput {
     /// Optional model context for lifecycle hooks that support injection.
     #[serde(rename = "hookSpecificOutput", skip_serializing_if = "Option::is_none")]
     pub hook_specific_output: Option<CoshHookSpecificOutput>,
+    /// Bounded user-visible summary of admitted memory, never memory content.
+    #[serde(rename = "systemMessage", skip_serializing_if = "Option::is_none")]
+    pub system_message: Option<String>,
 }
 
 /// Additional Cosh output fields used to inject bounded context.
@@ -140,6 +145,7 @@ impl CoshAdapterResult {
             output: CoshHookOutput {
                 should_continue: true,
                 hook_specific_output: None,
+                system_message: None,
             },
             context_view_id: None,
             admitted_item_ids: Vec::new(),
@@ -298,6 +304,13 @@ impl<B: MemoryBackend + 'static> CoshRuntimeAdapter<B> {
     ) -> CoshAdapterResult {
         let (context, admitted_item_ids, dropped_item_ids) =
             render_context(&view.items, self.config.max_injected_bytes);
+        let admitted_tokens = view
+            .items
+            .iter()
+            .filter(|item| admitted_item_ids.contains(&item.item_id))
+            .fold(0_u32, |total, item| {
+                total.saturating_add(item.token_estimate)
+            });
         let context_view_id = view.context_view_id;
         let report = self.send(
             input,
@@ -324,6 +337,15 @@ impl<B: MemoryBackend + 'static> CoshRuntimeAdapter<B> {
                 should_continue: true,
                 hook_specific_output: context
                     .map(|additional_context| CoshHookSpecificOutput { additional_context }),
+                system_message: (!admitted_item_ids.is_empty()).then(|| {
+                    format!(
+                        "Memory: used {} item(s) · {} tokens · view {} (run `agent-memory-ctl why {}`)",
+                        admitted_item_ids.len(),
+                        admitted_tokens,
+                        context_view_id,
+                        context_view_id
+                    )
+                }),
             },
             context_view_id: Some(context_view_id),
             admitted_item_ids,

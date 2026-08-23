@@ -9,7 +9,8 @@ mod types;
 
 pub use backend::{EphemeralMemoryBackend, MemoryBackend, dispatch};
 pub use local::{
-    KnowledgeProviderBinding, LocalMemoryBackend, LocalMemoryStats, default_local_memory_path,
+    KnowledgeProviderBinding, LocalContextViewSummary, LocalManagementContext, LocalMemoryBackend,
+    LocalMemoryStats, default_local_memory_path, local_workspace_id,
 };
 pub use types::*;
 

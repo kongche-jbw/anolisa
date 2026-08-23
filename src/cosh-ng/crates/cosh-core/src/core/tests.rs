@@ -548,6 +548,10 @@ fn safe_reload_rebinds_the_complete_snapshot_before_the_next_run() {
 
     assert_eq!(core.bound_extension_generation, previous + 1);
     assert!(core.tools.get("example.ops/mcp/server/tool").is_some());
+    assert_eq!(
+        core.hook_system.workspace_root(),
+        Some(core.project_root.to_string_lossy().as_ref())
+    );
     assert_eq!(core.extension_generation.take_retired().len(), 1);
 }
 

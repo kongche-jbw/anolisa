@@ -46,6 +46,9 @@ pub struct HookInput {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run_id: Option<String>,
     pub cwd: String,
+    /// Fixed project boundary, independent from the shell's current directory.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_root: Option<String>,
     pub hook_event_name: String,
     pub timestamp: String,
     /// copilot-shell 协议必填字段。cosh-ng 不维护会话 transcript
@@ -259,6 +262,7 @@ pub struct HookSystem {
     hooks: HashMap<HookEventName, Vec<RegisteredHook>>,
     /// Current run_id, set at the start of each agent run.
     run_id: Option<String>,
+    workspace_root: Option<String>,
 }
 
 struct RegisteredHook {
@@ -340,6 +344,7 @@ impl HookSystem {
             disabled,
             hooks,
             run_id: None,
+            workspace_root: None,
         }
     }
 
@@ -350,7 +355,18 @@ impl HookSystem {
             disabled: HashSet::new(),
             hooks: HashMap::new(),
             run_id: None,
+            workspace_root: None,
         }
+    }
+
+    /// Sets the fixed project boundary included in every hook request.
+    pub(crate) fn set_workspace_root(&mut self, workspace_root: impl Into<String>) {
+        self.workspace_root = Some(workspace_root.into());
+    }
+
+    /// Returns the fixed project boundary carried by hook requests.
+    pub(crate) fn workspace_root(&self) -> Option<&str> {
+        self.workspace_root.as_deref()
     }
 
     /// Set the current run_id for this agent run (used in hook inputs).
@@ -930,6 +946,7 @@ impl HookSystem {
             session_id: session_id.to_string(),
             run_id: self.run_id.clone(),
             cwd: cwd.to_string(),
+            workspace_root: self.workspace_root.clone(),
             hook_event_name: event.as_str().to_string(),
             timestamp: chrono::Utc::now().to_rfc3339(),
             transcript_path: format!("{cwd}/.cosh-transcript.jsonl"),
@@ -1788,6 +1805,22 @@ mod tests {
 
         assert_eq!(outputs.len(), 1);
         assert!(outputs[0].1.failure.is_none());
+    }
+
+    #[test]
+    fn hook_input_keeps_the_fixed_workspace_root() {
+        let mut system = HookSystem::from_config(&HooksConfig::default());
+        system.set_workspace_root("/workspace/project");
+
+        let input = system.build_input(
+            "session-1",
+            "/workspace/project/nested",
+            HookEventName::UserPromptSubmit,
+            Value::Null,
+        );
+
+        assert_eq!(input.cwd, "/workspace/project/nested");
+        assert_eq!(input.workspace_root.as_deref(), Some("/workspace/project"));
     }
 
     #[test]

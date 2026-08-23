@@ -154,6 +154,12 @@ fn session_start_opens_then_recalls_and_wraps_untrusted_data() {
     let result = adapter.handle_json(&input("SessionStart", r#""source":"startup""#));
 
     assert!(result.output.should_continue);
+    assert_eq!(
+        result.output.system_message.as_deref(),
+        Some(
+            "Memory: used 1 item(s) · 10 tokens · view view-1 (run `agent-memory-ctl why view-1`)"
+        )
+    );
     let context = result
         .output
         .hook_specific_output

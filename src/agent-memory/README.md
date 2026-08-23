@@ -45,6 +45,21 @@ Add to your MCP config (Claude Code, Cursor, etc.):
 }
 ```
 
+### Integration with cosh-ng
+
+The package also installs a cosh-ng lifecycle adapter and a local operator
+CLI. Verify capture, cold reopen, and recall without configuring an MCP server:
+
+```bash
+agent-memory-ctl doctor
+agent-memory-ctl demo
+agent-memory-ctl status
+```
+
+See the [Cosh Agent Memory guide](../../docs/user-guide/en/token-saving/cosh-agent-memory.md)
+for the 30-second walkthrough, `why`/`forget` controls, retention policy, and
+the metrics reported by the local backend.
+
 ### Core Operations
 
 ```bash

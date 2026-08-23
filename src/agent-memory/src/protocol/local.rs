@@ -4,11 +4,13 @@ use std::collections::HashSet;
 use std::env;
 use std::fmt;
 use std::fs::{self, DirBuilder, OpenOptions, Permissions};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use git2::{ObjectType, Oid, Repository};
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -20,10 +22,11 @@ use crate::safety::{contains_secrets, looks_like_prompt_injection, redact_secret
 
 use super::{
     BackendManifest, BackendRequestContext, ContextBudget, ContextItem, ContextItemKind,
-    ContextView, EvidenceRef, FeedbackOutcome, MEMORY_PROTOCOL_VERSION, MemoryAuthority,
-    MemoryBackend, MemoryCapability, MemoryDurability, MemoryEvent, MemoryObjectKind,
-    ProtocolError, ProtocolErrorCode, ProtocolResult, RecallBinding, RecallDecision,
-    RecallOutcomeReport, RecallPurpose, RecallTrace, RuntimeContext, SessionOutcome, TaskState,
+    ContextView, EvidenceRef, FeedbackOutcome, IdentityContext, MEMORY_PROTOCOL_VERSION,
+    MemoryAuthority, MemoryBackend, MemoryCapability, MemoryDurability, MemoryEvent,
+    MemoryObjectKind, ProtocolError, ProtocolErrorCode, ProtocolResult, RecallBinding,
+    RecallDecision, RecallOutcomeReport, RecallPurpose, RecallTrace, RuntimeContext,
+    SessionOutcome, TaskState,
 };
 
 const SCHEMA_VERSION: i64 = 1;
@@ -136,6 +139,18 @@ CREATE TABLE close_idempotency (
 /// Capacity and storage counters exposed without revealing the database path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LocalMemoryStats {
+    /// Hard session-row capacity before retention pruning and backpressure.
+    pub session_capacity: u64,
+    /// Hard immutable-event capacity before retention pruning and backpressure.
+    pub event_capacity: u64,
+    /// Hard task-projection capacity.
+    pub task_capacity: u64,
+    /// Hard ContextView capacity before oldest-view pruning.
+    pub view_capacity: u64,
+    /// ContextView and RecallTrace retention in whole days.
+    pub view_retention_days: u16,
+    /// Closed-session and raw-event retention in whole days.
+    pub closed_session_retention_days: u16,
     /// Allocated SQLite bytes excluding pages currently on the freelist.
     pub logical_bytes: u64,
     /// On-disk bytes across the database, WAL, and shared-memory sidecar.
@@ -148,6 +163,59 @@ pub struct LocalMemoryStats {
     pub task_count: u64,
     /// Stored ContextView and RecallTrace pairs.
     pub view_count: u64,
+    /// Recent ContextViews included in the bounded recall metric window.
+    pub recall_sample_count: u64,
+    /// Sampled views that admitted at least one item before Runtime screening.
+    pub recall_with_items_count: u64,
+    /// Sampled views with a Runtime outcome report.
+    pub reported_outcome_count: u64,
+    /// Sampled views whose Runtime outcome is useful.
+    pub useful_outcome_count: u64,
+    /// Synthetic CLI diagnostic views excluded from the recall funnel.
+    pub diagnostic_recall_sample_count: u64,
+}
+
+/// Trusted local principal used by operator-only management operations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalManagementContext {
+    workspace_scope: String,
+}
+
+impl LocalManagementContext {
+    /// Derives management scope from a host-authenticated Runtime identity.
+    ///
+    /// The session field is deliberately ignored. Callers must derive the
+    /// remaining fields from a trusted host boundary, never model input.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-request error when the principal or workspace
+    /// identity violates the protocol boundary.
+    pub fn from_identity(identity: &IdentityContext) -> ProtocolResult<Self> {
+        let mut validated = identity.clone();
+        validated.session_id = "local-management".to_string();
+        validated.validate()?;
+        Ok(Self {
+            workspace_scope: validated.workspace_key(),
+        })
+    }
+}
+
+/// Bounded metadata for one ContextView owned by a local workspace principal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalContextViewSummary {
+    /// Stable view identifier accepted by management `why` and `forget`.
+    pub context_view_id: String,
+    /// Millisecond wall-clock time at which the view was materialized.
+    pub created_at_ms: u64,
+    /// Number of candidates evaluated by the broker.
+    pub candidate_count: u32,
+    /// Number of candidates admitted into the backend ContextView.
+    pub admitted_count: u32,
+    /// Whether any provider or backend lane degraded for this view.
+    pub degraded: bool,
+    /// Runtime-reported usefulness when available.
+    pub outcome: Option<FeedbackOutcome>,
 }
 
 /// SQLite-backed Memory authority with transactionally durable acknowledgements.
@@ -232,6 +300,28 @@ pub fn default_local_memory_path() -> ProtocolResult<PathBuf> {
         .join("memory-v1.sqlite3"))
 }
 
+/// Derives a stable local workspace identity from a trusted host path.
+///
+/// Paths inside the same Git worktree resolve to its canonical root. Outside
+/// a worktree, the canonical path itself is the stable project boundary.
+///
+/// # Errors
+///
+/// Returns a typed safe error when the path cannot be canonicalized or its
+/// identity cannot be hashed.
+pub fn local_workspace_id(path: impl AsRef<Path>) -> ProtocolResult<String> {
+    let canonical = fs::canonicalize(path.as_ref())
+        .map_err(|_| invalid("local workspace cannot be resolved"))?;
+    let stable_root = Repository::discover(&canonical)
+        .ok()
+        .and_then(|repository| repository.workdir().map(Path::to_path_buf))
+        .map(|root| fs::canonicalize(&root).unwrap_or(root))
+        .unwrap_or(canonical);
+    let digest = Oid::hash_object(ObjectType::Blob, stable_root.as_os_str().as_bytes())
+        .map_err(|_| invalid("local workspace identity cannot be created"))?;
+    Ok(format!("local-path-sha1:{digest}"))
+}
+
 impl LocalMemoryBackend {
     /// Opens or creates a private schema-v1 database.
     ///
@@ -286,14 +376,159 @@ impl LocalMemoryBackend {
             .saturating_sub(freelist_count)
             .saturating_mul(page_size);
         let physical_bytes = physical_size(&self.path)?;
+        let recall = recent_recall_stats(&connection)?;
         Ok(LocalMemoryStats {
+            session_capacity: MAX_SESSIONS,
+            event_capacity: MAX_EVENTS,
+            task_capacity: MAX_TASKS,
+            view_capacity: MAX_VIEWS,
+            view_retention_days: u16::try_from(VIEW_RETENTION_MS / (24 * 60 * 60 * 1_000))
+                .unwrap_or(u16::MAX),
+            closed_session_retention_days: u16::try_from(
+                SESSION_RETENTION_MS / (24 * 60 * 60 * 1_000),
+            )
+            .unwrap_or(u16::MAX),
             logical_bytes,
             physical_bytes,
             session_count: table_count(&connection, "SELECT COUNT(*) FROM sessions")?,
             event_count: table_count(&connection, "SELECT COUNT(*) FROM events")?,
             task_count: table_count(&connection, "SELECT COUNT(*) FROM tasks")?,
             view_count: table_count(&connection, "SELECT COUNT(*) FROM views")?,
+            recall_sample_count: recall.sample_count,
+            recall_with_items_count: recall.with_items_count,
+            reported_outcome_count: recall.reported_outcome_count,
+            useful_outcome_count: recall.useful_outcome_count,
+            diagnostic_recall_sample_count: recall.diagnostic_sample_count,
         })
+    }
+
+    /// Lists recent ContextViews visible to one trusted workspace principal.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed storage or integrity error, or an invalid-request error
+    /// when `limit` is zero or greater than one hundred.
+    pub fn list_owned_views(
+        &self,
+        context: &LocalManagementContext,
+        limit: u16,
+    ) -> ProtocolResult<Vec<LocalContextViewSummary>> {
+        if limit == 0 || limit > 100 {
+            return Err(invalid("management view limit must be between 1 and 100"));
+        }
+        let connection = self.connection()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT v.view_id, v.created_at_ms, v.trace_json FROM views v INNER JOIN sessions s ON s.session_scope = v.session_scope WHERE s.workspace_scope = ?1 ORDER BY v.created_at_ms DESC, v.view_id DESC LIMIT ?2",
+            )
+            .map_err(|error| sql_error(&error))?;
+        let rows = statement
+            .query_map(params![&context.workspace_scope, i64::from(limit)], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(|error| sql_error(&error))?;
+        let mut summaries = Vec::new();
+        for row in rows {
+            let (context_view_id, created_at_ms, encoded) =
+                row.map_err(|error| sql_error(&error))?;
+            let trace: RecallTrace = decode(&encoded)?;
+            summaries.push(LocalContextViewSummary {
+                context_view_id,
+                created_at_ms: to_u64(created_at_ms)?,
+                candidate_count: u32::try_from(trace.decisions.len()).unwrap_or(u32::MAX),
+                admitted_count: u32::try_from(
+                    trace
+                        .decisions
+                        .iter()
+                        .filter(|decision| decision.admitted)
+                        .count(),
+                )
+                .unwrap_or(u32::MAX),
+                degraded: trace.degraded,
+                outcome: trace.outcome_report.map(|report| report.outcome),
+            });
+        }
+        Ok(summaries)
+    }
+
+    /// Explains a ContextView owned by one trusted workspace principal.
+    ///
+    /// # Errors
+    ///
+    /// Returns not-found for absent or foreign-scope identifiers, conflict for
+    /// ambiguous ownership, and typed storage or integrity failures.
+    pub fn explain_owned_view(
+        &self,
+        context: &LocalManagementContext,
+        context_view_id: &str,
+    ) -> ProtocolResult<RecallTrace> {
+        validate_management_id(context_view_id)?;
+        let connection = self.connection()?;
+        let traces = query_owned_rows(
+            &connection,
+            "SELECT v.trace_json FROM views v INNER JOIN sessions s ON s.session_scope = v.session_scope WHERE s.workspace_scope = ?1 AND v.view_id = ?2 LIMIT 2",
+            &context.workspace_scope,
+            context_view_id,
+        )?;
+        if traces.len() > 1 {
+            return Err(conflict("context view ownership is ambiguous"));
+        }
+        let encoded = traces.into_iter().next().ok_or_else(not_found)?;
+        decode(&encoded)
+    }
+
+    /// Deletes one object owned by a trusted workspace principal.
+    ///
+    /// Event identifiers that collide across sessions are rejected rather
+    /// than guessed. Foreign-scope identifiers are indistinguishable from
+    /// absent identifiers and return `false`.
+    ///
+    /// # Errors
+    ///
+    /// Returns conflict for ambiguous event or view ownership and typed
+    /// validation, storage, or integrity failures.
+    pub fn forget_owned(
+        &self,
+        context: &LocalManagementContext,
+        kind: MemoryObjectKind,
+        memory_id: &str,
+    ) -> ProtocolResult<bool> {
+        validate_management_id(memory_id)?;
+        let mut connection = self.connection()?;
+        let transaction = immediate(&mut connection)?;
+        let deleted = match kind {
+            MemoryObjectKind::Task => transaction
+                .execute(
+                    "DELETE FROM tasks WHERE workspace_scope = ?1 AND task_id = ?2",
+                    params![&context.workspace_scope, memory_id],
+                )
+                .map_err(|error| sql_error(&error))?,
+            MemoryObjectKind::Event => delete_unique_owned(
+                &transaction,
+                "SELECT e.session_scope FROM events e INNER JOIN sessions s ON s.session_scope = e.session_scope WHERE s.workspace_scope = ?1 AND e.event_id = ?2 LIMIT 2",
+                "DELETE FROM events WHERE session_scope = ?1 AND event_id = ?2",
+                &context.workspace_scope,
+                memory_id,
+                "event ownership is ambiguous",
+            )?,
+            MemoryObjectKind::ContextView => delete_unique_owned(
+                &transaction,
+                "SELECT v.session_scope FROM views v INNER JOIN sessions s ON s.session_scope = v.session_scope WHERE s.workspace_scope = ?1 AND v.view_id = ?2 LIMIT 2",
+                "DELETE FROM views WHERE session_scope = ?1 AND view_id = ?2",
+                &context.workspace_scope,
+                memory_id,
+                "context view ownership is ambiguous",
+            )?,
+        } != 0;
+        if deleted {
+            advance_revision(&transaction)?;
+        }
+        commit(transaction)?;
+        Ok(deleted)
     }
 
     fn connection(&self) -> ProtocolResult<MutexGuard<'_, Connection>> {
@@ -1339,6 +1574,53 @@ fn validate_budget(budget: ContextBudget) -> ProtocolResult<()> {
     Ok(())
 }
 
+fn validate_management_id(value: &str) -> ProtocolResult<()> {
+    if value.is_empty()
+        || value.len() > 256
+        || value.chars().any(|character| character.is_control())
+    {
+        return Err(invalid("management object identity is invalid"));
+    }
+    Ok(())
+}
+
+fn query_owned_rows(
+    connection: &Connection,
+    sql: &str,
+    workspace_scope: &str,
+    object_id: &str,
+) -> ProtocolResult<Vec<String>> {
+    let mut statement = connection.prepare(sql).map_err(|error| sql_error(&error))?;
+    let rows = statement
+        .query_map(params![workspace_scope, object_id], |row| row.get(0))
+        .map_err(|error| sql_error(&error))?;
+    let mut values = Vec::new();
+    for row in rows {
+        values.push(row.map_err(|error| sql_error(&error))?);
+    }
+    Ok(values)
+}
+
+fn delete_unique_owned(
+    transaction: &Transaction<'_>,
+    select_sql: &str,
+    delete_sql: &str,
+    workspace_scope: &str,
+    object_id: &str,
+    ambiguity: &'static str,
+) -> ProtocolResult<usize> {
+    let owners = query_owned_rows(transaction, select_sql, workspace_scope, object_id)?;
+    if owners.len() > 1 {
+        return Err(conflict(ambiguity));
+    }
+    let Some(session_scope) = owners.first() else {
+        return Ok(0);
+    };
+    transaction
+        .execute(delete_sql, params![session_scope, object_id])
+        .map_err(|error| sql_error(&error))
+}
+
 fn validate_task_revision(revision: u64, expected: Option<u64>) -> ProtocolResult<()> {
     let required = expected
         .map(|value| value.checked_add(1))
@@ -1499,6 +1781,54 @@ fn table_count(connection: &Connection, query: &str) -> ProtocolResult<u64> {
         .query_row(query, [], |row| row.get::<_, i64>(0))
         .map_err(|error| sql_error(&error))?;
     to_u64(count)
+}
+
+struct RecentRecallStats {
+    sample_count: u64,
+    with_items_count: u64,
+    reported_outcome_count: u64,
+    useful_outcome_count: u64,
+    diagnostic_sample_count: u64,
+}
+
+fn recent_recall_stats(connection: &Connection) -> ProtocolResult<RecentRecallStats> {
+    let mut statement = connection
+        .prepare(
+            "SELECT v.trace_json, s.runtime_json FROM views v INNER JOIN sessions s ON s.session_scope = v.session_scope ORDER BY v.created_at_ms DESC, v.view_id DESC LIMIT 1000",
+        )
+        .map_err(|error| sql_error(&error))?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|error| sql_error(&error))?;
+    let mut stats = RecentRecallStats {
+        sample_count: 0,
+        with_items_count: 0,
+        reported_outcome_count: 0,
+        useful_outcome_count: 0,
+        diagnostic_sample_count: 0,
+    };
+    for row in rows {
+        let (encoded_trace, encoded_runtime) = row.map_err(|error| sql_error(&error))?;
+        let runtime: RuntimeContext = decode(&encoded_runtime)?;
+        if runtime.runtime == "agent-memory-ctl" {
+            stats.diagnostic_sample_count = stats.diagnostic_sample_count.saturating_add(1);
+            continue;
+        }
+        let trace: RecallTrace = decode(&encoded_trace)?;
+        stats.sample_count = stats.sample_count.saturating_add(1);
+        if trace.decisions.iter().any(|decision| decision.admitted) {
+            stats.with_items_count = stats.with_items_count.saturating_add(1);
+        }
+        if let Some(report) = trace.outcome_report {
+            stats.reported_outcome_count = stats.reported_outcome_count.saturating_add(1);
+            if matches!(report.outcome, FeedbackOutcome::Useful) {
+                stats.useful_outcome_count = stats.useful_outcome_count.saturating_add(1);
+            }
+        }
+    }
+    Ok(stats)
 }
 
 fn pragma_u64(connection: &Connection, pragma: &str) -> ProtocolResult<u64> {

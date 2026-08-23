@@ -45,6 +45,20 @@ sudo yum install agent-memory
 }
 ```
 
+### 与 cosh-ng 集成
+
+安装包还会提供 cosh-ng 生命周期适配器和本地管理 CLI。无需配置 MCP
+server，即可验证捕获、冷重开和召回链路：
+
+```bash
+agent-memory-ctl doctor
+agent-memory-ctl demo
+agent-memory-ctl status
+```
+
+完整的 30 秒体验、`why`/`forget` 管理操作、保留策略和本地指标说明，见
+[Cosh Agent Memory 指南](../../docs/user-guide/zh/token-saving/cosh-agent-memory.md)。
+
 ## 架构
 
 单进程 Tokio 异步运行时，通过 stdio JSON-RPC 2.0 暴露 37 个 MCP 工具：

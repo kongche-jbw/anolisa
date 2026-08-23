@@ -75,10 +75,18 @@ fn malformed_and_oversized_frames_fail_open() {
 #[test]
 fn tool_evidence_is_recalled_by_a_new_hook_process() {
     let state = tempfile::tempdir().expect("state directory");
+    let workspace = state.path().join("workspace");
+    let capture_directory = workspace.join("capture-subdir");
+    let recall_directory = workspace.join("recall-subdir");
+    let sibling_workspace = state.path().join("sibling-workspace");
+    fs::create_dir_all(&capture_directory).expect("capture directory");
+    fs::create_dir_all(&recall_directory).expect("recall directory");
+    fs::create_dir(&sibling_workspace).expect("sibling workspace");
     let captured = serde_json::json!({
         "session_id": "capture-session",
         "run_id": "capture-run",
-        "cwd": state.path(),
+        "cwd": capture_directory,
+        "workspace_root": workspace,
         "hook_event_name": "PostToolUse",
         "timestamp": "2026-08-24T00:00:00Z",
         "transcript_path": "/unused/cosh-transcript.jsonl",
@@ -95,7 +103,8 @@ fn tool_evidence_is_recalled_by_a_new_hook_process() {
     let recalled = serde_json::json!({
         "session_id": "recall-session",
         "run_id": "recall-run",
-        "cwd": state.path(),
+        "cwd": recall_directory,
+        "workspace_root": workspace,
         "hook_event_name": "UserPromptSubmit",
         "timestamp": "2026-08-24T00:00:01Z",
         "transcript_path": "/unused/cosh-transcript.jsonl",
@@ -109,6 +118,21 @@ fn tool_evidence_is_recalled_by_a_new_hook_process() {
         .unwrap_or_else(|| panic!("recalled context missing from {recall_response}"));
     assert!(context.contains("PIPESTATUS preserved every pipeline status"));
     assert!(context.contains("authority=\"Candidate\""));
+
+    let isolated = serde_json::json!({
+        "session_id": "isolated-session",
+        "run_id": "isolated-run",
+        "cwd": sibling_workspace,
+        "workspace_root": sibling_workspace,
+        "hook_event_name": "UserPromptSubmit",
+        "timestamp": "2026-08-24T00:00:02Z",
+        "transcript_path": "/unused/cosh-transcript.jsonl",
+        "prompt": "How did PIPESTATUS preserve pipeline status?"
+    });
+    let (isolated_status, isolated_response) =
+        run_hook(isolated.to_string().as_bytes(), &state, None);
+    assert!(isolated_status.success());
+    assert!(isolated_response.get("hookSpecificOutput").is_none());
 }
 
 #[test]

@@ -31,7 +31,7 @@ enter the current context window.
 anolisa install agent-memory
 ```
 
-Produces: `agent-memory` binary, default config, MCP service descriptor, systemd user template, tmpfiles rule, OpenClaw adapter bundle.
+Produces: the `agent-memory`, `agent-memory-ctl`, backend, and Cosh Hook binaries; default config; MCP service descriptor; systemd user template; tmpfiles rule; OpenClaw adapter bundle; and Cosh extension.
 
 ### RPM package (AnolisOS / RHEL)
 
@@ -43,7 +43,8 @@ RPM installs to system-level FHS paths:
 
 | Purpose | Path |
 |------|------|
-| Service binary | `/usr/bin/agent-memory` |
+| Service and local-control binaries | `/usr/bin/agent-memory`, `/usr/bin/agent-memory-ctl` |
+| Cosh adapter binary and extension | `/usr/bin/agent-memory-cosh-hook`, `/usr/share/anolisa/extensions/agent-memory/` |
 | Default config | `/usr/share/anolisa/agent-memory/default.toml` |
 | MCP service descriptor (auto-discovery) | `/usr/share/anolisa/mcp-servers/agent-memory.json` |
 | systemd user template | `/usr/lib/systemd/user/anolisa-memory@.service` |
@@ -75,6 +76,16 @@ make remote-test    # same + tests + clippy
 ---
 
 ## Integration
+
+### cosh-ng lifecycle memory
+
+The package installs a cosh-ng extension and `agent-memory-ctl` alongside the
+MCP server. This path captures bounded tool evidence, recalls it from the
+durable local backend, and continues the user turn when Memory is unavailable.
+No MCP configuration is required for this integration.
+
+Follow the [Cosh Agent Memory guide](cosh-agent-memory.md) to verify the full
+path in about 30 seconds and inspect a recall with `why`.
 
 ### Claude Code / Cursor / Continue / any stdio MCP client
 

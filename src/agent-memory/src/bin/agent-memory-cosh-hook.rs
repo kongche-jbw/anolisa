@@ -3,7 +3,6 @@
 use std::env;
 use std::fs;
 use std::io::{self, Read};
-use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -14,10 +13,9 @@ use agent_memory::adapter::cosh::{
 };
 use agent_memory::knowledge::mant::{MantCliConfig, MantCliProvider};
 use agent_memory::protocol::{
-    KnowledgeProviderBinding, LocalMemoryBackend, default_local_memory_path,
+    KnowledgeProviderBinding, LocalMemoryBackend, default_local_memory_path, local_workspace_id,
 };
 use anyhow::{Context, Result};
-use git2::{ObjectType, Oid};
 use nix::unistd::Uid;
 
 fn main() -> Result<()> {
@@ -39,15 +37,13 @@ fn main() -> Result<()> {
 
 fn run_hook(raw: &[u8]) -> Result<CoshHookOutput> {
     let input: CoshHookInput = serde_json::from_slice(raw).context("invalid Cosh hook request")?;
-    let canonical_workspace = fs::canonicalize(&input.cwd)
-        .with_context(|| format!("failed to resolve Cosh workspace {}", input.cwd))?;
-    let workspace_digest =
-        Oid::hash_object(ObjectType::Blob, canonical_workspace.as_os_str().as_bytes())
-            .context("failed to fingerprint the Cosh workspace")?;
+    let workspace = input.workspace_root.as_deref().unwrap_or(&input.cwd);
+    let workspace_id =
+        local_workspace_id(workspace).context("failed to identify Cosh workspace")?;
     let config = CoshAdapterConfig::local(
         format!("unix:{}", Uid::effective().as_raw()),
         "cosh-ng",
-        format!("local-path-sha1:{workspace_digest}"),
+        workspace_id,
     );
     let database = default_local_memory_path()?;
     let backend = match mant_binding() {
@@ -100,5 +96,6 @@ fn allow_output() -> CoshHookOutput {
     CoshHookOutput {
         should_continue: true,
         hook_specific_output: None,
+        system_message: None,
     }
 }

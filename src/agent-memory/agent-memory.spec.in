@@ -100,6 +100,7 @@ install -d -m 0755 %{buildroot}%{_bindir}
 install -p -m 0755 target/release/agent-memory %{buildroot}%{_bindir}/
 install -p -m 0755 target/release/agent-memory-backend %{buildroot}%{_bindir}/
 install -p -m 0755 target/release/agent-memory-cosh-hook %{buildroot}%{_bindir}/
+install -p -m 0755 target/release/agent-memory-ctl %{buildroot}%{_bindir}/
 
 # Install default config
 install -d -m 0755 %{buildroot}%{_datadir}/anolisa/agent-memory
@@ -162,6 +163,7 @@ install -m 0644 adapters/cosh-ng/cosh-extension.json \
 %attr(0755,root,root) %{_bindir}/agent-memory
 %attr(0755,root,root) %{_bindir}/agent-memory-backend
 %attr(0755,root,root) %{_bindir}/agent-memory-cosh-hook
+%attr(0755,root,root) %{_bindir}/agent-memory-ctl
 %dir %{_datadir}/anolisa
 %dir %{_datadir}/anolisa/agent-memory
 %attr(0644,root,root) %{_datadir}/anolisa/agent-memory/default.toml
