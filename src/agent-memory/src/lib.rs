@@ -26,6 +26,7 @@ pub mod embedding;
 pub mod error;
 pub mod git_repo;
 pub mod index;
+pub mod knowledge;
 pub mod mcp_server;
 pub mod mount;
 pub mod ns;

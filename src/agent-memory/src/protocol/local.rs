@@ -6,14 +6,17 @@ use std::fmt;
 use std::fs::{self, DirBuilder, OpenOptions, Permissions};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-use crate::safety::{contains_secrets, looks_like_prompt_injection};
+use crate::knowledge::{
+    KnowledgeError, KnowledgeItem, KnowledgeProvider, KnowledgeQuery, KnowledgeSelector,
+};
+use crate::safety::{contains_secrets, looks_like_prompt_injection, redact_secrets};
 
 use super::{
     BackendManifest, BackendRequestContext, ContextBudget, ContextItem, ContextItemKind,
@@ -40,6 +43,9 @@ const MAX_EVENT_SCAN: usize = 1024;
 const VIEW_RETENTION_MS: u64 = 7 * 24 * 60 * 60 * 1_000;
 const SESSION_RETENTION_MS: u64 = 30 * 24 * 60 * 60 * 1_000;
 const CAPACITY_PRUNE_BATCH: u64 = 1_024;
+const MAX_KNOWLEDGE_DOCUMENT_BYTES: usize = 1_024;
+const DEFAULT_KNOWLEDGE_EXCERPT_BYTES: usize = 4 * 1_024;
+const DEFAULT_KNOWLEDGE_ITEMS: u16 = 4;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE backend_state (
@@ -148,6 +154,52 @@ pub struct LocalMemoryStats {
 pub struct LocalMemoryBackend {
     connection: Mutex<Connection>,
     path: PathBuf,
+    knowledge: Option<KnowledgeProviderBinding>,
+}
+
+/// Task-policy binding between the local broker and one replaceable provider.
+#[derive(Clone)]
+pub struct KnowledgeProviderBinding {
+    provider: Arc<dyn KnowledgeProvider>,
+    document_id: String,
+    max_excerpt_bytes: usize,
+    max_items: u16,
+}
+
+impl fmt::Debug for KnowledgeProviderBinding {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("KnowledgeProviderBinding")
+            .field("provider", &"<replaceable>")
+            .field("document_id", &self.document_id)
+            .field("max_excerpt_bytes", &self.max_excerpt_bytes)
+            .field("max_items", &self.max_items)
+            .finish()
+    }
+}
+
+impl KnowledgeProviderBinding {
+    /// Creates a focused document binding with conservative context limits.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-request error when the logical document identity is
+    /// empty or exceeds the provider-neutral boundary.
+    pub fn new(
+        provider: Arc<dyn KnowledgeProvider>,
+        document_id: impl Into<String>,
+    ) -> ProtocolResult<Self> {
+        let document_id = document_id.into();
+        if document_id.trim().is_empty() || document_id.len() > MAX_KNOWLEDGE_DOCUMENT_BYTES {
+            return Err(invalid("knowledge document identity is invalid"));
+        }
+        Ok(Self {
+            provider,
+            document_id,
+            max_excerpt_bytes: DEFAULT_KNOWLEDGE_EXCERPT_BYTES,
+            max_items: DEFAULT_KNOWLEDGE_ITEMS,
+        })
+    }
 }
 
 impl fmt::Debug for LocalMemoryBackend {
@@ -186,7 +238,25 @@ impl LocalMemoryBackend {
     /// The parent directory must be private to its owner. New parents are
     /// created as `0700`; the database is always restricted to `0600`.
     pub fn open(path: impl AsRef<Path>) -> ProtocolResult<Self> {
-        let path = path.as_ref().to_path_buf();
+        Self::open_inner(path.as_ref(), None)
+    }
+
+    /// Opens a local backend with one task-policy-selected knowledge provider.
+    ///
+    /// The provider remains optional and replaceable. Provider failures mark
+    /// the resulting ContextView degraded while local memory remains usable.
+    pub fn open_with_knowledge(
+        path: impl AsRef<Path>,
+        binding: KnowledgeProviderBinding,
+    ) -> ProtocolResult<Self> {
+        Self::open_inner(path.as_ref(), Some(binding))
+    }
+
+    fn open_inner(
+        path: &Path,
+        knowledge: Option<KnowledgeProviderBinding>,
+    ) -> ProtocolResult<Self> {
+        let path = path.to_path_buf();
         prepare_private_path(&path)?;
         let mut connection = Connection::open(&path).map_err(|error| sql_error(&error))?;
         fs::set_permissions(&path, Permissions::from_mode(0o600)).map_err(|_| io_error())?;
@@ -202,6 +272,7 @@ impl LocalMemoryBackend {
         Ok(Self {
             connection: Mutex::new(connection),
             path,
+            knowledge,
         })
     }
 
@@ -238,19 +309,23 @@ impl LocalMemoryBackend {
 
 impl MemoryBackend for LocalMemoryBackend {
     fn manifest(&self) -> BackendManifest {
+        let mut capabilities = vec![
+            MemoryCapability::Session,
+            MemoryCapability::Capture,
+            MemoryCapability::Recall,
+            MemoryCapability::Checkpoint,
+            MemoryCapability::Explain,
+            MemoryCapability::Outcome,
+            MemoryCapability::Forget,
+        ];
+        if self.knowledge.is_some() {
+            capabilities.push(MemoryCapability::Knowledge);
+        }
         BackendManifest {
             backend_id: "local-sqlite-v1".to_string(),
             display_name: "Local SQLite memory".to_string(),
             protocol_version: MEMORY_PROTOCOL_VERSION,
-            capabilities: vec![
-                MemoryCapability::Session,
-                MemoryCapability::Capture,
-                MemoryCapability::Recall,
-                MemoryCapability::Checkpoint,
-                MemoryCapability::Explain,
-                MemoryCapability::Outcome,
-                MemoryCapability::Forget,
-            ],
+            capabilities,
             durability: MemoryDurability::Durable,
         }
     }
@@ -382,6 +457,22 @@ impl MemoryBackend for LocalMemoryBackend {
         budget: ContextBudget,
     ) -> ProtocolResult<ContextView> {
         validate_budget(budget)?;
+        {
+            let connection = self.connection()?;
+            require_session(&connection, context)?;
+        }
+        let knowledge = if matches!(purpose, RecallPurpose::Turn) {
+            recall_knowledge(self.knowledge.as_ref(), query, budget)
+        } else {
+            KnowledgeRecall::disabled()
+        };
+        let KnowledgeRecall {
+            candidates: knowledge_candidates,
+            enabled: knowledge_enabled,
+            degraded: knowledge_degraded,
+            degradation_reason: knowledge_degradation_reason,
+            filtered: knowledge_filtered,
+        } = knowledge;
         let mut connection = self.connection()?;
         let transaction = immediate(&mut connection)?;
         require_session(&transaction, context)?;
@@ -390,7 +481,7 @@ impl MemoryBackend for LocalMemoryBackend {
         let tasks = load_tasks(&transaction, &context.identity.workspace_key(), binding)?;
         let mut candidates = Vec::new();
         let mut candidate_ids = HashSet::new();
-        let mut truncated = tasks.len() > MAX_TRACE_DECISIONS;
+        let mut truncated = tasks.len() > MAX_TRACE_DECISIONS || knowledge_filtered;
         for stored in tasks.into_iter().take(MAX_TRACE_DECISIONS) {
             let content = format_task(&stored.task, &stored.evidence);
             let token_estimate = estimate_tokens(&content);
@@ -411,6 +502,15 @@ impl MemoryBackend for LocalMemoryBackend {
                 reason: "workspace task checkpoint".to_string(),
                 score: 1.0,
             });
+        }
+        for mut candidate in knowledge_candidates
+            .into_iter()
+            .take(MAX_TRACE_DECISIONS.saturating_sub(candidates.len()))
+        {
+            while !candidate_ids.insert(candidate.item.item_id.clone()) {
+                candidate.item.item_id.push('k');
+            }
+            candidates.push(candidate);
         }
         let event_slots = MAX_TRACE_DECISIONS.saturating_sub(candidates.len());
         if event_slots > 0 {
@@ -492,8 +592,17 @@ impl MemoryBackend for LocalMemoryBackend {
             items,
             total_tokens,
             total_bytes,
-            effective_strategy: "local_task_and_event".to_string(),
-            degraded: false,
+            effective_strategy: if knowledge_enabled {
+                if knowledge_degraded {
+                    "local_only_knowledge_degraded"
+                } else {
+                    "local_with_knowledge"
+                }
+            } else {
+                "local_task_and_event"
+            }
+            .to_string(),
+            degraded: knowledge_degraded,
             truncated,
             created_at_ms,
         };
@@ -503,8 +612,8 @@ impl MemoryBackend for LocalMemoryBackend {
             response_trace_id: context.trace_id.clone(),
             backend_id: "local-sqlite-v1".to_string(),
             decisions,
-            degraded: false,
-            degradation_reason: None,
+            degraded: knowledge_degraded,
+            degradation_reason: knowledge_degradation_reason,
             outcome_report: None,
         };
         transaction
@@ -787,6 +896,176 @@ struct RankedEvent {
     event: MemoryEvent,
     overlap: usize,
     score: f32,
+}
+
+struct KnowledgeRecall {
+    candidates: Vec<RecallCandidate>,
+    enabled: bool,
+    degraded: bool,
+    degradation_reason: Option<String>,
+    filtered: bool,
+}
+
+impl KnowledgeRecall {
+    fn disabled() -> Self {
+        Self {
+            candidates: Vec::new(),
+            enabled: false,
+            degraded: false,
+            degradation_reason: None,
+            filtered: false,
+        }
+    }
+
+    fn degraded(error: KnowledgeError) -> Self {
+        Self {
+            candidates: Vec::new(),
+            enabled: true,
+            degraded: true,
+            degradation_reason: Some(format!("knowledge provider {}", error.code)),
+            filtered: false,
+        }
+    }
+}
+
+fn recall_knowledge(
+    binding: Option<&KnowledgeProviderBinding>,
+    query: &str,
+    budget: ContextBudget,
+) -> KnowledgeRecall {
+    let Some(binding) = binding else {
+        return KnowledgeRecall::disabled();
+    };
+    let request = KnowledgeQuery {
+        document_id: binding.document_id.clone(),
+        selector: KnowledgeSelector::Search {
+            pattern: focused_knowledge_pattern(query),
+            context_lines: 1,
+        },
+        max_excerpt_bytes: binding
+            .max_excerpt_bytes
+            .min(usize::try_from(budget.max_bytes).unwrap_or(usize::MAX)),
+        max_items: binding.max_items.min(budget.max_items),
+    };
+    let items = match binding.provider.query(&request) {
+        Ok(items) => items,
+        Err(error) => return KnowledgeRecall::degraded(error),
+    };
+    let mut candidates = Vec::new();
+    let mut filtered = items.len() > usize::from(request.max_items);
+    for item in items.into_iter().take(usize::from(request.max_items)) {
+        match knowledge_candidate(item, request.max_excerpt_bytes) {
+            Some(candidate) => candidates.push(candidate),
+            None => filtered = true,
+        }
+    }
+    KnowledgeRecall {
+        candidates,
+        enabled: true,
+        degraded: false,
+        degradation_reason: None,
+        filtered,
+    }
+}
+
+fn knowledge_candidate(item: KnowledgeItem, maximum: usize) -> Option<RecallCandidate> {
+    if item.excerpt.trim().is_empty() || item.excerpt.len() > maximum {
+        return None;
+    }
+    let excerpt = redact_secrets(&item.excerpt);
+    if looks_like_prompt_injection(&excerpt) {
+        return None;
+    }
+    let title = item
+        .title
+        .as_deref()
+        .map(redact_secrets)
+        .filter(|value| !looks_like_prompt_injection(value));
+    let content = match title {
+        Some(title) => format!("{title}\n{excerpt}"),
+        None => excerpt,
+    };
+    let selector = item.reference.selector.as_deref().unwrap_or("focused");
+    let source_ref = redact_secrets(&format!(
+        "knowledge://{}/{}/{}?fingerprint={}",
+        item.reference.provider, item.reference.document_id, selector, item.fingerprint
+    ));
+    let identity = format!("{source_ref}\u{1f}{}", item.fingerprint);
+    let item_id = format!("knowledge-{:016x}", fnv1a64(identity.as_bytes()));
+    let score = item
+        .score
+        .filter(|score| score.is_finite())
+        .map(|score| score.clamp(0.0, 1.0))
+        .unwrap_or(0.5);
+    Some(RecallCandidate {
+        item: ContextItem {
+            item_id,
+            revision: None,
+            kind: ContextItemKind::Knowledge,
+            content: content.clone(),
+            source_ref,
+            authority: MemoryAuthority::Candidate,
+            token_estimate: estimate_tokens(&content),
+            reason: "focused provider-owned reference".to_string(),
+            stale: false,
+            score,
+        },
+        reason: "focused provider-owned reference".to_string(),
+        score,
+    })
+}
+
+fn focused_knowledge_pattern(query: &str) -> String {
+    let mut candidates = query
+        .split(|character: char| {
+            character.is_whitespace()
+                || matches!(
+                    character,
+                    ',' | ';' | ':' | '?' | '!' | '(' | ')' | '[' | ']' | '{' | '}' | '"' | '\''
+                )
+        })
+        .filter(|candidate| !candidate.trim_matches('.').is_empty())
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|candidate| {
+        let uppercase = candidate.chars().any(char::is_alphabetic)
+            && candidate
+                .chars()
+                .filter(|character| character.is_alphabetic())
+                .all(|character| character.is_uppercase());
+        (uppercase, candidate.starts_with('-'), candidate.len())
+    });
+    let selected = candidates
+        .last()
+        .copied()
+        .unwrap_or(query)
+        .trim_matches('.');
+    let mut pattern = selected.to_string();
+    truncate_utf8(&mut pattern, MAX_KNOWLEDGE_DOCUMENT_BYTES);
+    if pattern.trim().is_empty() {
+        "shell".to_string()
+    } else {
+        pattern
+    }
+}
+
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+fn truncate_utf8(value: &mut String, maximum: usize) {
+    if value.len() <= maximum {
+        return;
+    }
+    let mut boundary = maximum;
+    while !value.is_char_boundary(boundary) {
+        boundary = boundary.saturating_sub(1);
+    }
+    value.truncate(boundary);
 }
 
 fn prepare_private_path(path: &Path) -> ProtocolResult<()> {

@@ -1,13 +1,19 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier};
 
+use agent_memory::knowledge::{
+    KnowledgeCapability, KnowledgeError, KnowledgeErrorCode, KnowledgeItem, KnowledgeProvider,
+    KnowledgeProviderDescriptor, KnowledgeQuery, KnowledgeResult,
+};
 use agent_memory::protocol::{
     BackendRequestContext, ContextBudget, EvidenceRef, FeedbackOutcome, IdentityContext,
-    LocalMemoryBackend, MemoryBackend, MemoryCapability, MemoryDurability, MemoryEvent,
-    MemoryEventKind, MemoryEventOutcome, MemoryObjectKind, ProtocolErrorCode, RecallBinding,
-    RecallPurpose, RuntimeContext, SessionOutcome, TaskState,
+    KnowledgeProviderBinding, KnowledgeRef, LocalMemoryBackend, MemoryAuthority, MemoryBackend,
+    MemoryCapability, MemoryDurability, MemoryEvent, MemoryEventKind, MemoryEventOutcome,
+    MemoryObjectKind, ProtocolErrorCode, RecallBinding, RecallPurpose, RuntimeContext,
+    SessionOutcome, TaskState,
 };
 use rusqlite::Connection;
 
@@ -87,6 +93,67 @@ fn open(backend: &LocalMemoryBackend, context: &BackendRequestContext) -> bool {
     backend
         .open_session(context, &runtime())
         .expect("open local session")
+}
+
+struct FakeKnowledgeProvider {
+    fails: bool,
+}
+
+impl KnowledgeProvider for FakeKnowledgeProvider {
+    fn descriptor(&self) -> KnowledgeResult<KnowledgeProviderDescriptor> {
+        Ok(KnowledgeProviderDescriptor {
+            provider_id: "fake-docs".to_string(),
+            display_name: "Fake docs".to_string(),
+            version: Some("1".to_string()),
+            protocol: Some("fake/v1".to_string()),
+            capabilities: vec![KnowledgeCapability::Search],
+        })
+    }
+
+    fn query(&self, query: &KnowledgeQuery) -> KnowledgeResult<Vec<KnowledgeItem>> {
+        if self.fails {
+            return Err(KnowledgeError::new(
+                KnowledgeErrorCode::Unavailable,
+                "fake provider unavailable",
+                true,
+            ));
+        }
+        query.validate()?;
+        Ok(vec![KnowledgeItem {
+            reference: KnowledgeRef {
+                provider: "fake-docs".to_string(),
+                document_id: query.document_id.clone(),
+                selector: Some(query.reference_selector()),
+                content_digest: Some("fixture:pipe-status".to_string()),
+                retrieved_at_ms: 1,
+            },
+            title: Some("Bash pipeline status".to_string()),
+            excerpt: "PIPESTATUS records every command status in a pipeline.".to_string(),
+            fingerprint: "fixture:pipe-status".to_string(),
+            score: Some(0.9),
+        }])
+    }
+}
+
+struct CountingKnowledgeProvider {
+    query_calls: Arc<AtomicUsize>,
+}
+
+impl KnowledgeProvider for CountingKnowledgeProvider {
+    fn descriptor(&self) -> KnowledgeResult<KnowledgeProviderDescriptor> {
+        Ok(KnowledgeProviderDescriptor {
+            provider_id: "counting-docs".to_string(),
+            display_name: "Counting docs".to_string(),
+            version: Some("1".to_string()),
+            protocol: Some("counting/v1".to_string()),
+            capabilities: vec![KnowledgeCapability::Search],
+        })
+    }
+
+    fn query(&self, _query: &KnowledgeQuery) -> KnowledgeResult<Vec<KnowledgeItem>> {
+        self.query_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(Vec::new())
+    }
 }
 
 #[test]
@@ -388,6 +455,161 @@ fn recalls_relevant_tool_evidence_across_cold_session_boundary() {
         )
         .expect("unrelated recall");
     assert!(unrelated.items.is_empty());
+}
+
+#[test]
+fn merges_replaceable_knowledge_before_candidate_evidence() {
+    let root = tempfile::tempdir().expect("temp root");
+    let binding = KnowledgeProviderBinding::new(
+        Arc::new(FakeKnowledgeProvider { fails: false }),
+        "manual/1/bash",
+    )
+    .expect("knowledge binding");
+    let backend = LocalMemoryBackend::open_with_knowledge(database_path(root.path()), binding)
+        .expect("backend");
+    let context = context("user-a", "workspace-a", "session-a", "trace-knowledge");
+    open(&backend, &context);
+    backend
+        .append_event(
+            &context,
+            "event-key",
+            &event("PIPESTATUS preserved every pipeline status"),
+        )
+        .expect("event");
+
+    assert!(
+        backend
+            .manifest()
+            .capabilities
+            .contains(&MemoryCapability::Knowledge)
+    );
+    let view = backend
+        .materialize_context(
+            &context,
+            RecallPurpose::Turn,
+            &RecallBinding::default(),
+            "How does PIPESTATUS work?",
+            budget(),
+        )
+        .expect("knowledge recall");
+    assert!(!view.degraded);
+    assert_eq!(view.effective_strategy, "local_with_knowledge");
+    let knowledge_index = view
+        .items
+        .iter()
+        .position(|item| item.kind == agent_memory::protocol::ContextItemKind::Knowledge)
+        .expect("knowledge item");
+    let evidence_index = view
+        .items
+        .iter()
+        .position(|item| item.kind == agent_memory::protocol::ContextItemKind::Evidence)
+        .expect("evidence item");
+    assert!(knowledge_index < evidence_index);
+    let knowledge = &view.items[knowledge_index];
+    assert_eq!(knowledge.authority, MemoryAuthority::Candidate);
+    assert!(knowledge.source_ref.starts_with("knowledge://fake-docs/"));
+    assert!(
+        knowledge
+            .content
+            .contains("PIPESTATUS records every command")
+    );
+    let trace = backend
+        .explain_context(&context, &view.context_view_id)
+        .expect("knowledge trace");
+    assert!(
+        trace
+            .decisions
+            .iter()
+            .any(|decision| decision.item_id == knowledge.item_id)
+    );
+}
+
+#[test]
+fn authorizes_session_scope_before_querying_knowledge_provider() {
+    let root = tempfile::tempdir().expect("temp root");
+    let query_calls = Arc::new(AtomicUsize::new(0));
+    let binding = KnowledgeProviderBinding::new(
+        Arc::new(CountingKnowledgeProvider {
+            query_calls: Arc::clone(&query_calls),
+        }),
+        "manual/1/bash",
+    )
+    .expect("knowledge binding");
+    let backend = LocalMemoryBackend::open_with_knowledge(database_path(root.path()), binding)
+        .expect("backend");
+    let owner = context("user-a", "workspace-a", "session-a", "trace-owner");
+
+    let unopened_error = backend
+        .materialize_context(
+            &owner,
+            RecallPurpose::Turn,
+            &RecallBinding::default(),
+            "PIPESTATUS",
+            budget(),
+        )
+        .expect_err("unopened session must fail before provider query");
+    assert_eq!(unopened_error.code, ProtocolErrorCode::SessionNotOpen);
+    assert_eq!(query_calls.load(Ordering::SeqCst), 0);
+
+    open(&backend, &owner);
+    let foreign_scope = context("user-a", "workspace-b", "session-a", "trace-foreign");
+    let scope_error = backend
+        .materialize_context(
+            &foreign_scope,
+            RecallPurpose::Turn,
+            &RecallBinding::default(),
+            "PIPESTATUS",
+            budget(),
+        )
+        .expect_err("foreign scope must fail before provider query");
+    assert_eq!(scope_error.code, ProtocolErrorCode::SessionNotOpen);
+    assert_eq!(query_calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn provider_failure_degrades_without_hiding_local_memory() {
+    let root = tempfile::tempdir().expect("temp root");
+    let binding = KnowledgeProviderBinding::new(
+        Arc::new(FakeKnowledgeProvider { fails: true }),
+        "manual/1/bash",
+    )
+    .expect("knowledge binding");
+    let backend = LocalMemoryBackend::open_with_knowledge(database_path(root.path()), binding)
+        .expect("backend");
+    let context = context("user-a", "workspace-a", "session-a", "trace-degraded");
+    open(&backend, &context);
+    backend
+        .append_event(
+            &context,
+            "event-key",
+            &event("PIPESTATUS local observation"),
+        )
+        .expect("event");
+
+    let view = backend
+        .materialize_context(
+            &context,
+            RecallPurpose::Turn,
+            &RecallBinding::default(),
+            "PIPESTATUS",
+            budget(),
+        )
+        .expect("local fallback");
+    assert!(view.degraded);
+    assert_eq!(view.effective_strategy, "local_only_knowledge_degraded");
+    assert!(
+        view.items
+            .iter()
+            .any(|item| item.kind == agent_memory::protocol::ContextItemKind::Evidence)
+    );
+    let trace = backend
+        .explain_context(&context, &view.context_view_id)
+        .expect("degraded trace");
+    assert!(trace.degraded);
+    assert_eq!(
+        trace.degradation_reason.as_deref(),
+        Some("knowledge provider unavailable")
+    );
 }
 
 #[test]

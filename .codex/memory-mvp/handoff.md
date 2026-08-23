@@ -17,8 +17,8 @@
 |---|---|---|---|
 | 1. Memory Protocol | Complete | `c2dfd0b1` | RuntimeAdapter 只消费协议类型 |
 | 2. Cosh RuntimeAdapter | Complete | `5dc23c73` | 以 durable backend 替换开发期 backend |
-| 3. Typed Local Backend | Complete | This commit | ContextView 可持久化与解释 |
-| 4. ManT Provider | Pending | — | Provider 可卸载、可失效 |
+| 3. Typed Local Backend | Complete | `1af8136c` | ContextView 可持久化与解释 |
+| 4. ManT Provider | Complete | This commit | Provider 可卸载、可失效 |
 | 5. Cosh UX | Pending | — | 30 秒体验路径 |
 
 ## 基线验证
@@ -176,7 +176,8 @@
 ### 验证
 
 - `cargo test --locked`
-  - 388 passed，0 failed，0 ignored；其中 local backend 12 项。
+  - 389 passed，0 failed，0 ignored；其中 local backend 12 项。此前 trace 手工合计
+    误记为 388，本阶段按 Cargo 各 test binary 输出复核并更正。
 - `cargo clippy --workspace --all-targets --locked -- -D warnings`
 - `RUSTDOCFLAGS='-D warnings' cargo doc --workspace --locked --no-deps`
 - `cargo fmt --all -- --check`
@@ -197,3 +198,59 @@
   禁止静默把失败伪装成完整召回。
 - 长期库只保留 ManT 文档 ref、selector、fingerprint 和必要的有界 excerpt，不能复制
   整套手册成为第二真源。
+
+## 阶段 4 Handoff：可卸载 ManT KnowledgeProvider
+
+### 已完成
+
+- 新增 provider-neutral `KnowledgeProvider` SPI，包含 typed descriptor、health、focused
+  query、bounded item 和稳定 error code；核心协议、Cosh adapter 与 SQLite schema 都不
+  依赖 ManT 类型。
+- 新增 ManT v0.9 native one-shot JSON adapter。每次查询精确协商
+  `mant.cli/request/excerpt/search v0.9`，只支持 literal search、single-entry explain
+  和 section excerpt，没有 whole-document 操作。
+- ManT executable 由可信 host 显式提供或从 PATH 发现；Agent Memory 不安装、下载、
+  更新 ManT，也不执行 shell。缺失等价于 provider 未加载。
+- Native request 不超过 65,536 bytes；stdin/stdout/stderr、selector、item 与 excerpt
+  都有硬限。stdout/stderr 并发排空，超时 kill 独立 process group，stderr、物理路径、
+  query 和文档内容不进入 safe error。
+- `LocalMemoryBackend` 接受可替换 provider binding。普通 turn 以 TaskState、focused
+  knowledge、tool evidence 的顺序共享同一 item/byte/token budget，并持久化为一个
+  ContextView 与 RecallTrace。
+- Provider 失败时 view 使用 `local_only_knowledge_degraded` 和 typed reason，本地
+  TaskState/evidence 继续返回；成功时使用 `local_with_knowledge`。
+- Provider 内容保持 `Knowledge + Candidate + untrusted-data`，再次经过 secret redaction、
+  injection quarantine 与 Runtime admission，不能因 ManT 解析而升级为 Verified。
+- Cosh Hook 自动接入已安装的 `mant`。`ANOLISA_MANT_PATH` 选择 executable，
+  `ANOLISA_MEMORY_MANT_DOCUMENT` 选择 logical document，
+  `ANOLISA_MEMORY_MANT=off` 可显式卸载。
+- 新增中英文 provider 设计文档，并以官方 ManT v0.9 protocol/schema/CLI 文档完成
+  一手资料核对。
+
+### 验证
+
+- Stage 4 scope 的测试总数 403，0 failed，0 ignored；全工作树 gate 还包含已并行完成但
+  尚未进入本提交的 5 项 Stage 5 CLI test，因此 Cargo 实际输出 408 passed。
+- `knowledge_provider_test` 10 项，覆盖 fake provider、官方 v0.9 search/explain wire、
+  合法零命中、嵌套 outline、typed IR、malformed response、process-group/I/O deadline
+  以及 request/output/aggregate bounds。
+- `local_backend_test` 15 项，新增 provider merge、local-only degraded fallback，并验证
+  session/scope 授权在任何外部 provider 调用之前完成。
+- `cosh_hook_wire_test` 4 项，新增真实 Hook 进程连接 fake ManT v0.9 的端到端 recall。
+- `cargo clippy --workspace --all-targets --locked -- -D warnings`
+- `RUSTDOCFLAGS='-D warnings' cargo doc --workspace --locked --no-deps`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- 独立 review 提出的宽松 response JSON、零命中误判 degraded、stdin write 未纳入
+  deadline、leader 退出后 descendant 持 fd、outline ancestor 误校验、excerpt payload
+  未强类型化、未授权请求先触发外部查询等问题均已关闭并回归；最终 P0/P1 复核清零。
+
+### 已知边界与阶段 5 入口
+
+- 当前 task policy 每轮选择一个 logical document 和一个聚焦 literal；多 Provider 可以
+  在同一 SPI 后替换，但本地 broker v1 同时只绑定一个，避免 500 ms Hook deadline 内
+  出现无界 fan-out。
+- ManT adapter 每次 query 都重新 probe，没有 cache；FNV-1a 只用于 staleness，不是
+  密码学完整性证明。
+- Cosh 用户需要看到 recall 条数、token、view ID，并能用独立管理 CLI 运行
+  status/doctor/demo/why/forget；管理面不能要求用户猜 owning session。

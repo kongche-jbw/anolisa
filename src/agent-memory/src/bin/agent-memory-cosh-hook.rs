@@ -1,13 +1,21 @@
 //! One-shot Cosh hook binding for the provider-neutral RuntimeAdapter.
 
+use std::env;
 use std::fs;
 use std::io::{self, Read};
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
 
 use agent_memory::adapter::cosh::{
     CoshAdapterConfig, CoshHookInput, CoshHookOutput, CoshRuntimeAdapter, MAX_COSH_HOOK_INPUT_BYTES,
 };
-use agent_memory::protocol::{LocalMemoryBackend, default_local_memory_path};
+use agent_memory::knowledge::mant::{MantCliConfig, MantCliProvider};
+use agent_memory::protocol::{
+    KnowledgeProviderBinding, LocalMemoryBackend, default_local_memory_path,
+};
 use anyhow::{Context, Result};
 use git2::{ObjectType, Oid};
 use nix::unistd::Uid;
@@ -41,9 +49,51 @@ fn run_hook(raw: &[u8]) -> Result<CoshHookOutput> {
         "cosh-ng",
         format!("local-path-sha1:{workspace_digest}"),
     );
-    let backend = LocalMemoryBackend::open(default_local_memory_path()?)?;
+    let database = default_local_memory_path()?;
+    let backend = match mant_binding() {
+        Some(binding) => LocalMemoryBackend::open_with_knowledge(database, binding)?,
+        None => LocalMemoryBackend::open(database)?,
+    };
     let adapter = CoshRuntimeAdapter::new(backend, config);
     Ok(adapter.handle(input).output)
+}
+
+fn mant_binding() -> Option<KnowledgeProviderBinding> {
+    if env::var_os("ANOLISA_MEMORY_MANT")
+        .is_some_and(|value| matches!(value.to_str(), Some("0" | "off" | "false")))
+    {
+        return None;
+    }
+    let executable = env::var_os("ANOLISA_MANT_PATH")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| executable_on_path("mant"))?;
+    let document_id = env::var("ANOLISA_MEMORY_MANT_DOCUMENT")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "bash".to_string());
+    let mut config = MantCliConfig::new(executable);
+    // One query performs a protocol probe and a focused request. Keeping each
+    // process below 175 ms preserves the adapter's shared 500 ms deadline.
+    config.timeout = Duration::from_millis(175);
+    config.max_stdout_bytes = 64 * 1024;
+    config.max_stderr_bytes = 8 * 1024;
+    KnowledgeProviderBinding::new(Arc::new(MantCliProvider::new(config)), document_id).ok()
+}
+
+fn executable_on_path(name: &str) -> Option<PathBuf> {
+    env::var_os("PATH")
+        .into_iter()
+        .flat_map(|path| env::split_paths(&path).collect::<Vec<_>>())
+        .map(|directory| directory.join(name))
+        .find_map(|candidate| {
+            let metadata = fs::metadata(&candidate).ok()?;
+            if metadata.is_file() && metadata.permissions().mode() & 0o111 != 0 {
+                fs::canonicalize(candidate).ok()
+            } else {
+                None
+            }
+        })
 }
 
 fn allow_output() -> CoshHookOutput {
