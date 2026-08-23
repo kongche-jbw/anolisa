@@ -21,3 +21,13 @@ dest = "{datadir}/adapters/{component}/openclaw/"
 # relying on the driver's "openclaw.plugin.json" default, so the contract is
 # self-describing and survives driver default changes.
 entry = "openclaw.plugin.json"
+
+[[adapters]]
+framework = "cosh"
+adapter_type = "extension"
+plugin_id = "anolisa.agent-memory"
+source = "adapters/cosh-ng"
+dest = "{datadir}/extensions/{component}/"
+
+[adapters.bundle]
+entry = "cosh-extension.json"

@@ -98,6 +98,8 @@ rm -rf %{buildroot}
 # Install binary
 install -d -m 0755 %{buildroot}%{_bindir}
 install -p -m 0755 target/release/agent-memory %{buildroot}%{_bindir}/
+install -p -m 0755 target/release/agent-memory-backend %{buildroot}%{_bindir}/
+install -p -m 0755 target/release/agent-memory-cosh-hook %{buildroot}%{_bindir}/
 
 # Install default config
 install -d -m 0755 %{buildroot}%{_datadir}/anolisa/agent-memory
@@ -148,10 +150,18 @@ install -m 0644 adapters/agent-memory/openclaw/package.json %{buildroot}%{_datad
 # runtime deps beyond the openclaw peerDependency.
 install -m 0644 adapters/agent-memory/openclaw/dist/index.js %{buildroot}%{_datadir}/anolisa/adapters/agent-memory/openclaw/dist/
 
+# Install the Cosh-ng extension in its system discovery directory. The hook
+# command resolves the separately packaged host executable through PATH.
+install -d -m 0755 %{buildroot}%{_datadir}/anolisa/extensions/agent-memory
+install -m 0644 adapters/cosh-ng/cosh-extension.json \
+    %{buildroot}%{_datadir}/anolisa/extensions/agent-memory/
+
 %files
 %defattr(0644,root,root,0755)
 %license LICENSE
 %attr(0755,root,root) %{_bindir}/agent-memory
+%attr(0755,root,root) %{_bindir}/agent-memory-backend
+%attr(0755,root,root) %{_bindir}/agent-memory-cosh-hook
 %dir %{_datadir}/anolisa
 %dir %{_datadir}/anolisa/agent-memory
 %attr(0644,root,root) %{_datadir}/anolisa/agent-memory/default.toml
@@ -176,6 +186,10 @@ install -m 0644 adapters/agent-memory/openclaw/dist/index.js %{buildroot}%{_data
 %attr(0644,root,root) %{_datadir}/anolisa/adapters/agent-memory/openclaw/package.json
 %dir %{_datadir}/anolisa/adapters/agent-memory/openclaw/dist
 %attr(0644,root,root) %{_datadir}/anolisa/adapters/agent-memory/openclaw/dist/index.js
+# Cosh-ng RuntimeAdapter extension
+%dir %{_datadir}/anolisa/extensions
+%dir %{_datadir}/anolisa/extensions/agent-memory
+%attr(0644,root,root) %{_datadir}/anolisa/extensions/agent-memory/cosh-extension.json
 
 %post
 # Apply the shipped tmpfiles.d snippet immediately so /run/anolisa{,

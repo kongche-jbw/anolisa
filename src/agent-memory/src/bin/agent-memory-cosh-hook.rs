@@ -7,7 +7,7 @@ use std::os::unix::ffi::OsStrExt;
 use agent_memory::adapter::cosh::{
     CoshAdapterConfig, CoshHookInput, CoshHookOutput, CoshRuntimeAdapter, MAX_COSH_HOOK_INPUT_BYTES,
 };
-use agent_memory::protocol::EphemeralMemoryBackend;
+use agent_memory::protocol::{LocalMemoryBackend, default_local_memory_path};
 use anyhow::{Context, Result};
 use git2::{ObjectType, Oid};
 use nix::unistd::Uid;
@@ -41,7 +41,8 @@ fn run_hook(raw: &[u8]) -> Result<CoshHookOutput> {
         "cosh-ng",
         format!("local-path-sha1:{workspace_digest}"),
     );
-    let adapter = CoshRuntimeAdapter::new(EphemeralMemoryBackend::default(), config);
+    let backend = LocalMemoryBackend::open(default_local_memory_path()?)?;
+    let adapter = CoshRuntimeAdapter::new(backend, config);
     Ok(adapter.handle(input).output)
 }
 

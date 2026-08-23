@@ -1,6 +1,6 @@
 [component]
 name = "agent-memory"
-version = "0.2.3"
+version = "0.2.6"
 layer = "runtime"
 domain = "state"
 display_name = "Agent Memory"
@@ -31,6 +31,18 @@ mode = "0644"
 [[component.layout.files]]
 source = "bin/agent-memory"
 target = "{bindir}/agent-memory"
+mode = "0755"
+type = "executable"
+
+[[component.layout.files]]
+source = "bin/agent-memory-backend"
+target = "{bindir}/agent-memory-backend"
+mode = "0755"
+type = "executable"
+
+[[component.layout.files]]
+source = "bin/agent-memory-cosh-hook"
+target = "{bindir}/agent-memory-cosh-hook"
 mode = "0755"
 type = "executable"
 
@@ -78,3 +90,14 @@ detect = { binary = "openclaw" }
 
 [adapters.bundle]
 entry = "openclaw.plugin.json"
+
+[[adapters]]
+framework = "cosh"
+adapter_type = "extension"
+plugin_id = "anolisa.agent-memory"
+source = "extensions/agent-memory"
+dest = "{datadir}/extensions/{component}/"
+detect = { binary = "cosh" }
+
+[adapters.bundle]
+entry = "cosh-extension.json"

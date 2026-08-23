@@ -38,6 +38,12 @@ SHARE_DIR ?= $(DATADIR)/adapters/agent-memory
 # Adapter directories
 ADAPTER_SRC_DIR := adapters/agent-memory
 OPENCLAW_PLUGIN_SRC_DIR := $(ADAPTER_SRC_DIR)/openclaw
+COSH_ADAPTER_SRC_DIR := adapters/cosh-ng
+ifeq ($(INSTALL_PROFILE),user)
+COSH_EXTENSION_DIR ?= $(HOME)/.copilot-shell/extensions/agent-memory
+else
+COSH_EXTENSION_DIR ?= $(DATADIR)/extensions/agent-memory
+endif
 # Component contract (publishing/plugin metadata) — kept separate from the
 # adapter payload tree so the contract is not mixed with adapter resources.
 # Shipped to %{_datadir}/anolisa/components/agent-memory/component.toml.
@@ -77,6 +83,7 @@ SYNC_JSON_FILES := \
 	$(ADAPTER_SRC_DIR)/manifest.json \
 	$(OPENCLAW_PLUGIN_SRC_DIR)/package.json \
 	$(OPENCLAW_PLUGIN_SRC_DIR)/openclaw.plugin.json \
+	$(COSH_ADAPTER_SRC_DIR)/cosh-extension.json \
 	config/mcp-server.json
 
 sync-versions: ## Sync $(VERSION) (from Cargo.toml) into all derived JSON files
@@ -189,7 +196,10 @@ fmt-check: ## Check formatting without modifying
 # >60s; pytest-timeout default is 60s). Set FORCE_BUILD=1 to override.
 install: ## Install binary, config, and adapter to PREFIX
 	@echo "==> Installing to $(DESTDIR)$(BINDIR)..."
-	@if [ ! -f target/release/$(NAME) ] || [ "$(FORCE_BUILD)" = "1" ]; then \
+	@if [ ! -f target/release/$(NAME) ] \
+		|| [ ! -f target/release/agent-memory-backend ] \
+		|| [ ! -f target/release/agent-memory-cosh-hook ] \
+		|| [ "$(FORCE_BUILD)" = "1" ]; then \
 		echo "==> Binary not found, building..."; \
 		$(MAKE) build; \
 	else \
@@ -204,10 +214,15 @@ install: ## Install binary, config, and adapter to PREFIX
 	fi
 	install -d -m 0755 $(DESTDIR)$(BINDIR)
 	install -p -m 0755 target/release/$(NAME) $(DESTDIR)$(BINDIR)/
+	install -p -m 0755 target/release/agent-memory-backend $(DESTDIR)$(BINDIR)/
+	install -p -m 0755 target/release/agent-memory-cosh-hook $(DESTDIR)$(BINDIR)/
 	install -d -m 0755 $(DESTDIR)$(DATADIR)/agent-memory
 	install -p -m 0644 config/default.toml $(DESTDIR)$(DATADIR)/agent-memory/
 	install -d -m 0755 $(DESTDIR)$(DATADIR)/mcp-servers
 	install -p -m 0644 config/mcp-server.json $(DESTDIR)$(DATADIR)/mcp-servers/agent-memory.json
+	install -d -m 0755 $(DESTDIR)$(COSH_EXTENSION_DIR)
+	install -p -m 0644 $(COSH_ADAPTER_SRC_DIR)/cosh-extension.json \
+		$(DESTDIR)$(COSH_EXTENSION_DIR)/
 	@echo "==> Installed $(NAME) to $(DESTDIR)$(BINDIR)/$(NAME)"
 
 install-adapter-resources-staged: ## Install adapter bundle (no rebuild)
@@ -234,8 +249,12 @@ install-systemd-user: ## Install per-user systemd template (Linux only)
 
 uninstall: ## Remove installed files
 	rm -f $(DESTDIR)$(BINDIR)/$(NAME)
+	rm -f $(DESTDIR)$(BINDIR)/agent-memory-backend
+	rm -f $(DESTDIR)$(BINDIR)/agent-memory-cosh-hook
 	rm -f $(DESTDIR)$(DATADIR)/agent-memory/default.toml
 	rm -f $(DESTDIR)$(DATADIR)/mcp-servers/agent-memory.json
+	rm -f $(DESTDIR)$(COSH_EXTENSION_DIR)/cosh-extension.json
+	rmdir $(DESTDIR)$(COSH_EXTENSION_DIR) 2>/dev/null || true
 	rmdir $(DESTDIR)$(DATADIR)/agent-memory 2>/dev/null || true
 	rmdir $(DESTDIR)$(DATADIR)/mcp-servers 2>/dev/null || true
 
@@ -266,6 +285,8 @@ dist: clean build-openclaw-plugin ## Create source + vendor tarballs for RPM bui
 		--exclude='.tsbuildinfo' \
 		--exclude='tests' \
 		. | tar -xf - -C dist/$(NAME)-$(VERSION)/$(ADAPTER_SRC_DIR)/
+	@mkdir -p dist/$(NAME)-$(VERSION)/adapters
+	@cp -R $(COSH_ADAPTER_SRC_DIR) dist/$(NAME)-$(VERSION)/adapters/
 	tar czf dist/$(NAME)-$(VERSION).tar.gz -C dist $(NAME)-$(VERSION)
 	@echo "==> Creating $(NAME)-$(VERSION)-vendor.tar.gz..."
 	# Top-level dir is `vendor/` (no $(NAME)-vendor wrapper) so that

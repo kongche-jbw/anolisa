@@ -4,9 +4,11 @@ use schemars::schema_for;
 use serde_json::{Value, json};
 
 mod backend;
+mod local;
 mod types;
 
 pub use backend::{EphemeralMemoryBackend, MemoryBackend, dispatch};
+pub use local::{LocalMemoryBackend, LocalMemoryStats, default_local_memory_path};
 pub use types::*;
 
 /// Returns the JSON Schema bundle for protocol request and response envelopes.

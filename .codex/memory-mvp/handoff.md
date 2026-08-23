@@ -16,8 +16,8 @@
 | 阶段 | 状态 | Commit | 下一阶段入口 |
 |---|---|---|---|
 | 1. Memory Protocol | Complete | `c2dfd0b1` | RuntimeAdapter 只消费协议类型 |
-| 2. Cosh RuntimeAdapter | Complete | This commit | 以 durable backend 替换开发期 backend |
-| 3. Typed Local Backend | Pending | — | ContextView 可持久化与解释 |
+| 2. Cosh RuntimeAdapter | Complete | `5dc23c73` | 以 durable backend 替换开发期 backend |
+| 3. Typed Local Backend | Complete | This commit | ContextView 可持久化与解释 |
 | 4. ManT Provider | Pending | — | Provider 可卸载、可失效 |
 | 5. Cosh UX | Pending | — | 30 秒体验路径 |
 
@@ -138,3 +138,62 @@
   持久化以及 process reopen/cold-resume 测试。
 - Hook binary 默认打开 local backend，然后才在 Makefile/RPM 中安装 binary 和
   `/usr/share/anolisa/extensions/anolisa.agent-memory/cosh-extension.json`。
+
+## 阶段 3 Handoff：Typed Local Backend
+
+### 已完成
+
+- 新增独立的 `LocalMemoryBackend`，以 SQLite schema v1 持久化 session、不可变
+  Runtime event、TaskState、ContextView、RecallTrace、outcome 和 close record。
+- 默认数据库位于 `$XDG_STATE_HOME/anolisa/agent-memory/memory-v1.sqlite3`；可信
+  launcher 可用 `ANOLISA_MEMORY_DB` 指定路径，但不能以该变量提供 identity。
+- 数据库父目录和文件分别强制为 `0700`、`0600`，拒绝 database symlink；SQLite
+  启用 WAL、foreign keys、5 秒 busy timeout 和 `synchronous=FULL`。
+- 首次 schema 创建在 `BEGIN IMMEDIATE` 中串行化，并在 WAL 切换前完成；50 次
+  双线程并发首次打开压力测试均通过。
+- Mutation 主对象和幂等 key 在同一事务提交；event alias 与 outcome alias 均有
+  每对象硬上限，避免用不同 replay key 绕过容量限制。
+- TaskState 使用 expected revision 防止并发覆盖；Verified TaskState 优先于
+  Candidate tool evidence 进入同一个 item/byte/token budget。
+- 工具证据可跨同 workspace 的 session 召回。普通 turn 要求 query token overlap，
+  session resume 按最近 evidence 恢复；每项保留 DB row/event provenance。
+- Hook binary 默认打开 durable local backend。Make、RPM 和组件 manifest 安装
+  backend binary、Hook binary 与 Cosh extension manifest，跨进程 capture/recall
+  正式形成闭环。
+- 新增中英文 typed local backend 设计文档。
+
+### 持久化与恢复契约
+
+- 成功的 mutation ACK 表示 SQLite durable commit，不表示 provider KV cache 已保存。
+- Kill Hook 后新进程可以重放丢失 ACK、恢复 TaskState revision、召回相关工具证据，
+  并读取原 session 的 RecallTrace/outcome。
+- Raw tool output 不直接写入长期记忆；只保存脱敏、有界 summary、hash/ref 与 outcome。
+- Diagnostic ContextView 保留 7 天；closed session 和原始 Candidate event 保留 30 天；
+  reviewed TaskState 保留到显式 forget。配额压力只淘汰最旧 view 与 closed session。
+- 进程、PTY、fd 和 in-flight tool outcome 没有可靠证据时仍为 unknown。
+- 新版本 schema 会 fail closed；v1 尚未提供自动 schema migration。
+
+### 验证
+
+- `cargo test --locked`
+  - 388 passed，0 failed，0 ignored；其中 local backend 12 项。
+- `cargo clippy --workspace --all-targets --locked -- -D warnings`
+- `RUSTDOCFLAGS='-D warnings' cargo doc --workspace --locked --no-deps`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- 并发首次打开测试连续运行 50 次，全部通过。
+- 真实 one-shot Hook 进程 A capture 工具证据，进程退出后进程 B 在相同 workspace
+  召回 Candidate evidence；相关 query 命中、无关 query 不命中。
+- `make build` release 构建通过。`make install INSTALL_PROFILE=system PREFIX=/usr`
+  在隔离 staging root 中安装三个 `0755` binary 和一个 `0644` Cosh manifest。
+- 独立 Stage 3 review 提出的 close replay lifecycle、无回收导致 recall 永久耗尽、
+  ANOLISA contract 与 RPM/Make 目录不一致三个 P1 均已修复并回归。
+
+### 阶段 4 入口
+
+- ManT 只能作为可选 `KnowledgeProvider`，不得成为 protocol、RuntimeAdapter 或
+  local memory 的必需依赖。
+- Provider unavailable 时保留 local TaskState/evidence，并把 recall 标记为 degraded；
+  禁止静默把失败伪装成完整召回。
+- 长期库只保留 ManT 文档 ref、selector、fingerprint 和必要的有界 excerpt，不能复制
+  整套手册成为第二真源。
