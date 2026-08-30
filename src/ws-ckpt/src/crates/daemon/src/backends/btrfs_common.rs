@@ -1,5 +1,15 @@
 use std::collections::{HashMap, HashSet};
+use std::ffi::{CString, OsStr, OsString};
+use std::fs::File as StdFile;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+#[cfg(target_os = "linux")]
+use std::mem::size_of;
+#[cfg(target_os = "linux")]
+use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 
 use anyhow::{bail, Context, Result};
 use tokio::fs::File;
@@ -245,6 +255,869 @@ pub async fn resolve_symlink_path(path: &str) -> Result<PathBuf> {
         }
         _ => Ok(PathBuf::from(path)),
     }
+}
+
+static RECOVERY_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// Directory fd pinning the configured workspace authorization root.
+pub(crate) struct WorkspaceRootBinding {
+    canonical_path: PathBuf,
+    directory: StdFile,
+}
+
+impl WorkspaceRootBinding {
+    pub(crate) fn pin(path: &Path) -> Result<Self> {
+        if !path.is_absolute() {
+            bail!("workspace root must be absolute: {}", path.display());
+        }
+        let canonical = std::fs::canonicalize(path)
+            .with_context(|| format!("failed to resolve workspace root {}", path.display()))?;
+        if canonical != path {
+            bail!(
+                "workspace root contains a symlink or traversal component: {} resolves to {}",
+                path.display(),
+                canonical.display()
+            );
+        }
+        let directory = open_directory_nofollow(path)?;
+        ensure_path_matches_fd(path, &directory, "workspace authorization root")?;
+        Ok(Self {
+            canonical_path: canonical,
+            directory,
+        })
+    }
+
+    pub(crate) fn pin_workspace(
+        &self,
+        workspace: &Path,
+        peer_uid: u32,
+    ) -> Result<WorkspacePathBinding> {
+        ensure_path_matches_fd(
+            &self.canonical_path,
+            &self.directory,
+            "workspace authorization root",
+        )?;
+        if !workspace.is_absolute() {
+            bail!("workspace path must be absolute: {}", workspace.display());
+        }
+        let relative = workspace.strip_prefix(&self.canonical_path).map_err(|_| {
+            anyhow::anyhow!(
+                "workspace must be a strict descendant of {}: {}",
+                self.canonical_path.display(),
+                workspace.display()
+            )
+        })?;
+        let components: Vec<_> = relative.components().collect();
+        if components.is_empty()
+            || components
+                .iter()
+                .any(|component| !matches!(component, std::path::Component::Normal(_)))
+        {
+            bail!(
+                "workspace must be a normalized strict descendant of {}: {}",
+                self.canonical_path.display(),
+                workspace.display()
+            );
+        }
+
+        let root = self.directory.try_clone()?;
+        let mut parent = self.directory.try_clone()?;
+        for component in &components[..components.len() - 1] {
+            let std::path::Component::Normal(name) = component else {
+                unreachable!("components were validated above")
+            };
+            parent = openat_directory_nofollow(&parent, name).with_context(|| {
+                format!(
+                    "workspace ancestor is not an anchored directory: {}",
+                    workspace.display()
+                )
+            })?;
+        }
+        let std::path::Component::Normal(original_name) = components[components.len() - 1] else {
+            unreachable!("components were validated above")
+        };
+        let directory = openat_directory_nofollow(&parent, original_name).with_context(|| {
+            format!("failed to open anchored workspace {}", workspace.display())
+        })?;
+        let metadata = directory.metadata()?;
+        if metadata.uid() != peer_uid {
+            bail!(
+                "peer uid {} does not own workspace {}",
+                peer_uid,
+                workspace.display()
+            );
+        }
+        let canonical_path = canonical_path_from_fd(&directory)?;
+        if canonical_path == self.canonical_path
+            || !canonical_path.starts_with(&self.canonical_path)
+        {
+            bail!("anchored workspace escaped configured root");
+        }
+        ensure_path_matches_fd(
+            &fd_child_path(&parent, original_name),
+            &directory,
+            "anchored workspace entry",
+        )?;
+        Ok(WorkspacePathBinding {
+            canonical_path,
+            root_path: self.canonical_path.clone(),
+            relative_parent: components[..components.len() - 1]
+                .iter()
+                .filter_map(|component| match component {
+                    std::path::Component::Normal(name) => Some(name),
+                    _ => None,
+                })
+                .collect(),
+            original_name: original_name.to_os_string(),
+            root,
+            parent,
+            directory,
+            metadata: ws_ckpt_common::backend::WorkspaceDirectoryMetadata {
+                uid: metadata.uid(),
+                gid: metadata.gid(),
+                mode: metadata.mode(),
+            },
+        })
+    }
+
+    pub(crate) fn pin_registered_workspace(
+        &self,
+        workspace: &Path,
+        expected_subvolume: &Path,
+        peer_uid: u32,
+    ) -> Result<RegisteredWorkspaceBinding> {
+        ensure_path_matches_fd(
+            &self.canonical_path,
+            &self.directory,
+            "workspace authorization root",
+        )?;
+        let (parent, original_name) = self.open_anchored_parent(workspace)?;
+        let expected_subvolume = std::fs::canonicalize(expected_subvolume).with_context(|| {
+            format!(
+                "failed to resolve managed workspace target {}",
+                expected_subvolume.display()
+            )
+        })?;
+        ensure_managed_symlink(&fd_child_path(&parent, &original_name), &expected_subvolume)?;
+        let metadata = std::fs::metadata(&expected_subvolume)?;
+        if metadata.uid() != peer_uid {
+            bail!(
+                "peer uid {} does not own workspace {}",
+                peer_uid,
+                workspace.display()
+            );
+        }
+        Ok(RegisteredWorkspaceBinding {
+            root_path: self.canonical_path.clone(),
+            relative_parent: workspace
+                .parent()
+                .and_then(|parent| parent.strip_prefix(&self.canonical_path).ok())
+                .unwrap_or_else(|| Path::new(""))
+                .to_path_buf(),
+            root: self.directory.try_clone()?,
+            parent,
+            original_name,
+            expected_subvolume,
+        })
+    }
+
+    fn open_anchored_parent(&self, workspace: &Path) -> Result<(StdFile, OsString)> {
+        if !workspace.is_absolute() {
+            bail!("workspace path must be absolute: {}", workspace.display());
+        }
+        let relative = workspace.strip_prefix(&self.canonical_path).map_err(|_| {
+            anyhow::anyhow!(
+                "workspace must be a strict descendant of {}: {}",
+                self.canonical_path.display(),
+                workspace.display()
+            )
+        })?;
+        let components: Vec<_> = relative.components().collect();
+        if components.is_empty()
+            || components
+                .iter()
+                .any(|component| !matches!(component, std::path::Component::Normal(_)))
+        {
+            bail!(
+                "workspace must be a normalized strict descendant of {}: {}",
+                self.canonical_path.display(),
+                workspace.display()
+            );
+        }
+        let mut parent = self.directory.try_clone()?;
+        for component in &components[..components.len() - 1] {
+            let std::path::Component::Normal(name) = component else {
+                unreachable!("components were validated above")
+            };
+            parent = openat_directory_nofollow(&parent, name).with_context(|| {
+                format!(
+                    "workspace ancestor is not an anchored directory: {}",
+                    workspace.display()
+                )
+            })?;
+        }
+        let std::path::Component::Normal(name) = components[components.len() - 1] else {
+            unreachable!("components were validated above")
+        };
+        Ok((parent, name.to_os_string()))
+    }
+}
+
+/// Root-anchored registered workspace destination used by Recover.
+pub(crate) struct RegisteredWorkspaceBinding {
+    root_path: PathBuf,
+    relative_parent: PathBuf,
+    root: StdFile,
+    parent: StdFile,
+    original_name: OsString,
+    expected_subvolume: PathBuf,
+}
+
+impl RegisteredWorkspaceBinding {
+    pub(crate) fn parent(&self) -> &StdFile {
+        &self.parent
+    }
+
+    pub(crate) fn original_name(&self) -> &OsStr {
+        &self.original_name
+    }
+
+    pub(crate) fn verify(&self) -> Result<()> {
+        ensure_path_matches_fd(
+            &self.root_path,
+            &self.root,
+            "workspace root before registered operation",
+        )?;
+        ensure_relative_directory_matches_fd(
+            &self.root,
+            &self.relative_parent,
+            &self.parent,
+            "registered workspace parent",
+        )?;
+        ensure_managed_symlink(
+            &fd_child_path(&self.parent, &self.original_name),
+            &self.expected_subvolume,
+        )
+    }
+}
+
+/// Open directory objects pinned during peer authorization.
+pub(crate) struct WorkspacePathBinding {
+    canonical_path: PathBuf,
+    root_path: PathBuf,
+    relative_parent: PathBuf,
+    original_name: OsString,
+    root: StdFile,
+    parent: StdFile,
+    directory: StdFile,
+    metadata: ws_ckpt_common::backend::WorkspaceDirectoryMetadata,
+}
+
+impl WorkspacePathBinding {
+    pub(crate) fn canonical_path(&self) -> &Path {
+        &self.canonical_path
+    }
+
+    pub(crate) fn claim(self) -> Result<ClaimedWorkspace> {
+        ensure_path_matches_fd(&self.root_path, &self.root, "workspace root before claim")?;
+        ensure_relative_directory_matches_fd(
+            &self.root,
+            &self.relative_parent,
+            &self.parent,
+            "workspace parent before claim",
+        )?;
+        ensure_path_matches_fd(
+            &fd_child_path(&self.parent, &self.original_name),
+            &self.directory,
+            "workspace before claim",
+        )?;
+        let placeholder_name = create_temp_directory(&self.parent, ".ws-ckpt-init-claim")?;
+        let placeholder_path = fd_child_path(&self.parent, &placeholder_name);
+        let placeholder = open_directory_nofollow(&placeholder_path)?;
+        atomic_exchange(&self.parent, &placeholder_name, &self.original_name)?;
+        let claimed_path = fd_child_path(&self.parent, &placeholder_name);
+        if let Err(error) =
+            ensure_path_matches_fd(&claimed_path, &self.directory, "claimed workspace")
+        {
+            let _ = atomic_exchange(&self.parent, &placeholder_name, &self.original_name);
+            return Err(error).context("workspace entry changed before atomic init claim");
+        }
+        if let Err(error) = ensure_path_matches_fd(
+            &fd_child_path(&self.parent, &self.original_name),
+            &placeholder,
+            "init placeholder",
+        ) {
+            let _ = atomic_exchange(&self.parent, &placeholder_name, &self.original_name);
+            return Err(error).context("workspace entry changed during atomic init claim");
+        }
+        Ok(ClaimedWorkspace {
+            binding: self,
+            claim_name: placeholder_name,
+            placeholder,
+        })
+    }
+}
+
+/// Exact authorized workspace entry held across backend import and publication.
+pub(crate) struct ClaimedWorkspace {
+    binding: WorkspacePathBinding,
+    claim_name: OsString,
+    placeholder: StdFile,
+}
+
+impl ClaimedWorkspace {
+    pub(crate) fn source_path(&self) -> PathBuf {
+        PathBuf::from(format!(
+            "/proc/{}/fd/{}",
+            std::process::id(),
+            self.binding.directory.as_raw_fd()
+        ))
+    }
+
+    pub(crate) fn metadata(&self) -> ws_ckpt_common::backend::WorkspaceDirectoryMetadata {
+        self.binding.metadata
+    }
+
+    pub(crate) async fn publish(self, subvolume: &Path) -> Result<()> {
+        let expected_subvolume = match std::fs::canonicalize(subvolume)
+            .with_context(|| format!("failed to resolve new subvolume {}", subvolume.display()))
+        {
+            Ok(path) => path,
+            Err(error) => return Err(self.restore_after_error(error)),
+        };
+        let pre_publish = || -> Result<()> {
+            ensure_path_matches_fd(
+                &self.binding.root_path,
+                &self.binding.root,
+                "workspace root before init publish",
+            )?;
+            ensure_relative_directory_matches_fd(
+                &self.binding.root,
+                &self.binding.relative_parent,
+                &self.binding.parent,
+                "workspace parent before init publish",
+            )?;
+            ensure_path_matches_fd(
+                &fd_child_path(&self.binding.parent, &self.claim_name),
+                &self.binding.directory,
+                "claimed workspace before init publish",
+            )?;
+            ensure_path_matches_fd(
+                &fd_child_path(&self.binding.parent, &self.binding.original_name),
+                &self.placeholder,
+                "init placeholder before publish",
+            )
+        };
+        if let Err(error) = pre_publish() {
+            return Err(self.restore_after_error(error));
+        }
+
+        let link_name = match create_unique_name(&self.binding.parent, ".ws-ckpt-init-link") {
+            Ok(name) => name,
+            Err(error) => return Err(self.restore_after_error(error)),
+        };
+        let link_path = fd_child_path(&self.binding.parent, &link_name);
+        if let Err(error) = std::os::unix::fs::symlink(&expected_subvolume, &link_path)
+            .context("failed to create anchored managed workspace symlink")
+        {
+            return Err(self.restore_after_error(error));
+        }
+        if let Err(error) = atomic_exchange(
+            &self.binding.parent,
+            &link_name,
+            &self.binding.original_name,
+        ) {
+            let _ = unlink_managed_symlink(&self.binding.parent, &link_name, &expected_subvolume);
+            return Err(self.restore_after_error(error));
+        }
+
+        let post_publish = || -> Result<()> {
+            ensure_managed_symlink(
+                &fd_child_path(&self.binding.parent, &self.binding.original_name),
+                &expected_subvolume,
+            )?;
+            ensure_path_matches_fd(
+                &fd_child_path(&self.binding.parent, &link_name),
+                &self.placeholder,
+                "displaced init placeholder",
+            )?;
+            ensure_path_matches_fd(
+                &fd_child_path(&self.binding.parent, &self.claim_name),
+                &self.binding.directory,
+                "claimed workspace after init publish",
+            )
+        };
+        if let Err(error) = post_publish() {
+            return Err(self.rollback_published_after_error(
+                &link_name,
+                &expected_subvolume,
+                error,
+            ));
+        }
+
+        if let Err(error) = nix::unistd::unlinkat(
+            Some(self.binding.parent.as_raw_fd()),
+            Path::new(&link_name),
+            nix::unistd::UnlinkatFlags::RemoveDir,
+        ) {
+            return Err(self.rollback_published_after_error(
+                &link_name,
+                &expected_subvolume,
+                error.into(),
+            ));
+        }
+
+        let cleanup_result = async {
+            let source = self.binding.directory.try_clone()?;
+            let parent = self.binding.parent.try_clone()?;
+            let root_path = self.binding.root_path.clone();
+            let root = self.binding.root.try_clone()?;
+            let claim_name = self.claim_name.clone();
+            tokio::task::spawn_blocking(move || {
+                remove_open_directory_contents(&source, source.metadata()?.dev(), 0)?;
+                ensure_path_matches_fd(&root_path, &root, "workspace root during init cleanup")?;
+                ensure_path_matches_fd(
+                    &fd_child_path(&parent, &claim_name),
+                    &source,
+                    "claimed workspace final cleanup",
+                )?;
+                nix::unistd::unlinkat(
+                    Some(parent.as_raw_fd()),
+                    Path::new(&claim_name),
+                    nix::unistd::UnlinkatFlags::RemoveDir,
+                )
+                .context("failed to remove empty claimed workspace")
+            })
+            .await
+            .context("fd-anchored workspace cleanup task failed")?
+        }
+        .await;
+        if let Err(error) = cleanup_result {
+            warn!("init succeeded but fd-anchored source cleanup was incomplete: {error:#}");
+        }
+        Ok(())
+    }
+
+    pub(crate) fn restore(self) -> Result<()> {
+        self.restore_exact()
+    }
+
+    fn restore_exact(&self) -> Result<()> {
+        ensure_path_matches_fd(
+            &fd_child_path(&self.binding.parent, &self.claim_name),
+            &self.binding.directory,
+            "claimed workspace rollback",
+        )?;
+        ensure_path_matches_fd(
+            &fd_child_path(&self.binding.parent, &self.binding.original_name),
+            &self.placeholder,
+            "init placeholder rollback",
+        )?;
+        atomic_exchange(
+            &self.binding.parent,
+            &self.claim_name,
+            &self.binding.original_name,
+        )?;
+        ensure_path_matches_fd(
+            &self.binding.canonical_path,
+            &self.binding.directory,
+            "restored workspace after failed init",
+        )
+    }
+
+    fn restore_after_error(&self, error: anyhow::Error) -> anyhow::Error {
+        match self.restore_exact() {
+            Ok(()) => error,
+            Err(restore_error) => error.context(format!(
+                "failed to restore exact authorized workspace; it remains pinned at {}: {restore_error:#}",
+                fd_child_path(&self.binding.parent, &self.claim_name).display()
+            )),
+        }
+    }
+
+    fn rollback_published_after_error(
+        &self,
+        placeholder_name: &OsStr,
+        expected_subvolume: &Path,
+        error: anyhow::Error,
+    ) -> anyhow::Error {
+        let rollback = (|| -> Result<()> {
+            ensure_managed_symlink(
+                &fd_child_path(&self.binding.parent, &self.binding.original_name),
+                expected_subvolume,
+            )?;
+            ensure_path_matches_fd(
+                &fd_child_path(&self.binding.parent, &self.claim_name),
+                &self.binding.directory,
+                "claimed workspace before publish rollback",
+            )?;
+            atomic_exchange(
+                &self.binding.parent,
+                &self.claim_name,
+                &self.binding.original_name,
+            )?;
+            ensure_path_matches_fd(
+                &self.binding.canonical_path,
+                &self.binding.directory,
+                "workspace restored after publish failure",
+            )?;
+            unlink_managed_symlink(&self.binding.parent, &self.claim_name, expected_subvolume)?;
+            if ensure_path_matches_fd(
+                &fd_child_path(&self.binding.parent, placeholder_name),
+                &self.placeholder,
+                "displaced init placeholder cleanup",
+            )
+            .is_ok()
+            {
+                nix::unistd::unlinkat(
+                    Some(self.binding.parent.as_raw_fd()),
+                    Path::new(placeholder_name),
+                    nix::unistd::UnlinkatFlags::RemoveDir,
+                )?;
+            }
+            Ok(())
+        })();
+        match rollback {
+            Ok(()) => error,
+            Err(rollback_error) => error.context(format!(
+                "failed to roll back exact workspace publication; authorized source remains pinned at {}: {rollback_error:#}",
+                fd_child_path(&self.binding.parent, &self.claim_name).display()
+            )),
+        }
+    }
+}
+
+fn unlink_managed_symlink(parent: &StdFile, name: &OsStr, expected_subvolume: &Path) -> Result<()> {
+    ensure_managed_symlink(&fd_child_path(parent, name), expected_subvolume)?;
+    nix::unistd::unlinkat(
+        Some(parent.as_raw_fd()),
+        Path::new(name),
+        nix::unistd::UnlinkatFlags::NoRemoveDir,
+    )
+    .context("failed to remove anchored managed symlink")
+}
+
+fn remove_open_directory_contents(directory: &StdFile, device: u64, depth: usize) -> Result<()> {
+    if depth > 1024 {
+        bail!("claimed workspace exceeds safe cleanup nesting depth");
+    }
+    let directory_path = PathBuf::from(format!(
+        "/proc/{}/fd/{}",
+        std::process::id(),
+        directory.as_raw_fd()
+    ));
+    for entry in std::fs::read_dir(&directory_path)
+        .context("failed to enumerate claimed workspace through directory fd")?
+    {
+        let entry = entry?;
+        let name = entry.file_name();
+        let child_path = directory_path.join(&name);
+        let metadata = std::fs::symlink_metadata(&child_path)?;
+        if metadata.is_dir() {
+            if metadata.dev() != device {
+                bail!(
+                    "refusing to cross filesystem boundary while cleaning claimed workspace: {}",
+                    child_path.display()
+                );
+            }
+            let child = open_directory_nofollow(&child_path)?;
+            remove_open_directory_contents(&child, device, depth + 1)?;
+            ensure_path_matches_fd(&child_path, &child, "claimed workspace child cleanup")?;
+            nix::unistd::unlinkat(
+                Some(directory.as_raw_fd()),
+                Path::new(&name),
+                nix::unistd::UnlinkatFlags::RemoveDir,
+            )?;
+        } else {
+            nix::unistd::unlinkat(
+                Some(directory.as_raw_fd()),
+                Path::new(&name),
+                nix::unistd::UnlinkatFlags::NoRemoveDir,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Restore a subvolume into an fd-anchored sibling directory and publish it atomically.
+///
+/// No privileged write uses `original_path` as a destination. The user-owned
+/// parent may rename either directory entry at any time; inode checks turn
+/// those races into errors rather than following an attacker-controlled link.
+pub async fn restore_workspace_from_subvolume(
+    subvolume: &Path,
+    original_path: &Path,
+) -> Result<()> {
+    let parent_path = original_path
+        .parent()
+        .context("workspace path has no parent directory")?;
+    let original_name = original_path
+        .file_name()
+        .context("workspace path has no final component")?;
+    let parent = open_directory_nofollow(parent_path)
+        .with_context(|| format!("failed to securely open parent {}", parent_path.display()))?;
+    ensure_path_matches_fd(parent_path, &parent, "workspace parent")?;
+    restore_workspace_from_subvolume_anchored(subvolume, &parent, original_name).await?;
+    ensure_path_matches_fd(parent_path, &parent, "workspace parent after publish")?;
+    Ok(())
+}
+
+/// Restore a subvolume through an authorization-pinned parent directory fd.
+pub async fn restore_workspace_from_subvolume_anchored(
+    subvolume: &Path,
+    parent: &StdFile,
+    original_name: &OsStr,
+) -> Result<()> {
+    let expected_subvolume = tokio::fs::canonicalize(subvolume)
+        .await
+        .with_context(|| format!("failed to resolve subvolume {}", subvolume.display()))?;
+    ensure_managed_symlink(&fd_child_path(parent, original_name), &expected_subvolume)?;
+
+    let temp_name = create_recovery_temp(parent)?;
+    let temp_entry = fd_child_path(parent, &temp_name);
+    let temp = open_directory_nofollow(&temp_entry)
+        .with_context(|| format!("failed to open recovery temp {}", temp_entry.display()))?;
+    ensure_path_matches_fd(&temp_entry, &temp, "recovery temp")?;
+
+    let source = format!("{}/", expected_subvolume.to_string_lossy());
+    let status = rsync_to_open_directory(&expected_subvolume, &temp).await?;
+    if !status.success() {
+        bail!(
+            "rsync failed restoring {} through directory fd, exit: {:?}; \
+             workspace and snapshots preserved for retry (temporary data retained at {})",
+            source,
+            status.code(),
+            temp_entry.display()
+        );
+    }
+    ensure_path_matches_fd(&temp_entry, &temp, "recovery temp after rsync")?;
+
+    let subvolume_metadata = tokio::fs::metadata(&expected_subvolume)
+        .await
+        .context("failed to read subvolume metadata")?;
+    nix::unistd::fchown(
+        temp.as_raw_fd(),
+        Some(nix::unistd::Uid::from_raw(subvolume_metadata.uid())),
+        Some(nix::unistd::Gid::from_raw(subvolume_metadata.gid())),
+    )
+    .context("failed to restore recovered directory ownership through fd")?;
+    nix::sys::stat::fchmod(
+        temp.as_raw_fd(),
+        nix::sys::stat::Mode::from_bits_truncate(subvolume_metadata.mode()),
+    )
+    .context("failed to restore recovered directory mode through fd")?;
+
+    ensure_path_matches_fd(&temp_entry, &temp, "recovery temp before publish")?;
+    ensure_managed_symlink(&fd_child_path(parent, original_name), &expected_subvolume)?;
+    atomic_exchange(parent, &temp_name, original_name)
+        .context("failed to atomically publish recovered workspace")?;
+
+    let published = fd_child_path(parent, original_name);
+    ensure_path_matches_fd(&published, &temp, "published recovered workspace")?;
+    let displaced_link = fd_child_path(parent, &temp_name);
+    ensure_managed_symlink(&displaced_link, &expected_subvolume).context(
+        "workspace entry changed during atomic recovery publish; refusing cleanup and preserving subvolume",
+    )?;
+    nix::unistd::unlinkat(
+        Some(parent.as_raw_fd()),
+        Path::new(&temp_name),
+        nix::unistd::UnlinkatFlags::NoRemoveDir,
+    )
+    .context("failed to remove displaced managed symlink")?;
+
+    info!(
+        "restored workspace contents through anchored parent fd as {}",
+        original_name.to_string_lossy()
+    );
+    Ok(())
+}
+
+async fn rsync_to_open_directory(
+    source: &Path,
+    destination: &StdFile,
+) -> Result<std::process::ExitStatus> {
+    let source = format!("{}/", source.to_string_lossy());
+    let destination = format!(
+        "/proc/{}/fd/{}/",
+        std::process::id(),
+        destination.as_raw_fd()
+    );
+    Command::new("rsync")
+        .args(["-a", "--delete", &source, &destination])
+        .status()
+        .await
+        .context("failed to run fd-anchored recovery rsync")
+}
+
+fn open_directory_nofollow(path: &Path) -> Result<StdFile> {
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
+        .map_err(anyhow::Error::from)
+}
+
+fn openat_directory_nofollow(parent: &StdFile, name: &OsStr) -> Result<StdFile> {
+    let name = CString::new(name.as_bytes()).context("directory component contains NUL")?;
+    // SAFETY: the name is a valid C string and the returned fd is uniquely
+    // transferred into StdFile. O_NOFOLLOW rejects a symlink at this component.
+    let fd = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if fd == -1 {
+        return Err(std::io::Error::last_os_error()).context("openat directory failed");
+    }
+    // SAFETY: openat returned a new owned descriptor on success.
+    Ok(unsafe { StdFile::from_raw_fd(fd) })
+}
+
+fn canonical_path_from_fd(directory: &StdFile) -> Result<PathBuf> {
+    std::fs::canonicalize(format!(
+        "/proc/{}/fd/{}",
+        std::process::id(),
+        directory.as_raw_fd()
+    ))
+    .context("failed to resolve anchored directory fd")
+}
+
+fn ensure_relative_directory_matches_fd(
+    root: &StdFile,
+    relative: &Path,
+    expected: &StdFile,
+    description: &str,
+) -> Result<()> {
+    let mut current = root.try_clone()?;
+    for component in relative.components() {
+        let std::path::Component::Normal(name) = component else {
+            bail!("invalid relative component while verifying {description}");
+        };
+        current = openat_directory_nofollow(&current, name)
+            .with_context(|| format!("failed to reopen {description}"))?;
+    }
+    let current_metadata = current.metadata()?;
+    let expected_metadata = expected.metadata()?;
+    if current_metadata.dev() != expected_metadata.dev()
+        || current_metadata.ino() != expected_metadata.ino()
+    {
+        bail!("{description} was replaced after authorization");
+    }
+    Ok(())
+}
+
+fn fd_child_path(parent: &StdFile, name: &OsStr) -> PathBuf {
+    PathBuf::from(format!(
+        "/proc/{}/fd/{}",
+        std::process::id(),
+        parent.as_raw_fd()
+    ))
+    .join(name)
+}
+
+fn ensure_path_matches_fd(path: &Path, directory: &StdFile, description: &str) -> Result<()> {
+    let path_metadata = std::fs::symlink_metadata(path)
+        .with_context(|| format!("failed to inspect {description} at {}", path.display()))?;
+    let fd_metadata = directory
+        .metadata()
+        .with_context(|| format!("failed to inspect open {description} fd"))?;
+    if !path_metadata.is_dir()
+        || path_metadata.dev() != fd_metadata.dev()
+        || path_metadata.ino() != fd_metadata.ino()
+    {
+        bail!(
+            "{description} was replaced during recovery: {}",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+fn ensure_managed_symlink(path: &Path, expected_subvolume: &Path) -> Result<()> {
+    let metadata = std::fs::symlink_metadata(path).with_context(|| {
+        format!(
+            "cannot inspect registered workspace link {}",
+            path.display()
+        )
+    })?;
+    if !metadata.file_type().is_symlink() {
+        bail!(
+            "registered workspace is not the managed symlink during recovery: {}",
+            path.display()
+        );
+    }
+    let target = std::fs::canonicalize(path).with_context(|| {
+        format!(
+            "cannot resolve registered workspace link {}",
+            path.display()
+        )
+    })?;
+    if target != expected_subvolume {
+        bail!(
+            "registered workspace link changed during recovery: expected {}, got {}",
+            expected_subvolume.display(),
+            target.display()
+        );
+    }
+    Ok(())
+}
+
+fn create_recovery_temp(parent: &StdFile) -> Result<OsString> {
+    create_temp_directory(parent, ".ws-ckpt-recover")
+}
+
+fn create_temp_directory(parent: &StdFile, prefix: &str) -> Result<OsString> {
+    for _ in 0..32 {
+        let sequence = RECOVERY_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let name = OsString::from(format!("{prefix}-{}-{sequence:016x}", std::process::id()));
+        match nix::sys::stat::mkdirat(
+            Some(parent.as_raw_fd()),
+            Path::new(&name),
+            nix::sys::stat::Mode::from_bits_truncate(0o700),
+        ) {
+            Ok(()) => return Ok(name),
+            Err(nix::errno::Errno::EEXIST) => continue,
+            Err(error) => return Err(error).context("failed to create recovery temp directory"),
+        }
+    }
+    bail!("failed to allocate a unique recovery temp directory")
+}
+
+fn create_unique_name(parent: &StdFile, prefix: &str) -> Result<OsString> {
+    for _ in 0..32 {
+        let sequence = RECOVERY_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let name = OsString::from(format!("{prefix}-{}-{sequence:016x}", std::process::id()));
+        match std::fs::symlink_metadata(fd_child_path(parent, &name)) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(name),
+            Ok(_) => continue,
+            Err(error) => return Err(error).context("failed to allocate anchored temp name"),
+        }
+    }
+    bail!("failed to allocate a unique anchored temp name")
+}
+
+fn atomic_exchange(parent: &StdFile, source: &OsStr, destination: &OsStr) -> Result<()> {
+    let source = CString::new(source.as_bytes()).context("recovery temp name contains NUL")?;
+    let destination =
+        CString::new(destination.as_bytes()).context("workspace name contains NUL")?;
+    // SAFETY: both C strings are valid and both relative names are anchored to
+    // the open parent directory fd. RENAME_EXCHANGE never follows either entry.
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_renameat2,
+            parent.as_raw_fd(),
+            source.as_ptr(),
+            parent.as_raw_fd(),
+            destination.as_ptr(),
+            libc::RENAME_EXCHANGE,
+        )
+    };
+    if result == -1 {
+        return Err(std::io::Error::last_os_error()).context("renameat2(RENAME_EXCHANGE) failed");
+    }
+    Ok(())
 }
 
 /// Create a new btrfs subvolume at the given path
@@ -774,6 +1647,193 @@ pub struct MountInfo {
     pub mount_point: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProcMountInfo {
+    device: String,
+    mount_point: String,
+    filesystem_type: String,
+    filesystem_id: String,
+    read_only: bool,
+}
+
+/// Resolve the topmost mount containing `path` and require a writable Btrfs FS.
+///
+/// Nonexistent leaf components are allowed so startup can select the backing
+/// filesystem before creating `config.mount_path`.
+pub async fn find_btrfs_partition_for_path(path: &Path) -> Result<MountInfo> {
+    let lookup_path = nearest_existing_ancestor(path).await?;
+    let canonical_path = tokio::fs::canonicalize(&lookup_path)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to resolve mount lookup path {}",
+                lookup_path.display()
+            )
+        })?;
+    let mount_table = tokio::fs::read_to_string("/proc/self/mountinfo")
+        .await
+        .context("Failed to open /proc/self/mountinfo")?;
+    let mount = select_btrfs_mount_for_path(&mount_table, &canonical_path)?;
+    let fsid = btrfs_filesystem_id(&canonical_path).with_context(|| {
+        format!(
+            "failed to read Btrfs FSID for {} mounted at {}",
+            canonical_path.display(),
+            mount.mount_point
+        )
+    })?;
+
+    info!(
+        "Selected Btrfs filesystem for {}: mount={}, device={}, fsid={}, kernel_fs={}",
+        path.display(),
+        mount.mount_point,
+        mount.device,
+        fsid,
+        mount.filesystem_id
+    );
+    Ok(MountInfo {
+        device: mount.device,
+        mount_point: mount.mount_point,
+    })
+}
+
+async fn nearest_existing_ancestor(path: &Path) -> Result<PathBuf> {
+    let mut candidate = path.to_path_buf();
+    loop {
+        match tokio::fs::symlink_metadata(&candidate).await {
+            Ok(_) => return Ok(candidate),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if !candidate.pop() {
+                    bail!("no existing ancestor found for {}", path.display());
+                }
+            }
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "failed to inspect mount lookup path {}",
+                        candidate.display()
+                    )
+                });
+            }
+        }
+    }
+}
+
+fn select_btrfs_mount_for_path(mount_table: &str, path: &Path) -> Result<ProcMountInfo> {
+    let mut selected: Option<ProcMountInfo> = None;
+    for line in mount_table.lines() {
+        let Some(mount) = parse_mountinfo_line(line) else {
+            continue;
+        };
+        if path.starts_with(Path::new(&mount.mount_point))
+            && selected
+                .as_ref()
+                .is_none_or(|current| mount.mount_point.len() >= current.mount_point.len())
+        {
+            selected = Some(mount);
+        }
+    }
+
+    let selected =
+        selected.with_context(|| format!("no mounted filesystem contains {}", path.display()))?;
+    if selected.filesystem_type != "btrfs" {
+        bail!(
+            "mount_path {} is on {} at {}, not Btrfs",
+            path.display(),
+            selected.filesystem_type,
+            selected.mount_point
+        );
+    }
+    if selected.read_only {
+        bail!(
+            "mount_path {} is on read-only Btrfs mount {}",
+            path.display(),
+            selected.mount_point
+        );
+    }
+    Ok(selected)
+}
+
+fn parse_mountinfo_line(line: &str) -> Option<ProcMountInfo> {
+    let (mount_fields, filesystem_fields) = line.split_once(" - ")?;
+    let mount_fields: Vec<&str> = mount_fields.split_whitespace().collect();
+    let filesystem_fields: Vec<&str> = filesystem_fields.split_whitespace().collect();
+    if mount_fields.len() < 6 || filesystem_fields.len() < 2 {
+        return None;
+    }
+
+    Some(ProcMountInfo {
+        device: unescape_proc_mount(filesystem_fields[1]),
+        mount_point: unescape_proc_mount(mount_fields[4]),
+        filesystem_type: filesystem_fields[0].to_string(),
+        filesystem_id: mount_fields[2].to_string(),
+        read_only: mount_fields[5].split(',').any(|option| option == "ro"),
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn btrfs_filesystem_id(path: &Path) -> Result<String> {
+    const BTRFS_IOCTL_MAGIC: u8 = 0x94;
+    const BTRFS_IOC_FS_INFO_NR: u8 = 31;
+
+    #[repr(C)]
+    struct BtrfsIoctlFsInfoArgs {
+        max_id: u64,
+        num_devices: u64,
+        fsid: [u8; 16],
+        nodesize: u32,
+        sectorsize: u32,
+        clone_alignment: u32,
+        csum_type: u16,
+        csum_size: u16,
+        flags: u64,
+        generation: u64,
+        metadata_uuid: [u8; 16],
+        reserved: [u8; 944],
+    }
+
+    nix::ioctl_read!(
+        btrfs_ioc_fs_info_for_mount,
+        BTRFS_IOCTL_MAGIC,
+        BTRFS_IOC_FS_INFO_NR,
+        BtrfsIoctlFsInfoArgs
+    );
+
+    if size_of::<BtrfsIoctlFsInfoArgs>() != 1024 {
+        bail!("unexpected BTRFS_IOC_FS_INFO layout");
+    }
+    let directory = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
+        .with_context(|| format!("failed to open Btrfs path {}", path.display()))?;
+    let mut fs_info = BtrfsIoctlFsInfoArgs {
+        max_id: 0,
+        num_devices: 0,
+        fsid: [0; 16],
+        nodesize: 0,
+        sectorsize: 0,
+        clone_alignment: 0,
+        csum_type: 0,
+        csum_size: 0,
+        flags: 0,
+        generation: 0,
+        metadata_uuid: [0; 16],
+        reserved: [0; 944],
+    };
+    // SAFETY: `directory` keeps the fd valid and `fs_info` matches the Linux UAPI layout.
+    unsafe { btrfs_ioc_fs_info_for_mount(directory.as_raw_fd(), &mut fs_info) }
+        .context("BTRFS_IOC_FS_INFO failed")?;
+    if fs_info.fsid.iter().all(|byte| *byte == 0) {
+        bail!("Btrfs FSID is zero");
+    }
+    Ok(hex::encode(fs_info.fsid))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn btrfs_filesystem_id(_path: &Path) -> Result<String> {
+    bail!("Btrfs FSID lookup is only supported on Linux")
+}
+
 /// Find the first available btrfs partition by scanning /proc/mounts.
 /// Skips read-only mounts and subvolume mounts (prefers physical /dev/ devices).
 /// Returns an error if no writable physical btrfs partition is found.
@@ -840,7 +1900,387 @@ pub async fn warmup_snapshot_metadata(snap_path: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::{symlink, PermissionsExt};
     use std::path::PathBuf;
+
+    const MULTI_BTRFS_MOUNTINFO: &str = "24 1 8:1 / / rw,relatime - ext4 /dev/vda1 rw\n\
+40 24 0:40 / /mnt/first-btrfs rw,relatime - btrfs /dev/vdc rw,space_cache=v2\n\
+41 24 254:16 / /var/lib/anolisa-data rw,nodev,nosuid - btrfs /dev/vdb rw,space_cache=v2\n";
+
+    fn pin_workspace(workspace: &Path) -> WorkspacePathBinding {
+        WorkspaceRootBinding::pin(workspace.parent().unwrap())
+            .unwrap()
+            .pin_workspace(workspace, nix::unistd::geteuid().as_raw())
+            .unwrap()
+    }
+
+    #[test]
+    fn mount_path_selects_its_btrfs_instead_of_first_btrfs() {
+        let selected = select_btrfs_mount_for_path(
+            MULTI_BTRFS_MOUNTINFO,
+            Path::new("/var/lib/anolisa-data/ws-ckpt"),
+        )
+        .unwrap();
+
+        assert_eq!(selected.mount_point, "/var/lib/anolisa-data");
+        assert_eq!(selected.device, "/dev/vdb");
+        assert_eq!(selected.filesystem_id, "254:16");
+    }
+
+    #[test]
+    fn nested_non_btrfs_mount_is_rejected() {
+        let mountinfo = format!(
+            "{MULTI_BTRFS_MOUNTINFO}42 41 8:2 / /var/lib/anolisa-data/ws-ckpt \
+             rw,relatime - ext4 /dev/vdd rw\n"
+        );
+
+        let error = select_btrfs_mount_for_path(
+            &mountinfo,
+            Path::new("/var/lib/anolisa-data/ws-ckpt/project"),
+        )
+        .unwrap_err();
+
+        let message = format!("{error:#}");
+        assert!(message.contains("not Btrfs"), "{message}");
+        assert!(
+            message.contains("/var/lib/anolisa-data/ws-ckpt"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn read_only_target_btrfs_is_rejected() {
+        let mountinfo = "24 1 8:1 / / rw,relatime - ext4 /dev/vda1 rw\n\
+41 24 254:16 / /var/lib/anolisa-data ro,nodev - btrfs /dev/vdb ro\n";
+
+        let error =
+            select_btrfs_mount_for_path(mountinfo, Path::new("/var/lib/anolisa-data/ws-ckpt"))
+                .unwrap_err();
+
+        assert!(format!("{error:#}").contains("read-only Btrfs"));
+    }
+
+    #[tokio::test]
+    async fn recovery_rsync_stays_on_open_directory_after_name_becomes_symlink() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let parent = temp.path().join("parent");
+        let destination = parent.join("destination");
+        let anchored = parent.join("anchored");
+        let victim = temp.path().join("victim");
+        tokio::fs::create_dir_all(&source).await.unwrap();
+        tokio::fs::create_dir_all(&destination).await.unwrap();
+        tokio::fs::create_dir_all(&victim).await.unwrap();
+        tokio::fs::write(source.join("workspace.txt"), b"workspace")
+            .await
+            .unwrap();
+        tokio::fs::write(victim.join("sentinel.txt"), b"untouched")
+            .await
+            .unwrap();
+        let destination_fd = open_directory_nofollow(&destination).unwrap();
+
+        tokio::fs::rename(&destination, &anchored).await.unwrap();
+        symlink(&victim, &destination).unwrap();
+        let status = rsync_to_open_directory(&source, &destination_fd)
+            .await
+            .unwrap();
+
+        assert!(status.success());
+        assert_eq!(
+            tokio::fs::read(anchored.join("workspace.txt"))
+                .await
+                .unwrap(),
+            b"workspace"
+        );
+        assert!(!victim.join("workspace.txt").exists());
+        assert_eq!(
+            tokio::fs::read(victim.join("sentinel.txt")).await.unwrap(),
+            b"untouched"
+        );
+    }
+
+    #[test]
+    fn recovery_atomic_exchange_never_follows_target_symlink() {
+        let temp = tempfile::tempdir().unwrap();
+        let parent_path = temp.path().join("parent");
+        let victim = temp.path().join("victim");
+        std::fs::create_dir_all(&parent_path).unwrap();
+        std::fs::create_dir_all(&victim).unwrap();
+        std::fs::write(victim.join("sentinel.txt"), b"untouched").unwrap();
+        std::fs::create_dir(parent_path.join("recovered")).unwrap();
+        std::fs::write(parent_path.join("recovered/workspace.txt"), b"workspace").unwrap();
+        symlink(&victim, parent_path.join("workspace")).unwrap();
+        let parent = open_directory_nofollow(&parent_path).unwrap();
+
+        atomic_exchange(&parent, OsStr::new("recovered"), OsStr::new("workspace")).unwrap();
+
+        assert!(parent_path.join("workspace").is_dir());
+        assert_eq!(
+            std::fs::read(parent_path.join("workspace/workspace.txt")).unwrap(),
+            b"workspace"
+        );
+        assert_eq!(
+            std::fs::read_link(parent_path.join("recovered")).unwrap(),
+            victim
+        );
+        assert_eq!(
+            std::fs::read(temp.path().join("victim/sentinel.txt")).unwrap(),
+            b"untouched"
+        );
+    }
+
+    #[test]
+    fn recovery_rejects_replaced_parent_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let parent_path = temp.path().join("parent");
+        let displaced_parent = temp.path().join("displaced-parent");
+        std::fs::create_dir(&parent_path).unwrap();
+        let parent = open_directory_nofollow(&parent_path).unwrap();
+
+        std::fs::rename(&parent_path, &displaced_parent).unwrap();
+        std::fs::create_dir(&parent_path).unwrap();
+        let error = ensure_path_matches_fd(&parent_path, &parent, "workspace parent").unwrap_err();
+
+        assert!(format!("{error:#}").contains("was replaced during recovery"));
+    }
+
+    #[test]
+    fn init_claim_rejects_directory_replaced_after_authorization() {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path().join("parent");
+        let workspace = parent.join("workspace");
+        let authorized_moved = parent.join("authorized-moved");
+        let victim = temp.path().join("victim");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::create_dir_all(&victim).unwrap();
+        std::fs::write(workspace.join("workspace.txt"), b"authorized").unwrap();
+        std::fs::write(victim.join("sentinel.txt"), b"untouched").unwrap();
+        let binding = pin_workspace(&workspace);
+
+        std::fs::rename(&workspace, &authorized_moved).unwrap();
+        symlink(&victim, &workspace).unwrap();
+        let error = match binding.claim() {
+            Ok(_) => panic!("replaced workspace must not be claimed"),
+            Err(error) => error,
+        };
+
+        assert!(format!("{error:#}").contains("workspace before claim"));
+        assert_eq!(
+            std::fs::read(authorized_moved.join("workspace.txt")).unwrap(),
+            b"authorized"
+        );
+        assert_eq!(
+            std::fs::read(victim.join("sentinel.txt")).unwrap(),
+            b"untouched"
+        );
+        assert!(!victim.join("workspace.txt").exists());
+    }
+
+    #[test]
+    fn workspace_root_replacement_is_rejected_before_lookup() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        let moved_root = temp.path().join("moved-root");
+        std::fs::create_dir_all(root.join("project")).unwrap();
+        let binding = WorkspaceRootBinding::pin(&root).unwrap();
+
+        std::fs::rename(&root, &moved_root).unwrap();
+        std::fs::create_dir_all(root.join("project")).unwrap();
+        let error =
+            match binding.pin_workspace(&root.join("project"), nix::unistd::geteuid().as_raw()) {
+                Ok(_) => panic!("replacement root must fail closed"),
+                Err(error) => error,
+            };
+
+        assert!(format!("{error:#}").contains("authorization root was replaced"));
+    }
+
+    #[test]
+    fn registered_binding_rejects_ancestor_flip_even_if_link_target_matches() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        let parent = root.join("parent");
+        let moved_parent = root.join("moved-parent");
+        let outside = temp.path().join("outside");
+        let subvolume = temp.path().join("subvolume");
+        let workspace = parent.join("workspace");
+        std::fs::create_dir_all(&parent).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::create_dir_all(&subvolume).unwrap();
+        symlink(&subvolume, &workspace).unwrap();
+        symlink(&subvolume, outside.join("workspace")).unwrap();
+        let root_binding = WorkspaceRootBinding::pin(&root).unwrap();
+        let binding = root_binding
+            .pin_registered_workspace(&workspace, &subvolume, nix::unistd::geteuid().as_raw())
+            .unwrap();
+
+        std::fs::rename(&parent, &moved_parent).unwrap();
+        symlink(&outside, &parent).unwrap();
+        let error = binding.verify().unwrap_err();
+
+        assert!(format!("{error:#}").contains("registered workspace parent"));
+        assert_eq!(
+            std::fs::canonicalize(moved_parent.join("workspace")).unwrap(),
+            subvolume
+        );
+    }
+
+    #[test]
+    fn init_claim_restore_returns_exact_authorized_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path().join("parent");
+        let workspace = parent.join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(workspace.join("workspace.txt"), b"authorized").unwrap();
+        let before = std::fs::metadata(&workspace).unwrap();
+        let binding = pin_workspace(&workspace);
+
+        let claim = binding.claim().unwrap();
+        assert_eq!(
+            std::fs::read(claim.source_path().join("workspace.txt")).unwrap(),
+            b"authorized"
+        );
+        claim.restore().unwrap();
+
+        let after = std::fs::metadata(&workspace).unwrap();
+        assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
+        assert_eq!(
+            std::fs::read(workspace.join("workspace.txt")).unwrap(),
+            b"authorized"
+        );
+    }
+
+    #[tokio::test]
+    async fn init_publish_error_restores_exact_authorized_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path().join("parent");
+        let workspace = parent.join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(workspace.join("workspace.txt"), b"authorized").unwrap();
+        let before = std::fs::metadata(&workspace).unwrap();
+        let binding = pin_workspace(&workspace);
+        let claim = binding.claim().unwrap();
+
+        let missing_subvolume = temp.path().join("missing-subvolume");
+        assert!(claim.publish(&missing_subvolume).await.is_err());
+
+        let after = std::fs::metadata(&workspace).unwrap();
+        assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
+        assert_eq!(
+            std::fs::read(workspace.join("workspace.txt")).unwrap(),
+            b"authorized"
+        );
+    }
+
+    #[tokio::test]
+    async fn init_publish_rejects_replaced_placeholder_without_touching_target() {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path().join("parent");
+        let workspace = parent.join("workspace");
+        let displaced_placeholder = parent.join("displaced-placeholder");
+        let subvolume = temp.path().join("subvolume");
+        let victim = temp.path().join("victim");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::create_dir_all(&subvolume).unwrap();
+        std::fs::create_dir_all(&victim).unwrap();
+        std::fs::write(workspace.join("workspace.txt"), b"authorized").unwrap();
+        std::fs::write(victim.join("sentinel.txt"), b"untouched").unwrap();
+        let binding = pin_workspace(&workspace);
+        let claim = binding.claim().unwrap();
+
+        std::fs::rename(&workspace, &displaced_placeholder).unwrap();
+        symlink(&victim, &workspace).unwrap();
+        let error = claim.publish(&subvolume).await.unwrap_err();
+
+        assert!(format!("{error:#}").contains("placeholder"));
+        assert_eq!(
+            std::fs::read(victim.join("sentinel.txt")).unwrap(),
+            b"untouched"
+        );
+        assert!(!victim.join("workspace.txt").exists());
+        let retained_source = std::fs::read_dir(&parent)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .find(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".ws-ckpt-init-claim")
+            })
+            .expect("authorized source must be retained after failed publication");
+        assert_eq!(
+            std::fs::read(retained_source.path().join("workspace.txt")).unwrap(),
+            b"authorized"
+        );
+    }
+
+    #[tokio::test]
+    async fn init_publish_atomically_installs_managed_symlink() {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path().join("parent");
+        let workspace = parent.join("workspace");
+        let subvolume = temp.path().join("subvolume");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::create_dir_all(&subvolume).unwrap();
+        std::fs::write(workspace.join("workspace.txt"), b"authorized").unwrap();
+        std::fs::write(subvolume.join("workspace.txt"), b"imported").unwrap();
+        let binding = pin_workspace(&workspace);
+
+        binding.claim().unwrap().publish(&subvolume).await.unwrap();
+
+        assert!(std::fs::symlink_metadata(&workspace)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(std::fs::canonicalize(&workspace).unwrap(), subvolume);
+        assert_eq!(
+            std::fs::read(workspace.join("workspace.txt")).unwrap(),
+            b"imported"
+        );
+        assert!(!std::fs::read_dir(&parent).unwrap().any(|entry| {
+            entry
+                .map(|entry| {
+                    entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(".ws-ckpt-init")
+                })
+                .unwrap_or(false)
+        }));
+    }
+
+    #[tokio::test]
+    async fn recovery_publishes_directory_with_source_metadata() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("subvolume");
+        let parent = temp.path().join("parent");
+        let workspace = parent.join("workspace");
+        tokio::fs::create_dir_all(&source).await.unwrap();
+        tokio::fs::create_dir_all(&parent).await.unwrap();
+        tokio::fs::write(source.join("workspace.txt"), b"workspace")
+            .await
+            .unwrap();
+        tokio::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o750))
+            .await
+            .unwrap();
+        symlink(&source, &workspace).unwrap();
+
+        restore_workspace_from_subvolume(&source, &workspace)
+            .await
+            .unwrap();
+
+        let metadata = tokio::fs::symlink_metadata(&workspace).await.unwrap();
+        assert!(metadata.is_dir());
+        assert!(!metadata.file_type().is_symlink());
+        assert_eq!(metadata.permissions().mode() & 0o7777, 0o750);
+        assert_eq!(
+            tokio::fs::read(workspace.join("workspace.txt"))
+                .await
+                .unwrap(),
+            b"workspace"
+        );
+        assert!(source.join("workspace.txt").exists());
+    }
 
     // NOTE: All btrfs_common tests require:
     //   1. Root privileges (CAP_SYS_ADMIN)
@@ -1156,6 +2596,9 @@ mod tests {
         let snap = tmp.path().join("snap");
 
         tokio::fs::create_dir(&bak).await.unwrap();
+        tokio::fs::set_permissions(&bak, std::fs::Permissions::from_mode(0o750))
+            .await
+            .unwrap();
         tokio::fs::write(bak.join("user.txt"), b"keep")
             .await
             .unwrap();
@@ -1167,6 +2610,16 @@ mod tests {
 
         assert!(orig.is_dir(), "original restored as real dir");
         assert!(orig.join("user.txt").exists(), "user data back at original");
+        assert_eq!(
+            tokio::fs::metadata(&orig)
+                .await
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o7777,
+            0o750,
+            "rollback must preserve the original directory mode"
+        );
         assert!(!bak.exists(), "backup consumed");
     }
 

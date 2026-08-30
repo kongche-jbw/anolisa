@@ -10,7 +10,7 @@ use ws_ckpt_common::{
 };
 
 /// Kernel-derived connection identity available to guarded requests.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct DispatchContext {
     peer_uid: Option<u32>,
 }
@@ -25,8 +25,16 @@ impl DispatchContext {
     }
 }
 
+#[cfg(test)]
 pub async fn dispatch(state: &Arc<DaemonState>, request: Request) -> Response {
-    dispatch_with_context(state, request, DispatchContext::default()).await
+    dispatch_authorized(
+        state,
+        request,
+        DispatchContext { peer_uid: None },
+        None,
+        None,
+    )
+    .await
 }
 
 pub(crate) async fn dispatch_with_context(
@@ -34,10 +42,34 @@ pub(crate) async fn dispatch_with_context(
     request: Request,
     context: DispatchContext,
 ) -> Response {
+    let authorized =
+        match crate::authorization::authorize_request(state, request, context.peer_uid()).await {
+            Ok(authorized) => authorized,
+            Err(response) => return *response,
+        };
+    dispatch_authorized(
+        state,
+        authorized.request,
+        context,
+        authorized.init_binding,
+        authorized.recover_binding,
+    )
+    .await
+}
+
+async fn dispatch_authorized(
+    state: &Arc<DaemonState>,
+    request: Request,
+    context: DispatchContext,
+    mut init_binding: Option<crate::backends::btrfs_common::WorkspacePathBinding>,
+    mut recover_binding: Option<crate::backends::btrfs_common::RegisteredWorkspaceBinding>,
+) -> Response {
     let result = match request {
         Request::Init { workspace } => match state.ensure_bootstrapped().await {
             Err(e) => Err(e),
-            Ok(()) => crate::workspace_mgr::init(state, &workspace).await,
+            Ok(()) => {
+                crate::workspace_mgr::init_authorized(state, &workspace, init_binding.take()).await
+            }
         },
         Request::Checkpoint {
             workspace,
@@ -47,7 +79,7 @@ pub(crate) async fn dispatch_with_context(
             pin,
         } => match state.ensure_bootstrapped().await {
             Err(e) => Err(e),
-            Ok(()) => match auto_init_workspace(state, &workspace).await {
+            Ok(()) => match auto_init_workspace(state, &workspace, init_binding.take()).await {
                 Ok(Some(err_resp)) => return err_resp,
                 Err(e) => Err(e),
                 Ok(None) => {
@@ -92,48 +124,11 @@ pub(crate) async fn dispatch_with_context(
                 Some(ws) => {
                     crate::workspace_mgr::delete_snapshot(state, &ws, &snapshot, force).await
                 }
-                None => {
-                    // Global lookup: find snapshot across all workspaces
-                    match state.resolve_snapshot_globally(&snapshot).await {
-                        Some((ws_path, resolved_id)) => {
-                            crate::workspace_mgr::delete_snapshot(
-                                state,
-                                &ws_path,
-                                &resolved_id,
-                                force,
-                            )
-                            .await
-                        }
-                        None => {
-                            // Check if it's ambiguous or truly not found
-                            let mut match_count = 0usize;
-                            for entry in state.all_workspaces() {
-                                let ws = entry.read().await;
-                                match ws.index.resolve_by_prefix(&snapshot) {
-                                    Ok(_) => match_count += 1,
-                                    Err(ws_ckpt_common::ResolveError::Ambiguous(_)) => {
-                                        match_count += 2
-                                    }
-                                    Err(ws_ckpt_common::ResolveError::NotFound) => {}
-                                }
-                            }
-                            if match_count > 1 {
-                                Ok(Response::Error {
-                                    code: ErrorCode::SnapshotNotFound,
-                                    message: format!(
-                                        "snapshot '{}' matches in multiple workspaces, please specify --workspace/-w",
-                                        snapshot
-                                    ),
-                                })
-                            } else {
-                                Ok(Response::Error {
-                                    code: ErrorCode::SnapshotNotFound,
-                                    message: format!("snapshot not found: {}", snapshot),
-                                })
-                            }
-                        }
-                    }
-                }
+                None => Ok(Response::Error {
+                    code: ErrorCode::InvalidPath,
+                    message: "global delete reached dispatch without an authorized workspace"
+                        .to_string(),
+                }),
             },
         },
         Request::List { workspace, .. } => match workspace {
@@ -180,7 +175,14 @@ pub(crate) async fn dispatch_with_context(
         ),
         Request::Recover { workspace } => match state.ensure_bootstrapped().await {
             Err(e) => Err(e),
-            Ok(()) => crate::workspace_mgr::recover_workspace(state, &workspace).await,
+            Ok(()) => {
+                crate::workspace_mgr::recover_workspace_authorized(
+                    state,
+                    &workspace,
+                    recover_binding.take(),
+                )
+                .await
+            }
         },
         Request::HealthAdvisory => Ok(handle_health_advisory(state).await),
         Request::WorkspaceIdentityV2 { registration_path } => {
@@ -241,6 +243,7 @@ pub(crate) async fn dispatch_with_context(
 async fn auto_init_workspace(
     state: &Arc<DaemonState>,
     workspace: &str,
+    init_binding: Option<crate::backends::btrfs_common::WorkspacePathBinding>,
 ) -> anyhow::Result<Option<Response>> {
     if state.resolve_workspace(workspace).await.is_some() {
         return Ok(None); // already initialized
@@ -249,7 +252,7 @@ async fn auto_init_workspace(
         "workspace not initialized, auto-initializing: {}",
         workspace
     );
-    let resp = crate::workspace_mgr::init(state, workspace).await?;
+    let resp = crate::workspace_mgr::init_authorized(state, workspace, init_binding).await?;
     match resp {
         Response::InitOk { ws_id } => {
             tracing::info!("auto-init completed: ws_id={}", ws_id);
@@ -725,7 +728,9 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use ws_ckpt_common::backend::StorageBackend;
-    use ws_ckpt_common::{CleanupRetention, DaemonConfig, ErrorCode, Request, Response};
+    use ws_ckpt_common::{
+        CleanupRetention, DaemonConfig, ErrorCode, Request, Response, SnapshotIndex, SnapshotMeta,
+    };
 
     fn test_backend() -> Arc<dyn StorageBackend> {
         // Use BtrfsBase to avoid triggering lazy bootstrap in dispatch tests
@@ -739,6 +744,7 @@ mod tests {
         DaemonConfig {
             mount_path: PathBuf::from("/tmp/test-mount"),
             socket_path: PathBuf::from("/tmp/test.sock"),
+            workspace_root: None,
             log_level: "info".to_string(),
             auto_cleanup: false,
             auto_cleanup_keep: CleanupRetention::Count(20),
@@ -853,6 +859,56 @@ mod tests {
             }
             _ => panic!("expected WorkspaceNotFound from Delete"),
         }
+    }
+
+    #[tokio::test]
+    async fn dispatch_never_resolves_unauthorized_global_delete() {
+        let state = Arc::new(DaemonState::new(
+            test_config(),
+            test_backend(),
+            PathBuf::from("/tmp/test-state"),
+        ));
+        state.mark_bootstrapped();
+        let snapshot_id = "abcdef1111111111111111111111111111111111";
+        let mut index = SnapshotIndex::new(PathBuf::from("/workspace"));
+        index.snapshots.insert(
+            snapshot_id.to_string(),
+            SnapshotMeta {
+                message: None,
+                metadata: None,
+                pinned: false,
+                created_at: chrono::Utc::now(),
+                missing: false,
+                parent_id: None,
+                child_ids: Vec::new(),
+            },
+        );
+        state.register_workspace("ws-one".to_string(), PathBuf::from("/workspace"), index);
+
+        let response = dispatch(
+            &state,
+            Request::Delete {
+                workspace: None,
+                snapshot: "abcdef".to_string(),
+                force: true,
+            },
+        )
+        .await;
+
+        match response {
+            Response::Error { code, message } => {
+                assert_eq!(code, ErrorCode::InvalidPath);
+                assert!(message.contains("without an authorized workspace"));
+            }
+            other => panic!("unresolved global delete must fail closed, got {other:?}"),
+        }
+        let workspace = state.get_by_wsid("ws-one").unwrap();
+        assert!(workspace
+            .read()
+            .await
+            .index
+            .snapshots
+            .contains_key(snapshot_id));
     }
 
     #[tokio::test]
@@ -1078,7 +1134,7 @@ mod tests {
         let resp = dispatch(&state, req).await;
         match resp {
             Response::ConfigOk { config } => {
-                assert_eq!(config.mount_path, "/tmp/test-mount");
+                assert_eq!(config.mount_path, "/tmp/test-mount/ws-ckpt-data");
                 assert_eq!(config.auto_cleanup_keep, CleanupRetention::Count(20));
                 assert_eq!(config.auto_cleanup_interval_secs, 86_400);
             }

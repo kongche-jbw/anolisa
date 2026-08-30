@@ -615,6 +615,7 @@ mod tests {
         DaemonConfig {
             mount_path: PathBuf::from("/tmp/test-mount"),
             socket_path: PathBuf::from("/tmp/test.sock"),
+            workspace_root: None,
             log_level: "info".to_string(),
             auto_cleanup: false,
             auto_cleanup_keep: CleanupRetention::Count(20),

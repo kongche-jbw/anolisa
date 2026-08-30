@@ -101,6 +101,14 @@ async fn adopt_existing_subvol(
 // ── init ──
 
 pub async fn init(state: &Arc<DaemonState>, workspace: &str) -> anyhow::Result<Response> {
+    init_authorized(state, workspace, None).await
+}
+
+pub(crate) async fn init_authorized(
+    state: &Arc<DaemonState>,
+    workspace: &str,
+    init_binding: Option<crate::backends::btrfs_common::WorkspacePathBinding>,
+) -> anyhow::Result<Response> {
     if workspace.trim().is_empty() {
         return Ok(error_resp(
             ErrorCode::InvalidPath,
@@ -259,7 +267,8 @@ pub async fn init(state: &Arc<DaemonState>, workspace: &str) -> anyhow::Result<R
             ),
         ));
     }
-    if abs_path.starts_with(&state.mount_path) {
+    let storage_root = state.canonical_storage_root().await?;
+    if abs_path.starts_with(&storage_root) {
         // The user-facing path canonicalises into our mount root. Two
         // sub-cases need different handling:
         //   (a) `abs_path == mount_path/<ws_id>` for some `ws_id` we
@@ -271,7 +280,7 @@ pub async fn init(state: &Arc<DaemonState>, workspace: &str) -> anyhow::Result<R
         //       nested directory inside a subvol, or an unknown name at
         //       the root). This is real self-referential nesting and
         //       must stay an error.
-        if let Ok(rest) = abs_path.strip_prefix(&state.mount_path) {
+        if let Ok(rest) = abs_path.strip_prefix(&storage_root) {
             let mut comps = rest.components();
             let single = match (comps.next(), comps.next()) {
                 (Some(first), None) => Some(first.as_os_str().to_string_lossy().to_string()),
@@ -308,7 +317,7 @@ pub async fn init(state: &Arc<DaemonState>, workspace: &str) -> anyhow::Result<R
             ErrorCode::InvalidPath,
             format!(
                 "path is inside mount_path ({}): {}",
-                state.mount_path.display(),
+                storage_root.display(),
                 abs_path.display()
             ),
         ));
@@ -350,11 +359,10 @@ pub async fn init(state: &Arc<DaemonState>, workspace: &str) -> anyhow::Result<R
     }
 
     // 3. Generate ws-id
-    let mount_path = &state.mount_path;
     let base_id = generate_ws_id_base(&abs_path.to_string_lossy());
     let mut ws_id = base_id.clone();
     let mut suffix = 2u32;
-    while mount_path.join(&ws_id).exists() {
+    while storage_root.join(&ws_id).exists() {
         ws_id = format!("{}-{}", base_id, suffix);
         suffix += 1;
     }
@@ -366,10 +374,42 @@ pub async fn init(state: &Arc<DaemonState>, workspace: &str) -> anyhow::Result<R
 
     let abs_path_str = abs_path.to_string_lossy().to_string();
 
-    // Steps 4-11 via backend, with cleanup handled internally
-    if let Err(e) = state.backend.init_workspace(&abs_path_str, &ws_id).await {
+    let Some(binding) = init_binding else {
+        return Ok(error_resp(
+            ErrorCode::InvalidPath,
+            "workspace initialization requires an fd-bound authorization claim",
+        ));
+    };
+    if binding.canonical_path() != abs_path {
+        return Ok(error_resp(
+            ErrorCode::InvalidPath,
+            "workspace path changed after authorization; refusing initialization",
+        ));
+    }
+    let claim = binding.claim().map_err(|error| {
+        anyhow::anyhow!("failed to atomically claim authorized workspace: {error:#}")
+    })?;
+    let source_path = claim.source_path();
+    let source_metadata = claim.metadata();
+
+    // Import only from the authorized directory fd. No backend reads the
+    // user-controlled workspace name after the atomic claim.
+    if let Err(e) = state
+        .backend
+        .init_workspace_from_source(&abs_path_str, &source_path, source_metadata, &ws_id)
+        .await
+    {
+        if let Err(restore_error) = claim.restore() {
+            error!("failed to restore claimed workspace after init error: {restore_error:#}");
+        }
         error!("init failed: {:#}", e);
         return Err(e);
+    }
+    let subvolume = state.backend.data_root().join(&ws_id);
+    if let Err(error) = claim.publish(&subvolume).await {
+        let _ = crate::backends::btrfs_common::delete_subvolume(&subvolume).await;
+        let _ = tokio::fs::remove_dir_all(state.backend.snapshots_root().join(&ws_id)).await;
+        return Err(error.context("failed to publish fd-bound initialized workspace"));
     }
 
     // 12. Create and save index
@@ -562,6 +602,14 @@ pub async fn recover_workspace(
     state: &Arc<DaemonState>,
     workspace: &str,
 ) -> anyhow::Result<Response> {
+    recover_workspace_authorized(state, workspace, None).await
+}
+
+pub(crate) async fn recover_workspace_authorized(
+    state: &Arc<DaemonState>,
+    workspace: &str,
+    recover_binding: Option<crate::backends::btrfs_common::RegisteredWorkspaceBinding>,
+) -> anyhow::Result<Response> {
     // 1. resolve workspace (by ID, path, or relative)
     let ws_lock = match state.resolve_workspace(workspace).await {
         Some(ws) => ws,
@@ -588,10 +636,18 @@ pub async fn recover_workspace(
     let _wsid_guard = state.lock_wsid(&ws_id).await;
 
     // 3. call backend recover
-    state
-        .backend
-        .recover_workspace(&ws_id, &original_path)
-        .await?;
+    if let Some(binding) = recover_binding {
+        binding.verify()?;
+        state
+            .backend
+            .recover_workspace_to_destination(&ws_id, binding.parent(), binding.original_name())
+            .await?;
+    } else {
+        state
+            .backend
+            .recover_workspace(&ws_id, &original_path)
+            .await?;
+    }
 
     // 4. unregister workspace from state
     state.unregister_workspace(&ws_id).await;
@@ -630,6 +686,7 @@ mod tests {
         DaemonConfig {
             mount_path: PathBuf::from("/tmp/test-mount"),
             socket_path: PathBuf::from("/tmp/test.sock"),
+            workspace_root: None,
             log_level: "info".to_string(),
             auto_cleanup: false,
             auto_cleanup_keep: CleanupRetention::Count(20),
@@ -941,6 +998,7 @@ mod tests {
         let config = DaemonConfig {
             mount_path: tokio::fs::canonicalize(mount_dir.path()).await.unwrap(),
             socket_path: PathBuf::from("/tmp/test.sock"),
+            workspace_root: None,
             log_level: "info".to_string(),
             auto_cleanup: false,
             auto_cleanup_keep: CleanupRetention::Count(20),
@@ -952,7 +1010,12 @@ mod tests {
             min_free_bytes: 512 * 1024 * 1024,
             min_free_percent: 1.0,
         };
-        let state = Arc::new(DaemonState::new(config, test_backend(), test_state_dir()));
+        let backend: Arc<dyn StorageBackend> =
+            Arc::new(crate::backends::btrfs_loop::BtrfsLoopBackend::new(
+                mount_dir.path().to_path_buf(),
+                mount_dir.path().join("test.img"),
+            ));
+        let state = Arc::new(DaemonState::new(config, backend, test_state_dir()));
         let resp = init(&state, &inside_path.to_string_lossy()).await.unwrap();
         match resp {
             Response::Error { code, message } => {
@@ -976,7 +1039,12 @@ mod tests {
 
         let mut cfg = test_config();
         cfg.mount_path = mount_path.clone();
-        let state = Arc::new(DaemonState::new(cfg, test_backend(), test_state_dir()));
+        let backend: Arc<dyn StorageBackend> =
+            Arc::new(crate::backends::btrfs_loop::BtrfsLoopBackend::new(
+                mount_path.clone(),
+                mount_path.join("test.img"),
+            ));
+        let state = Arc::new(DaemonState::new(cfg, backend, test_state_dir()));
         state.register_workspace(
             ws_id.to_string(),
             PathBuf::from("/some/user/facing/path"),
@@ -987,6 +1055,35 @@ mod tests {
         match resp {
             Response::InitOk { ws_id: returned } => assert_eq!(returned, ws_id),
             other => panic!("expected idempotent InitOk, got {:?}", other),
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn init_guard_uses_canonical_backend_root_not_config_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let real_root = temp.path().join("selected-btrfs/ws-ckpt-data");
+        let root_alias = temp.path().join("configured-alias");
+        let inside_path = real_root.join("nested-workspace");
+        tokio::fs::create_dir_all(&inside_path).await.unwrap();
+        tokio::fs::symlink(&real_root, &root_alias).await.unwrap();
+        let mut config = test_config();
+        config.mount_path = temp.path().join("unselected-config-root");
+        let backend: Arc<dyn StorageBackend> =
+            Arc::new(crate::backends::btrfs_loop::BtrfsLoopBackend::new(
+                root_alias,
+                temp.path().join("test.img"),
+            ));
+        let state = Arc::new(DaemonState::new(config, backend, test_state_dir()));
+
+        let response = init(&state, &inside_path.to_string_lossy()).await.unwrap();
+
+        match response {
+            Response::Error { code, message } => {
+                assert_eq!(code, ErrorCode::InvalidPath);
+                assert!(message.contains(&real_root.to_string_lossy().to_string()));
+            }
+            other => panic!("expected backend-root self-nesting rejection, got {other:?}"),
         }
     }
 

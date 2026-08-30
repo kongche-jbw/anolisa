@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use anyhow::Context;
 use chrono::Utc;
 use dashmap::DashMap;
 use tokio::sync::{Mutex, Notify, OnceCell, RwLock, Semaphore};
@@ -17,6 +18,7 @@ use ws_ckpt_common::{
     ResolveError, SnapshotIndex, WorkspaceInfo, WorkspacePolicy, INDEXES_DIR, INDEX_FILE,
 };
 
+use crate::backends::btrfs_common::WorkspaceRootBinding;
 use crate::fs_watcher::WorkspaceWatcher;
 use crate::index_store;
 
@@ -55,6 +57,7 @@ pub struct DaemonState {
     /// from `WorkspaceState::policy_io_mu` (which lives inside an Arc that
     /// recover would unregister). Held across `await`.
     wsid_locks: DashMap<String, Arc<Mutex<()>>>,
+    workspace_root_binding: Result<Arc<WorkspaceRootBinding>, String>,
 }
 
 pub struct WorkspaceState {
@@ -78,9 +81,18 @@ pub struct WorkspaceState {
 
 impl DaemonState {
     pub fn new(config: DaemonConfig, backend: Arc<dyn StorageBackend>, state_dir: PathBuf) -> Self {
-        let mount_path = config.mount_path.clone();
+        let backend_root = backend.data_root().to_path_buf();
+        let mount_path = std::fs::canonicalize(&backend_root).unwrap_or(backend_root);
         let socket_path = config.socket_path.clone();
         let selection_method = "auto-detect".to_string();
+        let workspace_root_binding = WorkspaceRootBinding::pin(
+            config
+                .workspace_root
+                .as_deref()
+                .unwrap_or_else(|| Path::new("/")),
+        )
+        .map(Arc::new)
+        .map_err(|error| format!("{error:#}"));
         Self {
             workspaces: DashMap::new(),
             path_to_wsid: DashMap::new(),
@@ -95,6 +107,14 @@ impl DaemonState {
             state_dir,
             selection_method,
             wsid_locks: DashMap::new(),
+            workspace_root_binding,
+        }
+    }
+
+    pub(crate) fn workspace_root_binding(&self) -> anyhow::Result<&Arc<WorkspaceRootBinding>> {
+        match &self.workspace_root_binding {
+            Ok(binding) => Ok(binding),
+            Err(error) => anyhow::bail!("workspace_root could not be pinned at startup: {error}"),
         }
     }
 
@@ -135,6 +155,19 @@ impl DaemonState {
             }
         };
         guard.clone()
+    }
+
+    /// Canonical runtime storage root selected by the active backend.
+    pub async fn canonical_storage_root(&self) -> anyhow::Result<PathBuf> {
+        tokio::fs::canonicalize(self.backend.data_root())
+            .await
+            .map_err(anyhow::Error::from)
+            .with_context(|| {
+                format!(
+                    "failed to resolve active backend data root {}",
+                    self.backend.data_root().display()
+                )
+            })
     }
 
     /// Rebuild runtime state from persisted file
@@ -776,6 +809,7 @@ mod tests {
         DaemonConfig {
             mount_path: PathBuf::from("/tmp/test-mount"),
             socket_path: PathBuf::from("/tmp/test.sock"),
+            workspace_root: None,
             log_level: "info".to_string(),
             auto_cleanup: false,
             auto_cleanup_keep: CleanupRetention::Count(20),

@@ -1,3 +1,4 @@
+mod authorization;
 pub mod backend_detect;
 pub mod backends;
 pub mod dispatcher;
@@ -27,12 +28,31 @@ use tracing_subscriber::EnvFilter;
 
 use ws_ckpt_common::{DaemonConfig, DEFAULT_STATE_DIR, INDEXES_DIR, LOCKFILE_NAME};
 
-pub async fn run_daemon(config: DaemonConfig) -> anyhow::Result<()> {
+pub async fn run_daemon(mut config: DaemonConfig) -> anyhow::Result<()> {
     // 0. Require root privileges
     if !nix::unistd::geteuid().is_root() {
         anyhow::bail!(
             "ws-ckpt daemon must be run as root (mount, losetup, btrfs commands require root privileges)"
         );
+    }
+
+    if let Some(root) = config.workspace_root.as_ref() {
+        if !root.is_absolute() {
+            anyhow::bail!("workspace root must be absolute: {}", root.display());
+        }
+        let canonical = std::fs::canonicalize(root)
+            .with_context(|| format!("Failed to resolve workspace root: {}", root.display()))?;
+        if canonical != *root {
+            anyhow::bail!(
+                "workspace root must not contain symlinks or traversal components: {} resolves to {}",
+                root.display(),
+                canonical.display()
+            );
+        }
+        if !std::fs::metadata(&canonical)?.is_dir() {
+            anyhow::bail!("workspace root is not a directory: {}", canonical.display());
+        }
+        config.workspace_root = Some(canonical);
     }
 
     // 1. Initialize tracing

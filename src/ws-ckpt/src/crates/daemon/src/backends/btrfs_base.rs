@@ -13,7 +13,7 @@ use ws_ckpt_common::{
 };
 
 use super::{btrfs_common, btrfs_identity, rollback_recovery};
-use btrfs_common::{backup_path_for, recover_orphan_backup, resolve_symlink_path};
+use btrfs_common::backup_path_for;
 
 /// Deployment scenario for BtrfsBase backend.
 #[derive(Debug, Clone, Copy)]
@@ -35,7 +35,11 @@ pub struct BtrfsBaseBackend {
 
 impl BtrfsBaseBackend {
     pub fn new(btrfs_mount: PathBuf, scenario: BtrfsBaseScenario) -> Self {
-        let data_root = btrfs_mount.join("ws-ckpt-data");
+        Self::from_data_root(btrfs_mount.join("ws-ckpt-data"), scenario)
+    }
+
+    /// Build a backend whose data root is exactly the configured path.
+    pub fn from_data_root(data_root: PathBuf, scenario: BtrfsBaseScenario) -> Self {
         let snapshots_dir = data_root.join(SNAPSHOTS_DIR);
         Self {
             data_root,
@@ -50,139 +54,66 @@ impl BtrfsBaseBackend {
             .context("failed to recover interrupted BtrfsBase rollback")
     }
 
-    /// Internal init implementation; caller wraps with cleanup-on-failure. Sets `*backup_owned` after step 3.
-    async fn do_init_storage(
+    async fn import_claimed_storage(
         &self,
-        original_path: &str,
+        source_path: &Path,
+        metadata: WorkspaceDirectoryMetadata,
         ws_id: &str,
-        subvol_path: &Path,
-        snap_dir: &Path,
-        backup_owned: &mut bool,
     ) -> anyhow::Result<()> {
-        // 0. Ensure data_root exists
-        tokio::fs::create_dir_all(&self.data_root)
-            .await
-            .context("failed to create data_root directory")?;
-
-        // 1. Create subvolume
-        btrfs_common::create_subvolume(subvol_path).await?;
-
-        // 2. Create snapshots dir for this workspace
-        tokio::fs::create_dir_all(snap_dir)
-            .await
-            .context("failed to create snapshots directory")?;
-
-        // 3. Record permissions and move original aside as backup (#673).
-        //    Must happen BEFORE data migration so cleanup always restores full data.
-        let orig_meta = tokio::fs::metadata(original_path)
-            .await
-            .context("failed to read original directory metadata")?;
-        let orig_uid = orig_meta.uid();
-        let orig_gid = orig_meta.gid();
-
-        let backup_path = backup_path_for(original_path);
-        // Recover orphan `.pre-init-bak` from an interrupted prior init before
-        // proceeding with Step 3 (rename). If recovery is impossible (ambiguous
-        // state — subvol already exists), recover_orphan_backup returns an
-        // actionable error pointing the user at `ws-ckpt recover`. See
-        // btrfs_common::recover_orphan_backup for the full rationale.
-        recover_orphan_backup(original_path, subvol_path).await?;
-
-        tokio::fs::rename(original_path, &backup_path)
-            .await
-            .context("failed to rename original directory to backup")?;
-        *backup_owned = true;
-
-        // 4. Data migration from backup into subvolume (scenario-dependent)
-        match self.scenario {
-            BtrfsBaseScenario::InPlace => {
-                // Same btrfs: cp --reflink=always is O(1) COW per file and keeps
-                // backup intact for crash recovery (unlike rename which is destructive).
-                let src = format!("{}/.", backup_path); // trailing /. = contents only
-                let status = Command::new("cp")
-                    .args([
-                        "-a",
-                        "--reflink=always",
-                        &src,
-                        &subvol_path.to_string_lossy(),
-                    ])
-                    .status()
-                    .await
-                    .context("failed to run cp --reflink")?;
-                if !status.success() {
-                    anyhow::bail!("cp --reflink failed with exit code: {:?}", status.code());
+        let subvol_path = self.data_root.join(ws_id);
+        let snap_dir = self.snapshots_dir.join(ws_id);
+        tokio::fs::create_dir_all(&self.data_root).await?;
+        btrfs_common::create_subvolume(&subvol_path).await?;
+        if let Err(error) = async {
+            tokio::fs::create_dir_all(&snap_dir).await?;
+            let status = match self.scenario {
+                BtrfsBaseScenario::InPlace => {
+                    Command::new("cp")
+                        .args(["-a", "--reflink=always"])
+                        .arg(source_path.join("."))
+                        .arg(&subvol_path)
+                        .status()
+                        .await?
                 }
-            }
-            BtrfsBaseScenario::CrossDisk => {
-                let src = format!("{}/", backup_path);
-                let status = Command::new("rsync")
-                    .args(["-a", &src, &subvol_path.to_string_lossy()])
-                    .status()
-                    .await
-                    .context("failed to run rsync")?;
-                if !status.success() {
-                    anyhow::bail!("rsync failed with exit code: {:?}", status.code());
+                BtrfsBaseScenario::CrossDisk => {
+                    Command::new("rsync")
+                        .arg("-a")
+                        .arg(format!("{}/", source_path.display()))
+                        .arg(&subvol_path)
+                        .status()
+                        .await?
                 }
+            };
+            if !status.success() {
+                bail!(
+                    "workspace import failed with exit code: {:?}",
+                    status.code()
+                );
             }
+            restore_root_metadata(&subvol_path, metadata.uid, metadata.gid, metadata.mode).await
         }
-
-        // 4a. Flush dirty data to disk so subsequent snapshots are instant
-        let sync_status = Command::new("btrfs")
-            .args(["filesystem", "sync", &subvol_path.to_string_lossy()])
-            .status()
-            .await
-            .context("failed to run btrfs filesystem sync")?;
-        if !sync_status.success() {
-            warn!("btrfs filesystem sync returned non-zero, falling back to sync()");
-            Command::new("sync").status().await.ok();
+        .await
+        {
+            let _ = tokio::fs::remove_dir_all(&snap_dir).await;
+            let _ = btrfs_common::delete_subvolume(&subvol_path).await;
+            return Err(error);
         }
-
-        // 5. Create symlink: user path -> btrfs subvolume
-        if let Some(parent) = Path::new(original_path).parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .context("failed to create parent directory for symlink")?;
-        }
-        tokio::fs::symlink(subvol_path, original_path)
-            .await
-            .context("failed to create symlink")?;
-
-        // 5a. Restore ownership on the subvolume root to match original directory
-        chown(
-            subvol_path,
-            Some(Uid::from_raw(orig_uid)),
-            Some(Gid::from_raw(orig_gid)),
-        )
-        .context("failed to restore subvolume ownership")?;
-
-        // 6. Verify symlink
-        let link_target = tokio::fs::read_link(original_path)
-            .await
-            .context("symlink verification failed: cannot read link")?;
-        if link_target != subvol_path {
-            anyhow::bail!(
-                "symlink verification failed: expected {:?}, got {:?}",
-                subvol_path,
-                link_target
-            );
-        }
-
-        // 7. Drop backup. A leftover .pre-init-bak blocks the next init.
-        if let Err(e) = tokio::fs::remove_dir_all(&backup_path).await {
-            error!(
-                "init ok but backup remove failed {:?}: {}; next init will fail until removed",
-                backup_path, e
-            );
-        }
-
-        info!(
-            "BtrfsBaseBackend: storage init complete for ws_id={}, subvol={}, scenario={:?}",
-            ws_id,
-            subvol_path.display(),
-            self.scenario,
-        );
         Ok(())
     }
+}
+
+async fn restore_root_metadata(path: &Path, uid: u32, gid: u32, mode: u32) -> anyhow::Result<()> {
+    let current = tokio::fs::metadata(path)
+        .await
+        .with_context(|| format!("failed to inspect replacement root {}", path.display()))?;
+    if current.uid() != uid || current.gid() != gid {
+        chown(path, Some(Uid::from_raw(uid)), Some(Gid::from_raw(gid)))
+            .with_context(|| format!("failed to restore ownership on {}", path.display()))?;
+    }
+    tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+        .await
+        .with_context(|| format!("failed to restore permissions on {}", path.display()))?;
+    Ok(())
 }
 
 #[async_trait]
@@ -203,43 +134,18 @@ impl StorageBackend for BtrfsBaseBackend {
         btrfs_identity::live_generation(&self.data_root, ws_id)
     }
 
-    async fn init_workspace(
+    async fn init_workspace_from_source(
         &self,
         original_path: &str,
+        source_path: &Path,
+        metadata: WorkspaceDirectoryMetadata,
         ws_id: &str,
     ) -> anyhow::Result<WorkspaceInfo> {
-        // Resolve symlink to real path to avoid copying the symlink itself
-        let resolved = resolve_symlink_path(original_path).await?;
-        let resolved_str = resolved.to_string_lossy().to_string();
-
-        let subvol_path = self.data_root.join(ws_id);
-        let snap_dir = self.snapshots_dir.join(ws_id);
-
-        let mut backup_owned = false;
-        if let Err(e) = self
-            .do_init_storage(
-                &resolved_str,
-                ws_id,
-                &subvol_path,
-                &snap_dir,
-                &mut backup_owned,
-            )
-            .await
-        {
-            error!("init_workspace storage failed, cleaning up: {:#}", e);
-            btrfs_common::cleanup_init_storage(
-                &resolved_str,
-                &subvol_path,
-                &snap_dir,
-                backup_owned,
-            )
-            .await;
-            return Err(e);
-        }
-
+        self.import_claimed_storage(source_path, metadata, ws_id)
+            .await?;
         Ok(WorkspaceInfo {
             ws_id: ws_id.to_string(),
-            path: resolved_str,
+            path: original_path.to_string(),
             snapshot_count: 0,
         })
     }
@@ -297,64 +203,10 @@ impl StorageBackend for BtrfsBaseBackend {
         let subvol_path = self.data_root.join(ws_id);
         let snap_base = self.snapshots_dir.join(ws_id);
 
-        // 1. Remove symlink; refuse if a non-symlink directory occupies the path
-        match tokio::fs::symlink_metadata(original_path).await {
-            Ok(meta) if meta.file_type().is_symlink() => {
-                tokio::fs::remove_file(original_path)
-                    .await
-                    .context("failed to remove symlink")?;
-            }
-            Ok(_) => {
-                bail!(
-                    "cannot recover: {} is a regular directory, not a workspace symlink; \
-                     move or rename it first to avoid data loss",
-                    original_path
-                );
-            }
-            Err(_) => {} // path gone, rsync will recreate
-        }
-
-        // 2. Rsync subvolume contents back to original path (restore as normal directory)
-        let src = format!("{}/", subvol_path.to_string_lossy()); // trailing / is important
-
-        // Record subvolume root permissions before rsync
-        let subvol_meta = tokio::fs::metadata(&subvol_path)
-            .await
-            .context("failed to read subvolume metadata")?;
-        let sv_uid = subvol_meta.uid();
-        let sv_gid = subvol_meta.gid();
-        let sv_mode = subvol_meta.mode();
-
-        let rsync_status = Command::new("rsync")
-            .args(["-a", "--delete", &src, original_path])
-            .status()
-            .await
-            .context("failed to run rsync")?;
-        if !rsync_status.success() {
-            bail!(
-                "rsync failed restoring {} -> {}, exit: {:?}; \
-                 workspace and snapshots preserved for retry",
-                src,
-                original_path,
-                rsync_status.code()
-            );
-        } else {
-            // Restore directory ownership and permissions to match original
-            if let Err(e) = chown(
-                Path::new(original_path),
-                Some(Uid::from_raw(sv_uid)),
-                Some(Gid::from_raw(sv_gid)),
-            ) {
-                warn!("failed to restore ownership on {}: {}", original_path, e);
-            }
-            if let Err(e) =
-                tokio::fs::set_permissions(original_path, std::fs::Permissions::from_mode(sv_mode))
-                    .await
-            {
-                warn!("failed to restore permissions on {}: {}", original_path, e);
-            }
-            info!("restored workspace contents to {}", original_path);
-        }
+        // Copy and publish through open directory fds. The workspace owner can
+        // mutate its parent concurrently, so path-based rsync/chown is unsafe.
+        btrfs_common::restore_workspace_from_subvolume(&subvol_path, Path::new(original_path))
+            .await?;
 
         // 3. Delete all snapshot subvolumes by scanning the filesystem directory
         if let Ok(mut entries) = tokio::fs::read_dir(&snap_base).await {
@@ -393,6 +245,34 @@ impl StorageBackend for BtrfsBaseBackend {
         // NOTE: BtrfsBase does NOT need umount, losetup -d, or img deletion
         // (that's the key difference from BtrfsLoop)
 
+        Ok(())
+    }
+
+    async fn recover_workspace_to_destination(
+        &self,
+        ws_id: &str,
+        parent: &std::fs::File,
+        name: &std::ffi::OsStr,
+    ) -> anyhow::Result<()> {
+        let subvol_path = self.data_root.join(ws_id);
+        let snap_base = self.snapshots_dir.join(ws_id);
+        btrfs_common::restore_workspace_from_subvolume_anchored(&subvol_path, parent, name).await?;
+        if let Ok(mut entries) = tokio::fs::read_dir(&snap_base).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let path = entry.path();
+                if path.is_dir() {
+                    if let Err(error) = btrfs_common::delete_subvolume(&path).await {
+                        warn!("failed to delete snapshot subvolume {:?}: {error:#}", path);
+                    }
+                }
+            }
+        }
+        if let Err(error) = btrfs_common::delete_subvolume(&subvol_path).await {
+            warn!("failed to delete workspace subvolume {ws_id}: {error:#}");
+        }
+        if let Err(error) = tokio::fs::remove_dir_all(&snap_base).await {
+            warn!("failed to remove snapshots dir {:?}: {error}", snap_base);
+        }
         Ok(())
     }
 
@@ -533,7 +413,9 @@ impl StorageBackend for BtrfsBaseBackend {
 
 #[cfg(test)]
 mod tests {
-    use super::{BtrfsBaseBackend, BtrfsBaseScenario};
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::{restore_root_metadata, BtrfsBaseBackend, BtrfsBaseScenario};
     use ws_ckpt_common::backend::StorageBackend;
     use ws_ckpt_common::{CleanupRetention, DaemonConfig, SNAPSHOTS_DIR};
 
@@ -541,6 +423,7 @@ mod tests {
         DaemonConfig {
             mount_path: std::path::PathBuf::from("/tmp/unused"),
             socket_path: std::path::PathBuf::from("/tmp/unused.sock"),
+            workspace_root: None,
             log_level: "info".to_string(),
             auto_cleanup: false,
             auto_cleanup_keep: CleanupRetention::Count(20),
@@ -575,6 +458,49 @@ mod tests {
         backend.bootstrap(&dummy_config()).await.unwrap();
         // A second call on existing directories must succeed.
         backend.bootstrap(&dummy_config()).await.unwrap();
+    }
+
+    #[test]
+    fn explicit_data_root_is_not_rewritten() {
+        let configured = std::path::PathBuf::from("/var/lib/anolisa-data/ws-ckpt");
+        let backend =
+            BtrfsBaseBackend::from_data_root(configured.clone(), BtrfsBaseScenario::CrossDisk);
+
+        assert_eq!(backend.data_root(), configured);
+        assert_eq!(backend.snapshots_root(), configured.join(SNAPSHOTS_DIR));
+    }
+
+    #[tokio::test]
+    async fn replacement_root_preserves_mode_0750() {
+        let tmp = tempfile::tempdir().unwrap();
+        let original = tmp.path().join("original");
+        let replacement = tmp.path().join("replacement");
+        tokio::fs::create_dir(&original).await.unwrap();
+        tokio::fs::create_dir(&replacement).await.unwrap();
+        tokio::fs::set_permissions(&original, std::fs::Permissions::from_mode(0o750))
+            .await
+            .unwrap();
+        tokio::fs::set_permissions(&replacement, std::fs::Permissions::from_mode(0o777))
+            .await
+            .unwrap();
+        let metadata = tokio::fs::metadata(&original).await.unwrap();
+
+        restore_root_metadata(
+            &replacement,
+            std::os::unix::fs::MetadataExt::uid(&metadata),
+            std::os::unix::fs::MetadataExt::gid(&metadata),
+            std::os::unix::fs::MetadataExt::mode(&metadata),
+        )
+        .await
+        .unwrap();
+
+        let replacement_mode = tokio::fs::metadata(&replacement)
+            .await
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o7777;
+        assert_eq!(replacement_mode, 0o750);
     }
 
     #[tokio::test]

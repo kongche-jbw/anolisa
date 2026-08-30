@@ -4,7 +4,7 @@ use std::process;
 
 use anyhow::{Context, Result};
 use clap::builder::{StringValueParser, TypedValueParser};
-use clap::{ArgGroup, Args, Parser, Subcommand};
+use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 
@@ -52,6 +52,23 @@ fn parse_cleanup_retention(s: &str) -> Result<CleanupRetention, String> {
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum DaemonBackend {
+    Auto,
+    BtrfsBase,
+    BtrfsLoop,
+}
+
+impl DaemonBackend {
+    fn as_config_value(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::BtrfsBase => "btrfs-base",
+            Self::BtrfsLoop => "btrfs-loop",
+        }
+    }
 }
 
 /// Arguments for `ws-ckpt config`. Scope (-g vs -w) is exclusive but optional;
@@ -128,6 +145,14 @@ enum Commands {
         /// Unix socket path for IPC
         #[arg(long, default_value = DEFAULT_SOCKET_PATH)]
         socket: PathBuf,
+
+        /// Storage backend override
+        #[arg(long, value_enum)]
+        backend: Option<DaemonBackend>,
+
+        /// Restrict managed workspaces to strict descendants of this directory
+        #[arg(long)]
+        workspace_root: Option<PathBuf>,
 
         /// Log level (debug/info/warn/error)
         #[arg(long, default_value = "info")]
@@ -352,6 +377,8 @@ async fn run(cli: Cli) -> Result<()> {
         Commands::Daemon {
             mount_path,
             socket,
+            backend,
+            workspace_root,
             log_level,
         } => {
             // Load auto-cleanup settings from config file
@@ -366,6 +393,7 @@ async fn run(cli: Cli) -> Result<()> {
             let config = DaemonConfig {
                 mount_path,
                 socket_path: socket,
+                workspace_root,
                 log_level,
                 auto_cleanup: file_config.auto_cleanup.unwrap_or(DEFAULT_AUTO_CLEANUP),
                 auto_cleanup_keep: file_config
@@ -378,7 +406,10 @@ async fn run(cli: Cli) -> Result<()> {
                 health_check_interval_secs: file_config
                     .health_check_interval_secs
                     .unwrap_or(DEFAULT_HEALTH_CHECK_INTERVAL_SECS),
-                backend_type: file_config.backend.r#type.clone(),
+                backend_type: backend
+                    .map(DaemonBackend::as_config_value)
+                    .unwrap_or(&file_config.backend.r#type)
+                    .to_string(),
                 img_size: file_config
                     .backend
                     .btrfs_loop
@@ -2053,14 +2084,56 @@ mod tests {
             Commands::Daemon {
                 mount_path,
                 socket,
+                backend,
+                workspace_root,
                 log_level,
             } => {
                 assert_eq!(mount_path, PathBuf::from(DEFAULT_MOUNT_PATH));
                 assert_eq!(socket, PathBuf::from(DEFAULT_SOCKET_PATH));
+                assert!(backend.is_none());
+                assert_eq!(workspace_root, None);
                 assert_eq!(log_level, "info");
             }
             _ => panic!("expected Daemon"),
         }
+    }
+
+    #[test]
+    fn parse_daemon_workspace_root() {
+        let cli = Cli::try_parse_from([
+            "ws-ckpt",
+            "daemon",
+            "--workspace-root",
+            "/home/anolisa/Work",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Daemon { workspace_root, .. } => {
+                assert_eq!(workspace_root, Some(PathBuf::from("/home/anolisa/Work")));
+            }
+            _ => panic!("expected Daemon"),
+        }
+    }
+
+    #[test]
+    fn parse_daemon_backend_override() {
+        let cli = Cli::try_parse_from(["ws-ckpt", "daemon", "--backend", "btrfs-base"]).unwrap();
+        match cli.command {
+            Commands::Daemon { backend, .. } => {
+                assert_eq!(backend.unwrap().as_config_value(), "btrfs-base");
+            }
+            _ => panic!("expected Daemon"),
+        }
+    }
+
+    #[test]
+    fn parse_daemon_rejects_unknown_backend() {
+        let error = match Cli::try_parse_from(["ws-ckpt", "daemon", "--backend", "unknown"]) {
+            Ok(_) => panic!("unknown backends must not silently become auto"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("invalid value 'unknown'"));
     }
 
     #[test]

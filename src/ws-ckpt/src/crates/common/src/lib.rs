@@ -946,6 +946,8 @@ pub struct ConfigReport {
 pub struct DaemonConfig {
     pub mount_path: PathBuf,
     pub socket_path: PathBuf,
+    /// Optional canonical directory containing every client-managed workspace.
+    pub workspace_root: Option<PathBuf>,
     pub log_level: String,
     pub auto_cleanup: bool,
     pub auto_cleanup_keep: CleanupRetention,
@@ -1090,6 +1092,7 @@ impl Default for DaemonConfig {
         Self {
             mount_path: PathBuf::from(DEFAULT_MOUNT_PATH),
             socket_path: PathBuf::from(DEFAULT_SOCKET_PATH),
+            workspace_root: None,
             log_level: "info".to_string(),
             auto_cleanup: DEFAULT_AUTO_CLEANUP,
             auto_cleanup_keep: default_auto_cleanup_keep(),

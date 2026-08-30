@@ -58,11 +58,26 @@ pub(crate) async fn detect_and_create_backend(
 }
 
 /// Three-level auto-detection logic.
-async fn auto_detect(_config: &DaemonConfig) -> anyhow::Result<BackendType> {
-    // Level 1: Is the default mount_path parent already on btrfs?
-    //   If mount_path (e.g. /mnt/btrfs-workspace) is on btrfs, we can use BtrfsBase InPlace-style.
-    //   But actually at daemon startup we don't know workspace paths yet.
-    //   We check if there's a btrfs partition available at all.
+async fn auto_detect(config: &DaemonConfig) -> anyhow::Result<BackendType> {
+    // Level 1: Prefer the filesystem that contains the configured mount path.
+    // This prevents a host with multiple Btrfs filesystems from binding storage
+    // to whichever entry happened to appear first in /proc/mounts.
+    match btrfs_common::find_btrfs_partition_for_path(&config.mount_path).await {
+        Ok(mount_info) => {
+            info!(
+                "Auto-detect: mount_path {} is on btrfs mount {} (device: {})",
+                config.mount_path.display(),
+                mount_info.mount_point,
+                mount_info.device
+            );
+            return Ok(BackendType::BtrfsBase);
+        }
+        Err(error) => info!(
+            "Auto-detect: mount_path {} is not on usable btrfs: {:#}",
+            config.mount_path.display(),
+            error
+        ),
+    }
 
     // Level 2: Is there an already-mounted btrfs partition?
     if let Ok(mount_info) = btrfs_common::find_available_btrfs_partition().await {
@@ -102,24 +117,51 @@ pub(crate) async fn create_backend(
             Ok(Arc::new(backend))
         }
         BackendType::BtrfsBase => {
-            // Find the best btrfs partition to use
-            let mount_info = btrfs_common::find_available_btrfs_partition()
-                .await
-                .context(
-                    "Backend type 'btrfs-base' selected but no mounted btrfs partition found. \
-                     Please mount a btrfs partition or switch to 'btrfs-loop' backend.",
-                )?;
+            let explicitly_configured = config.parse_backend_type() == Some(BackendType::BtrfsBase);
+            let mount_info = if explicitly_configured {
+                btrfs_common::find_btrfs_partition_for_path(&config.mount_path)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "Backend type 'btrfs-base' requires configured mount_path {} to be \
+                             located on a writable Btrfs filesystem",
+                            config.mount_path.display()
+                        )
+                    })?
+            } else {
+                match btrfs_common::find_btrfs_partition_for_path(&config.mount_path).await {
+                    Ok(mount_info) => mount_info,
+                    Err(_) => btrfs_common::find_available_btrfs_partition()
+                        .await
+                        .context(
+                            "Backend type 'btrfs-base' selected but no mounted btrfs partition \
+                             found. Please mount a btrfs partition or switch to 'btrfs-loop' \
+                             backend.",
+                        )?,
+                }
+            };
 
             // Determine scenario: daemon-level default is CrossDisk.
             // The actual scenario (InPlace vs CrossDisk) is refined per-workspace
             // during init_workspace based on whether the workspace path is on the
             // same btrfs partition.
             let scenario = BtrfsBaseScenario::CrossDisk;
-            info!(
-                "Creating BtrfsBase backend: mount={}, scenario={:?}",
-                mount_info.mount_point, scenario
-            );
-            let backend = BtrfsBaseBackend::new(PathBuf::from(&mount_info.mount_point), scenario);
+            let backend = if explicitly_configured {
+                info!(
+                    "Creating explicitly configured BtrfsBase backend: mount={}, data_root={}, \
+                     scenario={:?}",
+                    mount_info.mount_point,
+                    config.mount_path.display(),
+                    scenario
+                );
+                BtrfsBaseBackend::from_data_root(config.mount_path.clone(), scenario)
+            } else {
+                info!(
+                    "Creating auto-selected BtrfsBase backend: mount={}, scenario={:?}",
+                    mount_info.mount_point, scenario
+                );
+                BtrfsBaseBackend::new(PathBuf::from(&mount_info.mount_point), scenario)
+            };
             Ok(Arc::new(backend))
         }
     }
