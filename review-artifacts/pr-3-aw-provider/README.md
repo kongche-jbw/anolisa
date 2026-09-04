@@ -18,6 +18,7 @@ the AW Provider path is production-ready.
 - [Provider principles and integration guide in Chinese](component-integration_zh.md)
 - [Runtime examples and checkpoint boundary in Chinese](runtime-call-examples_zh.md)
 - [Complete schema atlas in Chinese](schema-reference_zh.md)
+- [Ready-to-paste PR review comment in Chinese](pr-review-comment_zh.md)
 - [Agent Host POC comparison in Chinese](poc-comparison_zh.md)
 
 ## Interactive diagrams

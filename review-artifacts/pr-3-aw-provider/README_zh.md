@@ -19,6 +19,7 @@
 | 安全与 Checkpoint 研发 | [运行实例与边界说明](runtime-call-examples_zh.md) | 查看真实字段、结果回流与副作用边界 |
 | Schema 设计与接口评审人员 | [全部 Schema 图册](schema-reference_zh.md) | 查看 22 个文件、14 个逻辑 Schema 及逐份结论 |
 | PR Reviewer | [完整架构审查](architecture-review_zh.md) | 查看 P1、设计债务、证据和验证 |
+| 准备提交 Review 的维护者 | [PR Review 评论草稿](pr-review-comment_zh.md) | 复制聚焦逻辑与 Schema 的 Request changes 评论 |
 | Agent Host POC 负责人 | [与 Agent Host POC 的对照](poc-comparison_zh.md) | 确认现状、目标和连接层 |
 
 ## 交互式架构图
