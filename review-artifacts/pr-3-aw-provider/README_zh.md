@@ -28,16 +28,15 @@
 - [Tokenless 生效时序](provider-effect-sequence.html)：采用 Drafter 工程蓝图风格，使用同一份 `list_recent_builds`
   fixture，贯穿展示真实 artifact id、source digest、scope、359→110 meters、candidate、
   receipt 与最终 replacement。
-- [Agent Sec 命令检查时序](security-command-call.html)：展示 pipe-to-shell 命令从
-  canonical input 到真实 `shell-download-exec` 结果，再回流 Core 和 COSH gate。
-- [Checkpoint 创建时序](checkpoint-create-call.html)：展示当前 COSH、Unix socket、
-  ws-ckpt 与 Btrfs 实线链路，并明确标记尚未接入 AW Provider 的边界。
+- [Agent Sec 命令检查时序](security-command-call.html)：用六组简化字段展示 pipe-to-shell
+  命令、`shell-download-exec` 结果、Core gate 与 Ledger 事实。
+- [Checkpoint 创建时序](checkpoint-create-call.html)：用六组简化字段展示当前 CLI、
+  Unix socket、ws-ckpt 与 Btrfs 链路，并标明现有 AW 边界。
 
-Tokenless 时序图是自包含 Drafter HTML，默认直接展示字段值和字段语义，并支持按步骤聚焦。
-其余三份 HTML 为自包含 Archify 产物，默认采用浅色 editorial 风格，支持引导视图、节点
-检索、路径跟踪、主题切换和导出。14 张浅色 Schema SVG 位于 `images/schemas/`，其确定性
-数据源与生成脚本位于 `diagram-sources/`。
+三份调用时序图均为自包含 Drafter HTML，默认直接展示字段值和字段语义，并支持按步骤
+定位。Provider 生效架构图为自包含 Archify 产物，支持引导视图、节点检索、路径跟踪、
+主题切换和导出。14 张浅色 Schema SVG 位于 `images/schemas/`，其确定性数据源与生成脚本
+位于 `diagram-sources/`。
 
-三份 Archify 图均通过九项 showcase 校验，错误和警告均为零。审查环境没有 Chrome 或
-Chromium，Archify 内置浏览器复核会报告跳过；全部页面交付前另使用 Firefox headless
-进行人工截图检查。
+Provider 生效架构图通过九项 showcase 校验，错误和警告均为零。全部页面交付前另使用
+Firefox headless 进行截图检查。

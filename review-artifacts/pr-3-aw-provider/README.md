@@ -25,13 +25,13 @@ the AW Provider path is production-ready.
 - [Provider activation architecture](provider-effect-architecture.html)
 - [Provider activation sequence](provider-effect-sequence.html), rendered as a
   Drafter engineering blueprint that keeps real fields and meanings inline
-- [Agent Sec command inspection sequence](security-command-call.html), carrying
-  one real pipe-to-shell finding back through Host, Core, and the COSH gate
-- [Current checkpoint creation sequence](checkpoint-create-call.html), explicitly
-  separated from the not-yet-implemented AW Provider target
+- [Agent Sec command inspection sequence](security-command-call.html), using six
+  compact field stages for the request, finding, gate, and audit facts
+- [Current checkpoint creation sequence](checkpoint-create-call.html), using six
+  compact field stages for the CLI, socket, daemon, snapshot, and response
 
-The Tokenless sequence is a self-contained Drafter HTML with step-focused
-interaction. The other three HTML files are self-contained Archify artifacts
-defaulting to the bright editorial preset; each passed the nine showcase
-validation checks with no errors or warnings. The 14 deterministic light-theme
-schema SVGs are stored under `images/schemas/`.
+All three call sequences are self-contained Drafter HTML files with direct field
+descriptions and step navigation. The Provider activation architecture remains a
+self-contained Archify artifact and passed the nine showcase validation checks
+without errors or warnings. The 14 deterministic light-theme schema SVGs are
+stored under `images/schemas/`.
