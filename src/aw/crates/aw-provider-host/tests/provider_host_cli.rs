@@ -178,7 +178,7 @@ fn tokenless_manifest_admits_and_maps_with_a_stub_executable() {
             "#!/bin/sh\n",
             "IFS= read -r payload || true\n",
             "printf '%s' '",
-            r#"{"protocol_version":1,"output":"compressed by stub","disposition":"applied","reversibility":"lossless","before_tokens":10,"after_tokens":2,"tokenizer_id":"stub-v1","compressor_chain":["stub"]}"#,
+            r#"{"protocol_version":1,"output":"compressed by stub","disposition":"applied","reversibility":"lossless","before_tokens":10,"after_tokens":2,"stash_keys":[],"tokenizer_id":"stub-v1","compressor_chain":["stub"]}"#,
             "'\n",
         ),
     )

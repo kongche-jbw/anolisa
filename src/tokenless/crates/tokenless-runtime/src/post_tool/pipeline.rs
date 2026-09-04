@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 use tokenless_ccr::StashStore;
 use tokenless_compressors::{
-    JsonCompressionConfig, JsonCompressionContext, JsonCompressor, JsonOperation, Recoverability,
+    JsonCompressionConfig, JsonCompressionContext, JsonCompressor, JsonOperation, SourceFidelity,
 };
 use tokenless_protocol::{
     BYTE_ESTIMATOR_ID, CompressionRequest, CompressionResponse, ContentOrigin,
@@ -145,15 +145,20 @@ impl PostToolPipeline {
         } else {
             before_tokens
         };
-        let response_operations = if matches!(verdict, Verdict::Apply) {
+        let response_operations = if matches!(verdict, Verdict::Apply | Verdict::DryRun) {
             legacy_chain(&outcome.operations)
         } else {
             Vec::new()
         };
-        let reversibility = if selected {
-            protocol_reversibility(outcome.recoverability)
-        } else {
-            Reversibility::Lossless
+        let reversibility = match verdict {
+            Verdict::Apply => protocol_reversibility(outcome.source_fidelity),
+            Verdict::DryRun => match outcome.source_fidelity {
+                // Dry-run rolls tentative writes back, so a candidate that
+                // depended on them no longer has a recovery path.
+                SourceFidelity::Retrievable => Reversibility::Unrecoverable,
+                other => protocol_reversibility(other),
+            },
+            Verdict::Reject(_) => Reversibility::Lossless,
         };
         let unrecoverable_truncations = if !outcome.operations.contains(&JsonOperation::Truncation)
             || !config.compression_enabled
@@ -207,6 +212,9 @@ fn passthrough(
 ) -> PostToolRun {
     let mut response = CompressionResponse::passthrough(request, before_tokens);
     response.content_type = Some(content_type.wire_str().to_owned());
+    if diagnostic.is_some() {
+        response.disposition = Disposition::Error;
+    }
     response.diagnostic = diagnostic;
     PostToolRun {
         response,
@@ -235,11 +243,11 @@ fn legacy_chain(operations: &[JsonOperation]) -> Vec<String> {
     chain
 }
 
-fn protocol_reversibility(recoverability: Recoverability) -> Reversibility {
-    match recoverability {
-        Recoverability::Lossless => Reversibility::Lossless,
-        Recoverability::Retrievable => Reversibility::Retrievable,
-        Recoverability::Unrecoverable => Reversibility::Unrecoverable,
+fn protocol_reversibility(source_fidelity: SourceFidelity) -> Reversibility {
+    match source_fidelity {
+        SourceFidelity::Lossless => Reversibility::Lossless,
+        SourceFidelity::Retrievable => Reversibility::Retrievable,
+        SourceFidelity::Unrecoverable => Reversibility::Unrecoverable,
     }
 }
 
@@ -350,7 +358,9 @@ mod tests {
             [JsonOperation::Cleanup, JsonOperation::Truncation]
         );
         assert_eq!(run.response.compressor_chain, ["response-cleanup"]);
+        assert_eq!(run.response.reversibility, Reversibility::Unrecoverable);
         assert_eq!(run.response.stash_keys.len(), 1);
+        assert_eq!(run.response.validate(), Ok(()));
         assert_eq!(concrete.stash_calls.load(Ordering::Relaxed), 1);
         assert_eq!(concrete.delete_calls.load(Ordering::Relaxed), 0);
         assert_eq!(concrete.len(), 1);
@@ -367,6 +377,7 @@ mod tests {
         );
 
         assert_eq!(run.response.disposition, Disposition::NoSavings);
+        assert_eq!(run.response.validate(), Ok(()));
         assert_eq!(concrete.stash_calls.load(Ordering::Relaxed), 1);
         assert_eq!(concrete.delete_calls.load(Ordering::Relaxed), 1);
         assert_eq!(concrete.len(), 0);
@@ -385,6 +396,7 @@ mod tests {
         let run = PostToolPipeline::run(&request(&input), &config(Duration::ZERO, 2), Some(&store));
 
         assert_eq!(run.response.disposition, Disposition::Timeout);
+        assert_eq!(run.response.validate(), Ok(()));
         assert_eq!(concrete.stash_calls.load(Ordering::Relaxed), 1);
         assert_eq!(concrete.delete_calls.load(Ordering::Relaxed), 1);
         assert_eq!(concrete.len(), 0);
@@ -401,20 +413,22 @@ mod tests {
         assert_eq!(run.response.disposition, Disposition::Passthrough);
         assert_eq!(run.response.output, input);
         assert!(run.operations.is_empty());
+        assert_eq!(run.response.validate(), Ok(()));
     }
 
     #[test]
-    fn oversized_passthrough_identifies_the_byte_estimator() {
+    fn oversized_error_identifies_the_byte_estimator() {
         let input = "界".repeat(4);
         let mut config = config(Duration::from_secs(1), 2);
         config.max_input_bytes = input.len() - 1;
 
         let run = PostToolPipeline::run(&request(&input), &config, None);
 
-        assert_eq!(run.response.disposition, Disposition::Passthrough);
+        assert_eq!(run.response.disposition, Disposition::Error);
         assert_eq!(run.response.before_tokens, 3);
         assert_eq!(run.response.after_tokens, 3);
         assert_ne!(run.response.before_tokens, estimate_tokens(&input) as u64);
         assert_eq!(run.response.tokenizer_id, BYTE_ESTIMATOR_ID);
+        assert_eq!(run.response.validate(), Ok(()));
     }
 }

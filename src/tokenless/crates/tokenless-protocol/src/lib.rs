@@ -127,6 +127,10 @@ pub enum ProtocolError {
     /// field gains a fallible serializer.
     #[error("protocol serialization failed: {0}")]
     Serialize(#[source] serde_json::Error),
+    /// The response's fields contradict one another, so serializing or
+    /// accepting it would publish a recovery guarantee that is not true.
+    #[error("invalid compression response state: {0}")]
+    InvalidResponseState(#[from] ResponseStateError),
 }
 
 /// Where in the agent loop the content was intercepted (roadmap §4.6).
@@ -362,18 +366,98 @@ impl Disposition {
     }
 }
 
-/// Recovery state of an applied transformation (roadmap principle 5).
+/// Source-information recovery state of a candidate (roadmap principle 5).
+///
+/// This guarantee is stronger than preserving meaning that a compressor
+/// considers task-relevant. `lossless` means the transformed representation
+/// and its named codec retain enough information to reconstruct the exact
+/// source; any untracked omission makes the result `unrecoverable`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Reversibility {
-    /// Nothing task-relevant was removed; no recovery needed.
+    /// The representation retains all source information; no recovery state
+    /// is needed.
     Lossless,
-    /// Removed content is stored in the Stash and referenced by emitted
-    /// markers; retrieval restores it byte-exactly.
+    /// All omitted source information is stored in the governed Stash and
+    /// referenced by at least one committed key.
     Retrievable,
-    /// Content was removed without a recovery path. Rejected outright in
-    /// required-reversible mode.
+    /// At least some source information was removed without a recovery path.
+    /// Some independently recoverable omissions may still have stash keys,
+    /// but those keys do not upgrade the whole candidate to `retrievable`.
     Unrecoverable,
+}
+
+/// Contradictory field combinations in a [`CompressionResponse`].
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ResponseStateError {
+    /// Applied and dry-run dispositions describe a measured candidate.
+    #[error("{disposition:?} must name at least one compressor")]
+    MissingCompressorChain {
+        /// Candidate-bearing disposition missing its transform chain.
+        disposition: Disposition,
+    },
+    /// A response that exposes no candidate must expose no transform chain.
+    #[error("{disposition:?} must not name a compressor chain")]
+    UnexpectedCompressorChain {
+        /// Non-candidate disposition carrying transform metadata.
+        disposition: Disposition,
+    },
+    /// Candidate-bearing dispositions must represent an actual token saving.
+    #[error("{disposition:?} candidate must reduce tokens ({before_tokens} -> {after_tokens})")]
+    CandidateWithoutSavings {
+        /// Candidate-bearing disposition with invalid counts.
+        disposition: Disposition,
+        /// Token estimate for the source.
+        before_tokens: u64,
+        /// Token estimate for the candidate.
+        after_tokens: u64,
+    },
+    /// Responses that emit the source must report unchanged token counts.
+    #[error("{disposition:?} must keep token counts unchanged ({before_tokens} -> {after_tokens})")]
+    UnchangedOutputWithChangedCounts {
+        /// Source-emitting disposition with invalid counts.
+        disposition: Disposition,
+        /// Token estimate for the source.
+        before_tokens: u64,
+        /// Token estimate published for the emitted source.
+        after_tokens: u64,
+    },
+    /// Responses that emit the source are lossless by construction.
+    #[error("{disposition:?} must report reversibility=lossless")]
+    UnchangedOutputWithRecoveryClaim {
+        /// Source-emitting disposition with a candidate recovery state.
+        disposition: Disposition,
+    },
+    /// Only an applied result may expose committed recovery state.
+    #[error("{disposition:?} must not expose stash keys")]
+    UnappliedStashKeys {
+        /// Unapplied disposition carrying committed keys.
+        disposition: Disposition,
+    },
+    /// `retrievable` means there is concrete governed state to retrieve.
+    #[error("reversibility=retrievable requires at least one stash key")]
+    RetrievableWithoutStashKey,
+    /// A lossless result has no omitted information requiring recovery state.
+    #[error("reversibility=lossless must not expose stash keys")]
+    LosslessWithStashKeys,
+    /// Diagnostics are reserved for the error disposition.
+    #[error("{disposition:?} must not include a diagnostic")]
+    DiagnosticOnNonError {
+        /// Non-error disposition carrying a diagnostic.
+        disposition: Disposition,
+    },
+    /// Diagnostics remain bounded at the protocol boundary.
+    #[error("diagnostic exceeds the {DIAGNOSTIC_MAX_BYTES}-byte limit")]
+    DiagnosticTooLong,
+    /// IDs in transform chains must be actionable, not empty placeholders.
+    #[error("compressor_chain contains an empty compressor id")]
+    EmptyCompressorId,
+    /// Exposed recovery keys must be actionable, not empty placeholders.
+    #[error("stash_keys contains an empty key")]
+    EmptyStashKey,
+    /// Token estimates without a counter identity cannot be interpreted.
+    #[error("tokenizer_id must not be empty")]
+    EmptyTokenizerId,
 }
 
 /// A compression response: the content to emit plus the decision facts.
@@ -393,16 +477,20 @@ pub struct CompressionResponse {
     /// taxonomy type arrives with the detector and registry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_type: Option<String>,
-    /// Stable IDs of the compressors that shaped `output`, in order.
-    /// Empty on non-applied dispositions.
+    /// Stable IDs of the compressors that shaped the selected candidate, in
+    /// order. Present for `applied` and `dry_run`; empty when no candidate is
+    /// exposed.
     #[serde(default)]
     pub compressor_chain: Vec<String>,
-    /// Recovery state of `output`. [`Reversibility::Lossless`] whenever the
-    /// original was returned unchanged.
+    /// Recovery state of the selected candidate. Dispositions without a
+    /// candidate report [`Reversibility::Lossless`] because they emit the
+    /// source unchanged.
     pub reversibility: Reversibility,
     /// Normalized tokens of the request content, counted by `tokenizer_id`.
     pub before_tokens: u64,
-    /// Normalized tokens of `output`, counted by `tokenizer_id`.
+    /// Normalized tokens of the selected candidate for `applied` and
+    /// `dry_run`, or of `output` when no candidate is exposed. Counted by
+    /// `tokenizer_id`.
     pub after_tokens: u64,
     /// Stash keys committed by this response. Only keys present in an
     /// applied, emitted result appear here; rolled-back candidates never
@@ -449,25 +537,114 @@ impl CompressionResponse {
         self.disposition == Disposition::Applied
     }
 
+    /// Checks cross-field response invariants that JSON Schema cannot fully
+    /// express, including token-count ordering and recovery-state coherence.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ResponseStateError`] when the disposition, transform chain,
+    /// token counts, diagnostic, or stash facts contradict one another.
+    pub fn validate(&self) -> Result<(), ResponseStateError> {
+        if self.tokenizer_id.is_empty() {
+            return Err(ResponseStateError::EmptyTokenizerId);
+        }
+        if self.compressor_chain.iter().any(String::is_empty) {
+            return Err(ResponseStateError::EmptyCompressorId);
+        }
+        if self.stash_keys.iter().any(String::is_empty) {
+            return Err(ResponseStateError::EmptyStashKey);
+        }
+        if self
+            .diagnostic
+            .as_ref()
+            .is_some_and(|diagnostic| diagnostic.len() > DIAGNOSTIC_MAX_BYTES)
+        {
+            return Err(ResponseStateError::DiagnosticTooLong);
+        }
+        if self.disposition != Disposition::Error && self.diagnostic.is_some() {
+            return Err(ResponseStateError::DiagnosticOnNonError {
+                disposition: self.disposition,
+            });
+        }
+
+        let carries_candidate =
+            matches!(self.disposition, Disposition::Applied | Disposition::DryRun);
+        if carries_candidate {
+            if self.compressor_chain.is_empty() {
+                return Err(ResponseStateError::MissingCompressorChain {
+                    disposition: self.disposition,
+                });
+            }
+            if self.after_tokens >= self.before_tokens {
+                return Err(ResponseStateError::CandidateWithoutSavings {
+                    disposition: self.disposition,
+                    before_tokens: self.before_tokens,
+                    after_tokens: self.after_tokens,
+                });
+            }
+        } else {
+            if !self.compressor_chain.is_empty() {
+                return Err(ResponseStateError::UnexpectedCompressorChain {
+                    disposition: self.disposition,
+                });
+            }
+            if self.after_tokens != self.before_tokens {
+                return Err(ResponseStateError::UnchangedOutputWithChangedCounts {
+                    disposition: self.disposition,
+                    before_tokens: self.before_tokens,
+                    after_tokens: self.after_tokens,
+                });
+            }
+            if self.reversibility != Reversibility::Lossless {
+                return Err(ResponseStateError::UnchangedOutputWithRecoveryClaim {
+                    disposition: self.disposition,
+                });
+            }
+        }
+
+        if self.disposition != Disposition::Applied && !self.stash_keys.is_empty() {
+            return Err(ResponseStateError::UnappliedStashKeys {
+                disposition: self.disposition,
+            });
+        }
+        match self.reversibility {
+            Reversibility::Retrievable if self.stash_keys.is_empty() => {
+                return Err(ResponseStateError::RetrievableWithoutStashKey);
+            }
+            Reversibility::Lossless if !self.stash_keys.is_empty() => {
+                return Err(ResponseStateError::LosslessWithStashKeys);
+            }
+            Reversibility::Lossless | Reversibility::Retrievable | Reversibility::Unrecoverable => {
+            }
+        }
+
+        Ok(())
+    }
+
     /// Parses a response, rejecting unsupported versions before shape errors.
     ///
     /// # Errors
     ///
     /// [`ProtocolError::UnsupportedVersion`] when `protocol_version` differs
     /// from [`PROTOCOL_VERSION`]; [`ProtocolError::Malformed`] when the JSON
-    /// does not match the v1 shape.
+    /// does not match the v1 shape; [`ProtocolError::InvalidResponseState`]
+    /// when individually valid fields contradict one another.
     pub fn from_json(json: &str) -> Result<Self, ProtocolError> {
         check_version(json)?;
-        Ok(serde_json::from_str(json)?)
+        let response: Self = serde_json::from_str(json)?;
+        response.validate()?;
+        Ok(response)
     }
 
     /// Serializes to the wire format.
     ///
     /// # Errors
     ///
-    /// [`ProtocolError::Serialize`] — unreachable for the current derived
-    /// shape, surfaced instead of a panic per library error policy.
+    /// [`ProtocolError::InvalidResponseState`] when the response fields
+    /// contradict one another; [`ProtocolError::Serialize`] when the valid
+    /// response cannot be encoded (unreachable for the current shape).
     pub fn to_json(&self) -> Result<String, ProtocolError> {
+        self.validate()?;
         serde_json::to_string(self).map_err(ProtocolError::Serialize)
     }
 }

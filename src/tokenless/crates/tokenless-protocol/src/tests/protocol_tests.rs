@@ -4,6 +4,22 @@
 // wire contract; once it lands, these tests become the drift guard between
 // the document and the types.
 
+fn applied_response(reversibility: Reversibility, stash_keys: Vec<String>) -> CompressionResponse {
+    CompressionResponse {
+        protocol_version: PROTOCOL_VERSION,
+        output: "compressed".into(),
+        disposition: Disposition::Applied,
+        content_type: Some("json".into()),
+        compressor_chain: vec!["json-cleanup".into()],
+        reversibility,
+        before_tokens: 10,
+        after_tokens: 4,
+        stash_keys,
+        tokenizer_id: TOKENIZER_ID.into(),
+        diagnostic: None,
+    }
+}
+
 #[test]
 fn request_roadmap_example_parses() {
     let json = r#"{
@@ -185,23 +201,108 @@ fn wire_format_is_stable() {
         r#"{"protocol_version":1,"content":"c","agent_id":"a","seam":"post_tool","content_origin":"file_content","capabilities":{"replace_output":true,"publish_retrieve_tool":false,"replace_with_text":false}}"#
     );
 
-    let resp = CompressionResponse {
-        protocol_version: PROTOCOL_VERSION,
-        output: "o".into(),
-        disposition: Disposition::NoSavings,
-        content_type: Some("search_results".into()),
-        compressor_chain: vec!["search".into()],
-        reversibility: Reversibility::Unrecoverable,
-        before_tokens: 10,
-        after_tokens: 10,
-        stash_keys: vec!["k".into()],
-        tokenizer_id: TOKENIZER_ID.into(),
-        diagnostic: Some("d".into()),
-    };
+    let mut resp = applied_response(Reversibility::Retrievable, vec!["k".into()]);
+    resp.output = "o".into();
+    resp.content_type = Some("search_results".into());
+    resp.compressor_chain = vec!["search".into()];
     assert_eq!(
         resp.to_json().unwrap(),
-        r#"{"protocol_version":1,"output":"o","disposition":"no_savings","content_type":"search_results","compressor_chain":["search"],"reversibility":"unrecoverable","before_tokens":10,"after_tokens":10,"stash_keys":["k"],"tokenizer_id":"heuristic-v1","diagnostic":"d"}"#
+        r#"{"protocol_version":1,"output":"o","disposition":"applied","content_type":"search_results","compressor_chain":["search"],"reversibility":"retrievable","before_tokens":10,"after_tokens":4,"stash_keys":["k"],"tokenizer_id":"heuristic-v1"}"#
     );
+
+    let mut error = CompressionResponse::passthrough(
+        &CompressionRequest::new("o", "a", Seam::PostTool),
+        1,
+    );
+    error.disposition = Disposition::Error;
+    error.diagnostic = Some("d".into());
+    assert_eq!(
+        error.to_json().unwrap(),
+        r#"{"protocol_version":1,"output":"o","disposition":"error","compressor_chain":[],"reversibility":"lossless","before_tokens":1,"after_tokens":1,"stash_keys":[],"tokenizer_id":"heuristic-v1","diagnostic":"d"}"#
+    );
+}
+
+#[test]
+fn response_state_validation_rejects_false_recovery_claims() {
+    let mut response = applied_response(Reversibility::Retrievable, Vec::new());
+    assert_eq!(
+        response.validate(),
+        Err(ResponseStateError::RetrievableWithoutStashKey)
+    );
+    assert!(matches!(
+        response.to_json(),
+        Err(ProtocolError::InvalidResponseState(
+            ResponseStateError::RetrievableWithoutStashKey
+        ))
+    ));
+
+    response.reversibility = Reversibility::Lossless;
+    response.stash_keys.push("unexpected".into());
+    assert_eq!(
+        response.validate(),
+        Err(ResponseStateError::LosslessWithStashKeys)
+    );
+
+    // An overall unrecoverable candidate may still expose keys for the
+    // independently recoverable subset without claiming full recovery.
+    response.reversibility = Reversibility::Unrecoverable;
+    assert_eq!(response.validate(), Ok(()));
+}
+
+#[test]
+fn response_state_validation_rejects_disposition_contradictions() {
+    let mut response = applied_response(Reversibility::Unrecoverable, Vec::new());
+    response.compressor_chain.clear();
+    assert!(matches!(
+        response.validate(),
+        Err(ResponseStateError::MissingCompressorChain {
+            disposition: Disposition::Applied
+        })
+    ));
+
+    response = CompressionResponse::passthrough(
+        &CompressionRequest::new("source", "a", Seam::PostTool),
+        2,
+    );
+    response.compressor_chain.push("impossible".into());
+    assert!(matches!(
+        response.validate(),
+        Err(ResponseStateError::UnexpectedCompressorChain {
+            disposition: Disposition::Passthrough
+        })
+    ));
+
+    response.compressor_chain.clear();
+    response.diagnostic = Some("only errors may diagnose".into());
+    assert!(matches!(
+        response.validate(),
+        Err(ResponseStateError::DiagnosticOnNonError {
+            disposition: Disposition::Passthrough
+        })
+    ));
+}
+
+#[test]
+fn response_decode_enforces_state_validation() {
+    let json = r#"{
+      "protocol_version": 1,
+      "output": "source",
+      "disposition": "passthrough",
+      "compressor_chain": ["json-cleanup"],
+      "reversibility": "lossless",
+      "before_tokens": 2,
+      "after_tokens": 2,
+      "stash_keys": [],
+      "tokenizer_id": "heuristic-v1"
+    }"#;
+    assert!(matches!(
+        CompressionResponse::from_json(json),
+        Err(ProtocolError::InvalidResponseState(
+            ResponseStateError::UnexpectedCompressorChain {
+                disposition: Disposition::Passthrough
+            }
+        ))
+    ));
 }
 
 #[test]

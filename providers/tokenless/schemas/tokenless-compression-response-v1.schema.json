@@ -7,9 +7,11 @@
     "protocol_version",
     "output",
     "disposition",
+    "compressor_chain",
     "reversibility",
     "before_tokens",
     "after_tokens",
+    "stash_keys",
     "tokenizer_id"
   ],
   "properties": {
@@ -31,12 +33,14 @@
       ]
     },
     "content_type": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1
     },
     "compressor_chain": {
       "type": "array",
       "items": {
-        "type": "string"
+        "type": "string",
+        "minLength": 1
       }
     },
     "reversibility": {
@@ -53,15 +57,139 @@
     "stash_keys": {
       "type": "array",
       "items": {
-        "type": "string"
-      }
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
     },
     "tokenizer_id": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1
     },
     "diagnostic": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
     }
   },
-  "additionalProperties": true
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "disposition": {
+            "enum": ["applied", "dry_run"]
+          }
+        },
+        "required": ["disposition"]
+      },
+      "then": {
+        "properties": {
+          "compressor_chain": {
+            "minItems": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "disposition": {
+            "enum": [
+              "passthrough",
+              "no_savings",
+              "reversibility_unavailable",
+              "timeout",
+              "error"
+            ]
+          }
+        },
+        "required": ["disposition"]
+      },
+      "then": {
+        "properties": {
+          "compressor_chain": {
+            "maxItems": 0
+          },
+          "reversibility": {
+            "const": "lossless"
+          },
+          "stash_keys": {
+            "maxItems": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "disposition": {
+            "const": "dry_run"
+          }
+        },
+        "required": ["disposition"]
+      },
+      "then": {
+        "properties": {
+          "reversibility": {
+            "enum": ["lossless", "unrecoverable"]
+          },
+          "stash_keys": {
+            "maxItems": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "reversibility": {
+            "const": "retrievable"
+          }
+        },
+        "required": ["reversibility"]
+      },
+      "then": {
+        "properties": {
+          "stash_keys": {
+            "minItems": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "reversibility": {
+            "const": "lossless"
+          }
+        },
+        "required": ["reversibility"]
+      },
+      "then": {
+        "properties": {
+          "stash_keys": {
+            "maxItems": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "disposition": {
+            "not": {
+              "const": "error"
+            }
+          }
+        },
+        "required": ["disposition"]
+      },
+      "then": {
+        "properties": {
+          "diagnostic": false
+        }
+      }
+    }
+  ],
+  "additionalProperties": false
 }

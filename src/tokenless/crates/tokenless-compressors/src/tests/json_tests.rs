@@ -17,7 +17,7 @@ fn output_value(outcome: &JsonOutcome) -> Value {
 }
 
 #[test]
-fn cleanup_reports_the_operation_without_side_channels() {
+fn cleanup_reports_source_loss_without_side_channels() {
     let outcome = JsonCompressor::default()
         .compress(
             r#"{"data":"kept","debug":"drop","empty":null}"#,
@@ -27,7 +27,19 @@ fn cleanup_reports_the_operation_without_side_channels() {
     assert_eq!(outcome.output, r#"{"data":"kept"}"#);
     assert_eq!(outcome.operations, [JsonOperation::Cleanup]);
     assert_eq!(outcome.recoverability, Recoverability::Lossless);
+    assert_eq!(outcome.source_fidelity, SourceFidelity::Unrecoverable);
     assert!(outcome.stash_writes.is_empty());
+}
+
+#[test]
+fn formatting_compaction_is_source_lossy() {
+    let outcome = JsonCompressor::default()
+        .compress(r#"{ "data": [1, 2, 3] }"#, &context(None))
+        .unwrap();
+    assert_eq!(outcome.output, r#"{"data":[1,2,3]}"#);
+    assert_eq!(outcome.operations, [JsonOperation::Cleanup]);
+    assert_eq!(outcome.recoverability, Recoverability::Lossless);
+    assert_eq!(outcome.source_fidelity, SourceFidelity::Unrecoverable);
 }
 
 #[test]
@@ -47,6 +59,7 @@ fn string_truncation_is_unicode_safe_and_bounded() {
         "truncation is not mislabeled as cleanup"
     );
     assert_eq!(outcome.recoverability, Recoverability::Unrecoverable);
+    assert_eq!(outcome.source_fidelity, SourceFidelity::Unrecoverable);
     assert_eq!(outcome.metrics.truncations, 1);
     assert_eq!(outcome.metrics.unrecoverable_truncations, 1);
 }
@@ -110,11 +123,33 @@ fn depth_truncation_stashes_the_exact_subtree() {
         .unwrap();
     assert_eq!(outcome.operations, [JsonOperation::Truncation]);
     assert_eq!(outcome.recoverability, Recoverability::Retrievable);
+    assert_eq!(outcome.source_fidelity, SourceFidelity::Retrievable);
     let hash = extract_hash(&outcome.output).unwrap();
     assert_eq!(
         store.retrieve(hash).unwrap().as_deref(),
         Some(serde_json::to_string(&subtree).unwrap().as_str())
     );
+}
+
+#[test]
+fn stashed_truncation_does_not_hide_unrecoverable_cleanup() {
+    let store = InMemoryStore::new();
+    let compressor = JsonCompressor::new(JsonCompressionConfig {
+        truncate_strings_at: 80,
+        ..JsonCompressionConfig::default()
+    });
+    let input = serde_json::json!({
+        "debug": "removed without a recovery artifact",
+        "value": "x".repeat(200),
+    });
+    let outcome = compressor
+        .compress(&serde_json::to_string(&input).unwrap(), &context(Some(&store)))
+        .unwrap();
+
+    assert_eq!(outcome.recoverability, Recoverability::Retrievable);
+    assert_eq!(outcome.source_fidelity, SourceFidelity::Unrecoverable);
+    assert_eq!(outcome.stash_writes.len(), 1);
+    assert!(!outcome.output.contains("debug"));
 }
 
 #[test]
@@ -199,6 +234,7 @@ fn toon_is_an_internal_json_operation() {
     });
     let outcome = compressor.compress(&input, &context).unwrap();
     assert_eq!(outcome.operations.last(), Some(&JsonOperation::Toon));
+    assert_eq!(outcome.source_fidelity, SourceFidelity::Lossless);
     assert!(serde_json::from_str::<Value>(&outcome.output).is_err());
 }
 

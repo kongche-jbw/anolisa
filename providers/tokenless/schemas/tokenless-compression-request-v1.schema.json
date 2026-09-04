@@ -12,16 +12,20 @@
       "type": "string"
     },
     "agent_id": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1
     },
     "session_id": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1
     },
     "tool_use_id": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1
     },
     "tool_name": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1
     },
     "seam": {
       "enum": ["before_model", "pre_tool", "post_tool", "proxy"]
@@ -42,8 +46,8 @@
           "type": "boolean"
         }
       },
-      "additionalProperties": true
+      "additionalProperties": false
     }
   },
-  "additionalProperties": true
+  "additionalProperties": false
 }

@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 
 #[test]
 #[ignore = "requires a built tokenless binary for the current platform"]
-fn cosh_post_tool_result_runs_through_core_and_tokenless() {
+fn cosh_keeps_source_when_tokenless_reports_information_loss() {
     let root = repository_root();
     let fixture: Value = serde_json::from_slice(
         &fs::read(root.join("providers/tokenless/fixtures/context-projection-prepare.json"))
@@ -61,7 +61,7 @@ fn cosh_post_tool_result_runs_through_core_and_tokenless() {
     )
     .expect("COSH hook runs through AW Core");
 
-    assert!(run.replacement_requested);
+    assert!(!run.replacement_requested);
     assert_eq!(
         run.receipts.len(),
         1,
@@ -87,12 +87,9 @@ fn cosh_post_tool_result_runs_through_core_and_tokenless() {
     let output: Value = serde_json::from_slice(&output).expect("COSH hook output is valid JSON");
     assert_eq!(
         output.get("systemMessage").and_then(Value::as_str),
-        Some("AW · tokenless · estimated context 359→110 tokens · saved 69%")
+        Some("AW · security · 2 checks unavailable")
     );
-    assert!(output
-        .pointer("/hookSpecificOutput/updatedToolResponse")
-        .and_then(Value::as_str)
-        .is_some_and(|content| content.starts_with("builds[6]")));
+    assert!(output.get("hookSpecificOutput").is_none());
 }
 
 fn repository_root() -> PathBuf {

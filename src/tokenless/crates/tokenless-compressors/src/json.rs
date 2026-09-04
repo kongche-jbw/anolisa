@@ -81,14 +81,26 @@ impl JsonOperation {
     }
 }
 
-/// Recovery state of a JSON candidate relative to its input.
+/// Task-relevant recovery state of a JSON candidate relative to its input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Recoverability {
-    /// No bounded content was removed.
+    /// No bounded task-relevant content was removed.
     Lossless,
-    /// Every truncation has a reachable Stash marker.
+    /// Every bounded omission has a reachable Stash marker.
     Retrievable,
-    /// At least one truncation cannot be recovered.
+    /// At least one bounded omission cannot be recovered.
+    Unrecoverable,
+}
+
+/// Recovery state for the exact source representation, including cleanup
+/// omissions and non-canonical JSON formatting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceFidelity {
+    /// No source field or value was removed.
+    Lossless,
+    /// Every source omission has a reachable Stash marker.
+    Retrievable,
+    /// At least one source omission cannot be recovered.
     Unrecoverable,
 }
 
@@ -112,6 +124,8 @@ pub struct JsonOutcome {
     pub operations: Vec<JsonOperation>,
     /// Recovery state of `output`.
     pub recoverability: Recoverability,
+    /// Recovery state of all source information in `output`.
+    pub source_fidelity: SourceFidelity,
     /// Every tentative write performed while producing candidates. The
     /// Runtime ledger decides which writes reach the final output.
     pub stash_writes: Vec<StashWrite>,
@@ -152,6 +166,8 @@ impl JsonCompressor {
         context: &JsonCompressionContext<'_>,
     ) -> Result<JsonOutcome, JsonError> {
         let (normalized, original) = parse_input(input)?;
+        let canonical_source = serde_json::to_string(&original)?;
+        let source_representation_is_canonical = input == canonical_source;
         let mut session = Session::new(&self.config, context.stash);
         let transformed = session.compress_value(&original, 0);
         let transformed = if context.preserve_top_level_shape {
@@ -182,34 +198,54 @@ impl JsonCompressor {
             .then(|| toon_candidate(base_value, base_text, context.min_toon_chars))
             .flatten();
 
-        let (output, recoverability, truncations, unrecoverable_truncations) =
+        let (output, recoverability, mut source_fidelity, truncations, unrecoverable_truncations) =
             if let Some(toon) = toon {
                 operations.push(JsonOperation::Toon);
                 if cleanup_selected {
                     (
                         toon,
                         session.recoverability(),
+                        session.source_fidelity(),
                         session.truncations,
                         session.unrecoverable_truncations,
                     )
                 } else {
-                    (toon, Recoverability::Lossless, 0, 0)
+                    (
+                        toon,
+                        Recoverability::Lossless,
+                        SourceFidelity::Lossless,
+                        0,
+                        0,
+                    )
                 }
             } else if cleanup_selected {
                 (
                     compact,
                     session.recoverability(),
+                    session.source_fidelity(),
                     session.truncations,
                     session.unrecoverable_truncations,
                 )
             } else {
-                (normalized, Recoverability::Lossless, 0, 0)
+                (
+                    normalized,
+                    Recoverability::Lossless,
+                    SourceFidelity::Lossless,
+                    0,
+                    0,
+                )
             };
+        if !operations.is_empty() && !source_representation_is_canonical {
+            // The candidate carries the JSON value, not the source's exact
+            // whitespace, key ordering, or string-envelope representation.
+            source_fidelity = SourceFidelity::Unrecoverable;
+        }
 
         Ok(JsonOutcome {
             output,
             operations,
             recoverability,
+            source_fidelity,
             stash_writes: session.stash_writes,
             metrics: JsonMetrics {
                 stash_errors: session.stash_errors,
@@ -310,6 +346,21 @@ impl<'a> Session<'a> {
             Recoverability::Retrievable
         } else {
             Recoverability::Unrecoverable
+        }
+    }
+
+    fn source_fidelity(&self) -> SourceFidelity {
+        if self.cleanup_changes > 0 {
+            // Cleanup has no governed recovery artifact. Even when every
+            // truncation is stashed, a dropped debug/null/empty value makes
+            // the candidate as a whole source-lossy.
+            SourceFidelity::Unrecoverable
+        } else {
+            match self.recoverability() {
+                Recoverability::Lossless => SourceFidelity::Lossless,
+                Recoverability::Retrievable => SourceFidelity::Retrievable,
+                Recoverability::Unrecoverable => SourceFidelity::Unrecoverable,
+            }
         }
     }
 

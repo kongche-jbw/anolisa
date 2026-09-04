@@ -78,6 +78,9 @@ impl EntryOutcome {
     fn passthrough(request: &CompressionRequest, diagnostic: Option<String>) -> Self {
         let mut response =
             CompressionResponse::passthrough(request, estimate_tokens(&request.content) as u64);
+        if diagnostic.is_some() {
+            response.disposition = Disposition::Error;
+        }
         response.diagnostic = diagnostic;
         Self {
             response,
@@ -232,16 +235,27 @@ fn before_model(
         CompressionResponse::passthrough(request, estimate_tokens(&request.content) as u64);
     response.output = result.output.clone();
     response.disposition = result.disposition;
-    response.compressor_chain = vec!["schema-compress".into()];
+    if measured {
+        response.compressor_chain = vec!["schema-compress".into()];
+    }
     response.after_tokens = if measured {
         result.after_tokens as u64
     } else {
         result.before_tokens as u64
     };
-    response.reversibility = if applied && result.stash_writes.unwrap_or(0) > 0 {
-        Reversibility::Retrievable
-    } else {
-        Reversibility::Lossless
+    response.reversibility = match result.disposition {
+        // The schema compressor stashes truncated descriptions, but it can
+        // also remove title/example fields without a recovery artifact. A
+        // nonempty stash therefore proves partial recovery only.
+        Disposition::Applied => Reversibility::Unrecoverable,
+        // The dry-run candidate can omit schema descriptions, but its
+        // tentative stash state has been rolled back.
+        Disposition::DryRun => Reversibility::Unrecoverable,
+        Disposition::Passthrough
+        | Disposition::NoSavings
+        | Disposition::ReversibilityUnavailable
+        | Disposition::Timeout
+        | Disposition::Error => Reversibility::Lossless,
     };
     if applied {
         response.stash_keys = pending_keys;
@@ -736,16 +750,20 @@ mod tests {
         assert_eq!(outcome.response.output, content);
         assert_ne!(outcome.stats.measured_text, content);
         assert!(outcome.response.after_tokens < outcome.response.before_tokens);
+        assert_eq!(outcome.response.compressor_chain, ["response-cleanup"]);
+        assert_eq!(outcome.response.reversibility, Reversibility::Unrecoverable);
         assert_eq!(outcome.stash_writes, None);
+        assert_eq!(outcome.response.validate(), Ok(()));
     }
 
     #[test]
-    fn oversized_content_passes_through_with_a_diagnostic() {
+    fn oversized_content_fails_open_with_a_diagnostic() {
         let content = format!(r#"{{"k":"{}"}}"#, "x".repeat(MAX_INPUT_BYTES));
         let outcome = compress_with_store(&post_tool_request(&content, "Bash"), &ENABLED, None);
-        assert_eq!(outcome.response.disposition, Disposition::Passthrough);
+        assert_eq!(outcome.response.disposition, Disposition::Error);
         assert_eq!(outcome.response.content_type.as_deref(), Some("unknown"));
         assert!(outcome.response.diagnostic.is_some());
+        assert_eq!(outcome.response.validate(), Ok(()));
     }
 
     #[test]
@@ -760,7 +778,7 @@ mod tests {
         assert_eq!(outcome.response.disposition, Disposition::Applied);
         assert_eq!(outcome.response.compressor_chain, ["schema-compress"]);
         assert_eq!(outcome.stats.op, OperationType::CompressSchema);
-        assert_eq!(outcome.response.reversibility, Reversibility::Retrievable);
+        assert_eq!(outcome.response.reversibility, Reversibility::Unrecoverable);
         let output: serde_json::Value = serde_json::from_str(&outcome.response.output).unwrap();
         assert!(output.is_array());
         assert!(outcome.response.output.contains("<<tokenless:"));
@@ -809,6 +827,9 @@ mod tests {
         assert_eq!(outcome.response.disposition, Disposition::DryRun);
         assert_eq!(outcome.response.output, content);
         assert_ne!(outcome.stats.measured_text, content);
+        assert_eq!(outcome.response.compressor_chain, ["schema-compress"]);
+        assert_eq!(outcome.response.reversibility, Reversibility::Unrecoverable);
+        assert_eq!(outcome.response.validate(), Ok(()));
     }
 
     #[test]

@@ -41,8 +41,8 @@ authority = "advise"
 scopes = ["agent_session", "turn", "tool_call"]
 input_contract = { schema = "context.projection.prepare.input/v1", resource = "schemas/context-projection-prepare-input-v1.schema.json", sha256 = "07d62b903479892f45620173c1ce7804176cfd8b97350e6035b52823f15053cb" }
 output_contract = { schema = "context.projection.prepare.output/v1", resource = "schemas/context-projection-prepare-output-v1.schema.json", sha256 = "4a171682511cfad0611626ab942c31d33928140b8eccd99a7e4d3c2e63997f37" }
-native_input = { resource = "schemas/tokenless-compression-request-v1.schema.json", sha256 = "c28fb59c0f3138b4af156fb275122367b4b5f49ec90796372484594a92fdb939" }
-native_output = { resource = "schemas/tokenless-compression-response-v1.schema.json", sha256 = "4dc910fe6d01671890c444c1117d0fa4a57d0e7153d63d27cdf07f9704465878" }
+native_input = { resource = "schemas/tokenless-compression-request-v1.schema.json", sha256 = "f227f5179a54f759ce9db0166a76c29636de4ba2effb4501821f4d6c453fd828" }
+native_output = { resource = "schemas/tokenless-compression-response-v1.schema.json", sha256 = "293dc3e02e3a975f5d9fecf7e97b866457689daf8e1521c50436b434726ea7f7" }
 
 [capabilities.codec]
 kind = "json-map/v1"

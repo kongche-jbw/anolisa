@@ -10,6 +10,6 @@ mod terminal_cleanup;
 pub use build_log::{BuildLogMode, BuildLogOutcome, compress_log};
 pub use json::{
     JsonCompressionConfig, JsonCompressionContext, JsonCompressor, JsonError, JsonMetrics,
-    JsonOperation, JsonOutcome, Recoverability,
+    JsonOperation, JsonOutcome, Recoverability, SourceFidelity,
 };
 pub use terminal_cleanup::clean_terminal;

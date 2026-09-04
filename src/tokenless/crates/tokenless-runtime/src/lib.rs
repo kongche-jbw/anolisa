@@ -1217,12 +1217,10 @@ mod tests {
     }
 
     #[test]
-    fn pure_cleanup_savings_are_lossless_and_pass_required_reversibility() {
-        // Dropped debug fields, nulls, and empties keep the pre-pipeline
-        // judgment that they are cleanup, not content loss: with no
-        // truncation the candidate is lossless and applies even where
-        // reversible output is required and no stash exists. (The
-        // pre-pipeline path rejected exactly this combination.)
+    fn pure_cleanup_keeps_internal_task_relevance_policy() {
+        // The legacy explicit API treats cleanup-only omissions as
+        // task-irrelevant. The AW-facing protocol publishes the separate,
+        // stricter source-fidelity result instead of weakening this policy.
         let input = serde_json::to_string(&serde_json::json!({
             "value": 1,
             "noise": null,

@@ -1855,6 +1855,8 @@ fn compress_applies_and_reports_the_protocol_response() {
         response["compressor_chain"],
         serde_json::json!(["response-cleanup"])
     );
+    assert_eq!(response["reversibility"], "unrecoverable");
+    assert_eq!(response["stash_keys"], serde_json::json!([]));
     let emitted = response["output"].as_str().unwrap();
     assert!(emitted.chars().count() < content.chars().count());
     assert!(
@@ -1929,6 +1931,12 @@ fn compress_dry_run_emits_the_original_and_measures() {
     let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(response["disposition"], "dry_run");
     assert_eq!(response["output"].as_str().unwrap(), content);
+    assert_eq!(
+        response["compressor_chain"],
+        serde_json::json!(["response-cleanup"])
+    );
+    assert_eq!(response["reversibility"], "unrecoverable");
+    assert_eq!(response["stash_keys"], serde_json::json!([]));
     assert!(response["after_tokens"].as_u64() < response["before_tokens"].as_u64());
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("dry-run mode"));
