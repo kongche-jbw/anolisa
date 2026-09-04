@@ -24,14 +24,14 @@ pub const SECURITY_CONTENT_INSPECT_INPUT_SCHEMA_ID: &str = "security.content.ins
 pub const SECURITY_CONTENT_INSPECT_INPUT_SCHEMA_VERSION: u16 = 1;
 /// SHA-256 of the current canonical content-inspection input schema resource.
 pub const SECURITY_CONTENT_INSPECT_INPUT_SCHEMA_SHA256: &str =
-    "4d1c7d2b3c58d29af35c6dce10d36a2774d12ec7d2d7928e262cf978c2babeb3";
+    "836231087cc27186746e4316e92dd842053b71ebc1e9f392d99f521adbdfcec4";
 /// Stable identity of the canonical content-inspection output schema.
 pub const SECURITY_CONTENT_INSPECT_OUTPUT_SCHEMA_ID: &str = "security.content.inspect.output";
 /// Current revision of the canonical content-inspection output schema.
 pub const SECURITY_CONTENT_INSPECT_OUTPUT_SCHEMA_VERSION: u16 = 1;
 /// SHA-256 of the current canonical content-inspection output schema resource.
 pub const SECURITY_CONTENT_INSPECT_OUTPUT_SCHEMA_SHA256: &str =
-    "15d47c6c1c9b43928d9613485bf8dee398622e2b1b7f0ab96a5ad7d5342d55ef";
+    "4a7a0771081fba792a889d8a1182b7ade08e4a7864c93dd5badb46f259e83bd5";
 
 /// Stable identity of the code-inspection Capability.
 pub const SECURITY_CODE_INSPECT_CAPABILITY_ID: &str = "security.code.inspect";
@@ -43,14 +43,14 @@ pub const SECURITY_CODE_INSPECT_INPUT_SCHEMA_ID: &str = "security.code.inspect.i
 pub const SECURITY_CODE_INSPECT_INPUT_SCHEMA_VERSION: u16 = 1;
 /// SHA-256 of the current canonical code-inspection input schema resource.
 pub const SECURITY_CODE_INSPECT_INPUT_SCHEMA_SHA256: &str =
-    "856b0626c2f2523cc78db468daae2dae5df685707950e6dd4f5123d4e616236f";
+    "c5614f6e464a401621a7d8d1e1c8245edc504919ffde6c7c20d01799bd961c1e";
 /// Stable identity of the canonical code-inspection output schema.
 pub const SECURITY_CODE_INSPECT_OUTPUT_SCHEMA_ID: &str = "security.code.inspect.output";
 /// Current revision of the canonical code-inspection output schema.
 pub const SECURITY_CODE_INSPECT_OUTPUT_SCHEMA_VERSION: u16 = 1;
 /// SHA-256 of the current canonical code-inspection output schema resource.
 pub const SECURITY_CODE_INSPECT_OUTPUT_SCHEMA_SHA256: &str =
-    "735eae6cb55642b2f956214edccf7a09d0931ab93c6be1bcaaaaac0ceed276b0";
+    "d41ea55912472845fab80695e5bc78a2cb84996bccaf49264b8b4c99064308f7";
 
 /// Stable identity of the command-inspection Capability.
 pub const SECURITY_COMMAND_INSPECT_CAPABILITY_ID: &str = "security.command.inspect";
@@ -62,14 +62,14 @@ pub const SECURITY_COMMAND_INSPECT_INPUT_SCHEMA_ID: &str = "security.command.ins
 pub const SECURITY_COMMAND_INSPECT_INPUT_SCHEMA_VERSION: u16 = 1;
 /// SHA-256 of the current canonical command-inspection input schema resource.
 pub const SECURITY_COMMAND_INSPECT_INPUT_SCHEMA_SHA256: &str =
-    "77777d6a3168724747c8070735690d391c7492ad0255f4d4520188763b298219";
+    "546e5fc3b98ecc800160a70e0ad8a3e02be6cee02dbe8fa6ff6987be8eb511de";
 /// Stable identity of the canonical command-inspection output schema.
 pub const SECURITY_COMMAND_INSPECT_OUTPUT_SCHEMA_ID: &str = "security.command.inspect.output";
 /// Current revision of the canonical command-inspection output schema.
 pub const SECURITY_COMMAND_INSPECT_OUTPUT_SCHEMA_VERSION: u16 = 1;
 /// SHA-256 of the current canonical command-inspection output schema resource.
 pub const SECURITY_COMMAND_INSPECT_OUTPUT_SCHEMA_SHA256: &str =
-    "2b6564e583294b3777ae1ec48baa6744a4f169ae010757bb9568674dfabc3d11";
+    "3618b57a48d32f6d7f1dcbb3ac18594fa48196deaee60131649014345ea9c57b";
 
 /// Maximum UTF-8 byte length of a security rule identity.
 pub const MAX_SECURITY_RULE_ID_BYTES: usize = 64;
@@ -180,6 +180,8 @@ pub enum SecurityDetectedLanguage {
     Bash,
     /// Python.
     Python,
+    /// Both shell and Python rules were applied to the same content.
+    Mixed,
     /// The implementation could not classify the content.
     Unknown,
 }
@@ -287,6 +289,24 @@ pub struct ContentInspection {
     pub truncated: bool,
 }
 
+impl ContentInspection {
+    /// Verifies the cross-field invariants of a produced inspection fact.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a clean verdict is incomplete or carries
+    /// findings, a finding verdict carries no findings, a finding count is
+    /// zero, or the result exceeds the canonical finding bound.
+    pub fn validate(&self) -> Result<(), SecurityOutputValidationError> {
+        validate_observation(
+            self.verdict,
+            &self.findings,
+            self.truncated,
+            SecurityObservationKind::Content,
+        )
+    }
+}
+
 /// Content-free result of `security.code.inspect/v1`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -299,9 +319,26 @@ pub struct CodeInspection {
     pub scanned_bytes: u64,
     /// Whether the implementation stopped before the whole artifact.
     pub truncated: bool,
-    /// Language the implementation reported analysing, when it classified one.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub language_detected: Option<SecurityDetectedLanguage>,
+    /// Language or language set whose rules the implementation applied.
+    pub language_detected: SecurityDetectedLanguage,
+}
+
+impl CodeInspection {
+    /// Verifies the cross-field invariants of a produced inspection fact.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a clean verdict is incomplete or carries
+    /// findings, a finding verdict carries no findings, a finding count is
+    /// zero, or the result exceeds the canonical finding bound.
+    pub fn validate(&self) -> Result<(), SecurityOutputValidationError> {
+        validate_observation(
+            self.verdict,
+            &self.findings,
+            self.truncated,
+            SecurityObservationKind::Code,
+        )
+    }
 }
 
 /// Gate verdict and rationale returned by `security.command.inspect/v1`.
@@ -316,6 +353,172 @@ pub struct CommandInspection {
     pub findings: Vec<SecurityFinding>,
     /// Bytes the implementation reported inspecting.
     pub scanned_bytes: u64,
+}
+
+impl CommandInspection {
+    /// Verifies the cross-field invariants of a produced Tool Call verdict.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when an allow verdict carries rationale, a warn or
+    /// deny verdict lacks rationale, a finding count is zero, or either list
+    /// exceeds its canonical bound.
+    pub fn validate(&self) -> Result<(), SecurityOutputValidationError> {
+        validate_findings(&self.findings)?;
+        if self.reasons.len() > MAX_GATE_REASONS {
+            return Err(SecurityOutputValidationError::TooManyReasons {
+                actual: self.reasons.len(),
+            });
+        }
+
+        match self.verdict {
+            CommandVerdict::Allow => {
+                if !self.reasons.is_empty() {
+                    return Err(SecurityOutputValidationError::AllowHasReasons);
+                }
+                if !self.findings.is_empty() {
+                    return Err(SecurityOutputValidationError::AllowHasFindings);
+                }
+            }
+            CommandVerdict::Warn | CommandVerdict::Deny => {
+                if self.reasons.is_empty() {
+                    return Err(SecurityOutputValidationError::GateVerdictWithoutReasons {
+                        verdict: self.verdict,
+                    });
+                }
+                if self.findings.is_empty() {
+                    return Err(SecurityOutputValidationError::GateVerdictWithoutFindings {
+                        verdict: self.verdict,
+                    });
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// Failure returned when a decoded security output contradicts its verdict.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum SecurityOutputValidationError {
+    /// An inspection exceeded the bounded canonical finding list.
+    #[error("security output has {actual} findings; maximum is {MAX_OBSERVATION_FINDINGS}")]
+    TooManyFindings {
+        /// Number of findings supplied by the Provider.
+        actual: usize,
+    },
+    /// A finding claimed to represent no matches.
+    #[error("security finding at index {index} has a zero match count")]
+    ZeroFindingCount {
+        /// Zero-based index of the invalid finding.
+        index: usize,
+    },
+    /// A clean observation carried one or more findings.
+    #[error("clean {kind} inspection must not carry findings")]
+    CleanHasFindings {
+        /// Capability family whose output was invalid.
+        kind: SecurityObservationKind,
+    },
+    /// A clean observation did not cover the complete submitted artifact.
+    #[error("clean {kind} inspection must not be truncated")]
+    CleanWasTruncated {
+        /// Capability family whose output was invalid.
+        kind: SecurityObservationKind,
+    },
+    /// A suspicious or sensitive observation had no supporting finding.
+    #[error("{verdict:?} {kind} inspection must carry at least one finding")]
+    ObservationVerdictWithoutFindings {
+        /// Capability family whose output was invalid.
+        kind: SecurityObservationKind,
+        /// Unsupported verdict claim.
+        verdict: SecurityInspectionVerdict,
+    },
+    /// A gate result exceeded the bounded canonical reason list.
+    #[error("command inspection has {actual} reasons; maximum is {MAX_GATE_REASONS}")]
+    TooManyReasons {
+        /// Number of reasons supplied by the Provider.
+        actual: usize,
+    },
+    /// An allow verdict carried one or more rationale codes.
+    #[error("allow command verdict must not carry reasons")]
+    AllowHasReasons,
+    /// An allow verdict carried one or more findings.
+    #[error("allow command verdict must not carry findings")]
+    AllowHasFindings,
+    /// A warn or deny verdict had no rationale code.
+    #[error("{verdict:?} command verdict must carry at least one reason")]
+    GateVerdictWithoutReasons {
+        /// Unsupported verdict claim.
+        verdict: CommandVerdict,
+    },
+    /// A warn or deny verdict had no supporting finding.
+    #[error("{verdict:?} command verdict must carry at least one finding")]
+    GateVerdictWithoutFindings {
+        /// Unsupported verdict claim.
+        verdict: CommandVerdict,
+    },
+}
+
+/// Security observation family used to identify invariant failures safely.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecurityObservationKind {
+    /// `security.content.inspect/v1` output.
+    Content,
+    /// `security.code.inspect/v1` output.
+    Code,
+}
+
+impl std::fmt::Display for SecurityObservationKind {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Content => formatter.write_str("content"),
+            Self::Code => formatter.write_str("code"),
+        }
+    }
+}
+
+fn validate_observation(
+    verdict: SecurityInspectionVerdict,
+    findings: &[SecurityFinding],
+    truncated: bool,
+    kind: SecurityObservationKind,
+) -> Result<(), SecurityOutputValidationError> {
+    validate_findings(findings)?;
+
+    match verdict {
+        SecurityInspectionVerdict::Clean => {
+            if !findings.is_empty() {
+                return Err(SecurityOutputValidationError::CleanHasFindings { kind });
+            }
+            if truncated {
+                return Err(SecurityOutputValidationError::CleanWasTruncated { kind });
+            }
+        }
+        SecurityInspectionVerdict::Suspicious | SecurityInspectionVerdict::Sensitive => {
+            if findings.is_empty() {
+                return Err(
+                    SecurityOutputValidationError::ObservationVerdictWithoutFindings {
+                        kind,
+                        verdict,
+                    },
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_findings(findings: &[SecurityFinding]) -> Result<(), SecurityOutputValidationError> {
+    if findings.len() > MAX_OBSERVATION_FINDINGS {
+        return Err(SecurityOutputValidationError::TooManyFindings {
+            actual: findings.len(),
+        });
+    }
+    if let Some(index) = findings.iter().position(|finding| finding.count == 0) {
+        return Err(SecurityOutputValidationError::ZeroFindingCount { index });
+    }
+    Ok(())
 }
 
 /// Pending Tool Call an Agent Environment offers to a Mediate Capability.
@@ -659,5 +862,181 @@ mod tests {
         });
 
         assert!(serde_json::from_value::<ContentInspection>(smuggled).is_err());
+    }
+
+    #[test]
+    fn observation_validation_rejects_unsupported_verdict_claims() {
+        let clean = ContentInspection {
+            verdict: SecurityInspectionVerdict::Clean,
+            findings: Vec::new(),
+            scanned_bytes: 42,
+            truncated: false,
+        };
+        assert_eq!(clean.validate(), Ok(()));
+
+        let clean_with_finding = ContentInspection {
+            findings: vec![finding(1)],
+            ..clean.clone()
+        };
+        assert_eq!(
+            clean_with_finding.validate(),
+            Err(SecurityOutputValidationError::CleanHasFindings {
+                kind: SecurityObservationKind::Content,
+            })
+        );
+
+        let truncated_clean = ContentInspection {
+            truncated: true,
+            ..clean
+        };
+        assert_eq!(
+            truncated_clean.validate(),
+            Err(SecurityOutputValidationError::CleanWasTruncated {
+                kind: SecurityObservationKind::Content,
+            })
+        );
+
+        let unsupported_suspicious = CodeInspection {
+            verdict: SecurityInspectionVerdict::Suspicious,
+            findings: Vec::new(),
+            scanned_bytes: 42,
+            truncated: false,
+            language_detected: SecurityDetectedLanguage::Mixed,
+        };
+        assert_eq!(
+            unsupported_suspicious.validate(),
+            Err(
+                SecurityOutputValidationError::ObservationVerdictWithoutFindings {
+                    kind: SecurityObservationKind::Code,
+                    verdict: SecurityInspectionVerdict::Suspicious,
+                }
+            )
+        );
+
+        let supported_sensitive = CodeInspection {
+            verdict: SecurityInspectionVerdict::Sensitive,
+            findings: vec![finding(1)],
+            scanned_bytes: 42,
+            truncated: true,
+            language_detected: SecurityDetectedLanguage::Mixed,
+        };
+        assert_eq!(supported_sensitive.validate(), Ok(()));
+        assert_eq!(
+            serde_json::to_value(supported_sensitive)
+                .expect("mixed language is serializable")
+                .pointer("/language_detected"),
+            Some(&serde_json::json!("mixed"))
+        );
+
+        let missing_language = serde_json::json!({
+            "verdict": "clean",
+            "findings": [],
+            "scanned_bytes": 42,
+            "truncated": false
+        });
+        assert!(serde_json::from_value::<CodeInspection>(missing_language).is_err());
+    }
+
+    #[test]
+    fn observation_validation_rejects_invalid_finding_cardinality() {
+        let zero_count = ContentInspection {
+            verdict: SecurityInspectionVerdict::Sensitive,
+            findings: vec![finding(0)],
+            scanned_bytes: 42,
+            truncated: false,
+        };
+        assert_eq!(
+            zero_count.validate(),
+            Err(SecurityOutputValidationError::ZeroFindingCount { index: 0 })
+        );
+
+        let oversized = ContentInspection {
+            verdict: SecurityInspectionVerdict::Sensitive,
+            findings: vec![finding(1); MAX_OBSERVATION_FINDINGS + 1],
+            scanned_bytes: 42,
+            truncated: false,
+        };
+        assert_eq!(
+            oversized.validate(),
+            Err(SecurityOutputValidationError::TooManyFindings {
+                actual: MAX_OBSERVATION_FINDINGS + 1,
+            })
+        );
+    }
+
+    #[test]
+    fn command_validation_binds_verdicts_to_evidence() {
+        let allow = CommandInspection {
+            verdict: CommandVerdict::Allow,
+            reasons: Vec::new(),
+            findings: Vec::new(),
+            scanned_bytes: 42,
+        };
+        assert_eq!(allow.validate(), Ok(()));
+
+        let allow_with_reason = CommandInspection {
+            reasons: vec![rule_id()],
+            ..allow.clone()
+        };
+        assert_eq!(
+            allow_with_reason.validate(),
+            Err(SecurityOutputValidationError::AllowHasReasons)
+        );
+
+        let allow_with_finding = CommandInspection {
+            findings: vec![finding(1)],
+            ..allow
+        };
+        assert_eq!(
+            allow_with_finding.validate(),
+            Err(SecurityOutputValidationError::AllowHasFindings)
+        );
+
+        let warn_without_reason = CommandInspection {
+            verdict: CommandVerdict::Warn,
+            reasons: Vec::new(),
+            findings: vec![finding(1)],
+            scanned_bytes: 42,
+        };
+        assert_eq!(
+            warn_without_reason.validate(),
+            Err(SecurityOutputValidationError::GateVerdictWithoutReasons {
+                verdict: CommandVerdict::Warn,
+            })
+        );
+
+        let deny_without_finding = CommandInspection {
+            verdict: CommandVerdict::Deny,
+            reasons: vec![rule_id()],
+            findings: Vec::new(),
+            scanned_bytes: 42,
+        };
+        assert_eq!(
+            deny_without_finding.validate(),
+            Err(SecurityOutputValidationError::GateVerdictWithoutFindings {
+                verdict: CommandVerdict::Deny,
+            })
+        );
+
+        let deny = CommandInspection {
+            findings: vec![finding(1)],
+            ..deny_without_finding
+        };
+        assert_eq!(deny.validate(), Ok(()));
+    }
+
+    fn finding(count: u32) -> SecurityFinding {
+        SecurityFinding {
+            rule_id: rule_id(),
+            category: SecurityFindingCategory::DangerousPattern,
+            severity: SecurityFindingSeverity::High,
+            confidence: SecurityFindingConfidence::High,
+            count,
+        }
+    }
+
+    fn rule_id() -> SecurityRuleId {
+        SecurityRuleId::parse("shell.dangerous_pattern")
+            .expect("fixture security rule identity is valid")
     }
 }

@@ -27,6 +27,9 @@ pub enum BoundedStringError {
     /// NUL bytes are forbidden at transport and operating-system boundaries.
     #[error("value must not contain a NUL character")]
     ContainsNul,
+    /// Canonical names are stable protocol labels, not presentation text.
+    #[error("name must use only non-space printable ASCII characters (`!` through `~`)")]
+    InvalidNameCharacter,
 }
 
 fn validate_bounded(value: &str, max_bytes: usize) -> Result<(), BoundedStringError> {
@@ -42,8 +45,22 @@ fn validate_bounded(value: &str, max_bytes: usize) -> Result<(), BoundedStringEr
     Ok(())
 }
 
+fn allow_any_bounded_value(_value: &str) -> Result<(), BoundedStringError> {
+    Ok(())
+}
+
+fn validate_stable_name(value: &str) -> Result<(), BoundedStringError> {
+    if !value.bytes().all(|byte| byte.is_ascii_graphic()) {
+        return Err(BoundedStringError::InvalidNameCharacter);
+    }
+    Ok(())
+}
+
 macro_rules! bounded_string {
     ($name:ident, $max:ident, $doc:literal) => {
+        bounded_string!($name, $max, $doc, allow_any_bounded_value);
+    };
+    ($name:ident, $max:ident, $doc:literal, $validate:ident) => {
         #[doc = $doc]
         #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
         pub struct $name(String);
@@ -53,6 +70,7 @@ macro_rules! bounded_string {
             pub fn new(value: impl Into<String>) -> Result<Self, BoundedStringError> {
                 let value = value.into();
                 validate_bounded(&value, $max)?;
+                $validate(&value)?;
                 Ok(Self(value))
             }
 
@@ -92,7 +110,8 @@ bounded_string!(
 bounded_string!(
     BoundedName,
     MAX_NAME_BYTES,
-    "A bounded authority, operation, runtime, or profile name."
+    "A canonical stable name using 1-128 non-space printable ASCII characters.",
+    validate_stable_name
 );
 bounded_string!(
     BoundedOpaque,
@@ -163,4 +182,60 @@ pub struct TargetRef {
     pub authority: BoundedName,
     /// Opaque target identifier within the authority.
     pub identifier: BoundedOpaque,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        BoundedName, BoundedOpaque, BoundedStringError, BoundedText, IdempotencyKey, MAX_NAME_BYTES,
+    };
+
+    #[test]
+    fn bounded_names_use_the_canonical_stable_label_subset() {
+        for accepted in ["!", "~", "text/plain", "security.code.inspect/v1"] {
+            assert_eq!(
+                BoundedName::new(accepted)
+                    .expect("non-space printable ASCII is a stable name")
+                    .as_str(),
+                accepted
+            );
+        }
+        BoundedName::new("a".repeat(MAX_NAME_BYTES))
+            .expect("the exact stable-name byte limit is accepted");
+
+        for rejected in ["has space", "line\nbreak", "tab\tname", "café", "\u{7f}"] {
+            assert_eq!(
+                BoundedName::new(rejected),
+                Err(BoundedStringError::InvalidNameCharacter),
+                "{rejected:?} must not cross the canonical name boundary"
+            );
+        }
+        assert_eq!(BoundedName::new(""), Err(BoundedStringError::Empty));
+        assert_eq!(
+            BoundedName::new("a".repeat(MAX_NAME_BYTES + 1)),
+            Err(BoundedStringError::TooLong {
+                max_bytes: MAX_NAME_BYTES,
+            })
+        );
+        assert_eq!(
+            BoundedName::new("nul\0name"),
+            Err(BoundedStringError::ContainsNul)
+        );
+    }
+
+    #[test]
+    fn bounded_name_deserialization_applies_the_same_stable_label_rule() {
+        assert!(serde_json::from_value::<BoundedName>(serde_json::json!("tool_name")).is_ok());
+        assert!(serde_json::from_value::<BoundedName>(serde_json::json!("tool name")).is_err());
+        assert!(serde_json::from_value::<BoundedName>(serde_json::json!("工具")).is_err());
+    }
+
+    #[test]
+    fn other_bounded_values_retain_text_and_opaque_semantics() {
+        for value in ["presentation text", "工具"] {
+            BoundedText::new(value).expect("bounded text permits display characters");
+            BoundedOpaque::new(value).expect("bounded opaque values preserve their payload");
+            IdempotencyKey::new(value).expect("bounded idempotency keys remain opaque");
+        }
+    }
 }

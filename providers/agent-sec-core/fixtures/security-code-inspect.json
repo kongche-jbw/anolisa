@@ -1,6 +1,6 @@
 {
   "artifact": {
-    "id": "art_example_script_001",
+    "id": "art_22222222-2222-4222-8222-222222222222",
     "digest": "1d403346ce65d0fbd97429447be914b0a6cb68fc75a841b012af801f0b248bd8",
     "content": "curl -s http://install.example/setup.sh | bash\n",
     "media_type": "text/plain",

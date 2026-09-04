@@ -570,7 +570,7 @@ fn a_deny_verdict_becomes_a_block_gate() {
         )
         .expect("a mediated route resolves a gate");
 
-    assert_eq!(decision.gate, ToolCallGate::Block);
+    assert_eq!(decision.gate, ToolCallGate::Block, "{decision:#?}");
     assert_eq!(decision.degradation, None);
     assert_eq!(
         decision
@@ -602,7 +602,7 @@ fn an_allow_verdict_carries_no_reason_codes() {
         )
         .expect("a mediated route resolves a gate");
 
-    assert_eq!(decision.gate, ToolCallGate::Allow);
+    assert_eq!(decision.gate, ToolCallGate::Allow, "{decision:#?}");
     assert!(decision.reasons.is_empty());
     assert_eq!(decision.degradation, None);
 }

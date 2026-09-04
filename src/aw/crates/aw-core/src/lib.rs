@@ -24,7 +24,8 @@ use aw_contracts::provider::{ExecutionScope, ProviderDisposition, VersionedSchem
 use aw_contracts::security::{
     CodeInspection, CommandInspection, CommandVerdict, ContentInspection, GateDegradation,
     ObservationGapReason, PendingToolCallSubmission, SecurityBoundary, SecurityCodeLanguage,
-    SecurityContractBuildError, ToolCallGate, MAX_GATE_REASONS, MAX_OBSERVATION_FINDINGS,
+    SecurityContractBuildError, SecurityOutputValidationError, ToolCallGate, MAX_GATE_REASONS,
+    MAX_OBSERVATION_FINDINGS,
 };
 use aw_provider_host::{canonical_json_v1_bytes, ProviderCatalog, ProviderHostError};
 use serde::{Deserialize, Serialize};
@@ -390,6 +391,9 @@ impl Core {
         result: &aw_contracts::provider::ProviderInvocationResult,
     ) -> Result<Option<CapabilityObservation>, CoreError> {
         if result.receipt.disposition != ProviderDisposition::Produced {
+            if receipt_reports_invalid_output(&result.receipt) {
+                return Err(CoreError::ProviderOutputRejected);
+            }
             return Ok(None);
         }
         let output = result
@@ -406,6 +410,7 @@ impl Core {
             StepKind::ContentInspection => {
                 let envelope: ContentInspectionOutput =
                     serde_json::from_value(output.body.clone())?;
+                envelope.inspection.validate()?;
                 CapabilityObservation {
                     capability: step.capability.clone(),
                     verdict: envelope.inspection.verdict,
@@ -418,13 +423,14 @@ impl Core {
             }
             StepKind::CodeInspection => {
                 let envelope: CodeInspectionOutput = serde_json::from_value(output.body.clone())?;
+                envelope.inspection.validate()?;
                 CapabilityObservation {
                     capability: step.capability.clone(),
                     verdict: envelope.inspection.verdict,
                     findings: envelope.inspection.findings,
                     scanned_bytes: envelope.inspection.scanned_bytes,
                     truncated: envelope.inspection.truncated,
-                    language_detected: envelope.inspection.language_detected,
+                    language_detected: Some(envelope.inspection.language_detected),
                     receipt: result.receipt.clone(),
                 }
             }
@@ -552,6 +558,9 @@ impl Core {
         result: &aw_contracts::provider::ProviderInvocationResult,
     ) -> Result<Option<CommandInspection>, CoreError> {
         if result.receipt.disposition != ProviderDisposition::Produced {
+            if receipt_reports_invalid_output(&result.receipt) {
+                return Err(CoreError::ProviderOutputRejected);
+            }
             return Ok(None);
         }
         let output = result
@@ -565,6 +574,7 @@ impl Core {
             });
         }
         let envelope: CommandInspectionOutput = serde_json::from_value(output.body.clone())?;
+        envelope.decision.validate()?;
         if envelope.decision.findings.len() > MAX_OBSERVATION_FINDINGS
             || envelope.decision.reasons.len() > MAX_GATE_REASONS
         {
@@ -661,6 +671,9 @@ pub enum CoreError {
     /// Produced disposition requires a transient typed output.
     #[error("Provider reported `produced` without a transient output")]
     ProducedWithoutOutput,
+    /// Provider Host rejected a native or canonical output against its contract.
+    #[error("Provider output did not satisfy its admitted contract")]
+    ProviderOutputRejected,
     /// Provider output used a schema other than the selected canonical Contract.
     #[error("Provider returned unexpected output schema `{actual}`")]
     UnexpectedOutputSchema {
@@ -691,6 +704,9 @@ pub enum CoreError {
     /// A built-in security Contract constant is invalid.
     #[error(transparent)]
     SecurityContract(#[from] SecurityContractBuildError),
+    /// A Provider returned a structurally valid but contradictory security fact.
+    #[error(transparent)]
+    SecurityOutput(#[from] SecurityOutputValidationError),
     /// A bounded Core value could not be constructed.
     #[error(transparent)]
     BoundedValue(#[from] BoundedStringError),
@@ -706,6 +722,13 @@ pub enum CoreError {
     /// Provider discovery or invocation failed.
     #[error(transparent)]
     ProviderHost(#[from] ProviderHostError),
+}
+
+fn receipt_reports_invalid_output(receipt: &aw_contracts::provider::ProviderReceipt) -> bool {
+    receipt
+        .error
+        .as_ref()
+        .is_some_and(|error| error.code.as_str() == "provider_invalid_response")
 }
 
 #[derive(Serialize)]

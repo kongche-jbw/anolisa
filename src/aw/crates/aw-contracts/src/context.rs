@@ -19,14 +19,14 @@ pub const CONTEXT_PROJECTION_PREPARE_INPUT_SCHEMA_ID: &str = "context.projection
 pub const CONTEXT_PROJECTION_PREPARE_INPUT_SCHEMA_VERSION: u16 = 1;
 /// SHA-256 of the current canonical context-projection input schema resource.
 pub const CONTEXT_PROJECTION_PREPARE_INPUT_SCHEMA_SHA256: &str =
-    "bdd09189791e34ce768e624bc19a5bf0d9569b8886b2a5f1c2408aeb8b8b5d9f";
+    "07d62b903479892f45620173c1ce7804176cfd8b97350e6035b52823f15053cb";
 /// Stable identity of the canonical context-projection output schema.
 pub const CONTEXT_PROJECTION_PREPARE_OUTPUT_SCHEMA_ID: &str = "context.projection.prepare.output";
 /// Current revision of the canonical context-projection output schema.
 pub const CONTEXT_PROJECTION_PREPARE_OUTPUT_SCHEMA_VERSION: u16 = 1;
 /// SHA-256 of the current canonical context-projection output schema resource.
 pub const CONTEXT_PROJECTION_PREPARE_OUTPUT_SCHEMA_SHA256: &str =
-    "a295cf2b855899f9dfe5f1dda242d803af81852e6677526f79457c3214288028";
+    "4a171682511cfad0611626ab942c31d33928140b8eccd99a7e4d3c2e63997f37";
 
 /// Describes where model-visible context entered the governed execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -60,10 +60,14 @@ pub struct ToolResultSubmission {
 }
 
 /// Recoverability guarantee declared for a projected representation.
+///
+/// This guarantee concerns source information, not only meaning that a
+/// Provider considers relevant to the current task.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ContextReversibility {
-    /// Projection retains all source information in the returned representation.
+    /// Returned representation alone retains enough information to reconstruct
+    /// the exact source; preserving only task-relevant meaning is not lossless.
     Lossless,
     /// Source information can be recovered through separately governed state.
     Retrievable,

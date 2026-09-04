@@ -55,8 +55,8 @@ telemetry = "disabled"
 capability = "security.content.inspect/v1"
 authority = "observe"
 scopes = ["agent_session", "turn", "tool_call"]
-input_contract = { schema = "security.content.inspect.input/v1", resource = "schemas/security-content-inspect-input-v1.schema.json", sha256 = "4d1c7d2b3c58d29af35c6dce10d36a2774d12ec7d2d7928e262cf978c2babeb3" }
-output_contract = { schema = "security.content.inspect.output/v1", resource = "schemas/security-content-inspect-output-v1.schema.json", sha256 = "15d47c6c1c9b43928d9613485bf8dee398622e2b1b7f0ab96a5ad7d5342d55ef" }
+input_contract = { schema = "security.content.inspect.input/v1", resource = "schemas/security-content-inspect-input-v1.schema.json", sha256 = "836231087cc27186746e4316e92dd842053b71ebc1e9f392d99f521adbdfcec4" }
+output_contract = { schema = "security.content.inspect.output/v1", resource = "schemas/security-content-inspect-output-v1.schema.json", sha256 = "4a7a0771081fba792a889d8a1182b7ade08e4a7864c93dd5badb46f259e83bd5" }
 native_input = { resource = "schemas/agent-sec-aw-provider-request-v1.schema.json", sha256 = "5c1c54e7e63966ca79236410fa2d3982769640429c62d57004091b1b9ce2b07b" }
 native_output = { resource = "schemas/agent-sec-aw-provider-response-v1.schema.json", sha256 = "a708fc35208d6c92232415be87ad292066f757c994a6e54167e75247ab617459" }
 
@@ -137,8 +137,8 @@ value_pointer = "/scanned_bytes"
 capability = "security.code.inspect/v1"
 authority = "observe"
 scopes = ["agent_session", "turn", "tool_call"]
-input_contract = { schema = "security.code.inspect.input/v1", resource = "schemas/security-code-inspect-input-v1.schema.json", sha256 = "856b0626c2f2523cc78db468daae2dae5df685707950e6dd4f5123d4e616236f" }
-output_contract = { schema = "security.code.inspect.output/v1", resource = "schemas/security-code-inspect-output-v1.schema.json", sha256 = "735eae6cb55642b2f956214edccf7a09d0931ab93c6be1bcaaaaac0ceed276b0" }
+input_contract = { schema = "security.code.inspect.input/v1", resource = "schemas/security-code-inspect-input-v1.schema.json", sha256 = "c5614f6e464a401621a7d8d1e1c8245edc504919ffde6c7c20d01799bd961c1e" }
+output_contract = { schema = "security.code.inspect.output/v1", resource = "schemas/security-code-inspect-output-v1.schema.json", sha256 = "d41ea55912472845fab80695e5bc78a2cb84996bccaf49264b8b4c99064308f7" }
 native_input = { resource = "schemas/agent-sec-aw-provider-request-v1.schema.json", sha256 = "5c1c54e7e63966ca79236410fa2d3982769640429c62d57004091b1b9ce2b07b" }
 native_output = { resource = "schemas/agent-sec-aw-provider-response-v1.schema.json", sha256 = "a708fc35208d6c92232415be87ad292066f757c994a6e54167e75247ab617459" }
 
@@ -219,8 +219,8 @@ value_pointer = "/scanned_bytes"
 capability = "security.command.inspect/v1"
 authority = "mediate"
 scopes = ["turn", "tool_call"]
-input_contract = { schema = "security.command.inspect.input/v1", resource = "schemas/security-command-inspect-input-v1.schema.json", sha256 = "77777d6a3168724747c8070735690d391c7492ad0255f4d4520188763b298219" }
-output_contract = { schema = "security.command.inspect.output/v1", resource = "schemas/security-command-inspect-output-v1.schema.json", sha256 = "2b6564e583294b3777ae1ec48baa6744a4f169ae010757bb9568674dfabc3d11" }
+input_contract = { schema = "security.command.inspect.input/v1", resource = "schemas/security-command-inspect-input-v1.schema.json", sha256 = "546e5fc3b98ecc800160a70e0ad8a3e02be6cee02dbe8fa6ff6987be8eb511de" }
+output_contract = { schema = "security.command.inspect.output/v1", resource = "schemas/security-command-inspect-output-v1.schema.json", sha256 = "3618b57a48d32f6d7f1dcbb3ac18594fa48196deaee60131649014345ea9c57b" }
 native_input = { resource = "schemas/agent-sec-aw-provider-request-v1.schema.json", sha256 = "5c1c54e7e63966ca79236410fa2d3982769640429c62d57004091b1b9ce2b07b" }
 native_output = { resource = "schemas/agent-sec-aw-provider-response-v1.schema.json", sha256 = "a708fc35208d6c92232415be87ad292066f757c994a6e54167e75247ab617459" }
 

@@ -8,6 +8,19 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
+use aw_contracts::context::{
+    CONTEXT_PROJECTION_PREPARE_INPUT_SCHEMA_SHA256 as PROJECTION_INPUT_SHA256,
+    CONTEXT_PROJECTION_PREPARE_OUTPUT_SCHEMA_SHA256 as PROJECTION_OUTPUT_SHA256,
+};
+use aw_contracts::security::{
+    SECURITY_CODE_INSPECT_INPUT_SCHEMA_SHA256 as CODE_INPUT_SHA256,
+    SECURITY_CODE_INSPECT_OUTPUT_SCHEMA_SHA256 as CODE_OUTPUT_SHA256,
+    SECURITY_COMMAND_INSPECT_INPUT_SCHEMA_SHA256 as COMMAND_INPUT_SHA256,
+    SECURITY_COMMAND_INSPECT_OUTPUT_SCHEMA_SHA256 as COMMAND_OUTPUT_SHA256,
+    SECURITY_CONTENT_INSPECT_INPUT_SCHEMA_SHA256 as CONTENT_INPUT_SHA256,
+    SECURITY_CONTENT_INSPECT_OUTPUT_SCHEMA_SHA256 as CONTENT_OUTPUT_SHA256,
+};
+
 const PROJECTION_INPUT_SCHEMA: &str =
     include_str!("../../../aw-contracts/schemas/context-projection-prepare-input-v1.schema.json");
 const PROJECTION_OUTPUT_SCHEMA: &str =
@@ -27,20 +40,6 @@ const COMMAND_OUTPUT_SCHEMA: &str =
 
 const EMPTY_SCHEMA_SHA256: &str =
     "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a";
-const PROJECTION_INPUT_SHA256: &str =
-    "bdd09189791e34ce768e624bc19a5bf0d9569b8886b2a5f1c2408aeb8b8b5d9f";
-const PROJECTION_OUTPUT_SHA256: &str =
-    "a295cf2b855899f9dfe5f1dda242d803af81852e6677526f79457c3214288028";
-const CONTENT_INPUT_SHA256: &str =
-    "4d1c7d2b3c58d29af35c6dce10d36a2774d12ec7d2d7928e262cf978c2babeb3";
-const CONTENT_OUTPUT_SHA256: &str =
-    "15d47c6c1c9b43928d9613485bf8dee398622e2b1b7f0ab96a5ad7d5342d55ef";
-const CODE_INPUT_SHA256: &str = "856b0626c2f2523cc78db468daae2dae5df685707950e6dd4f5123d4e616236f";
-const CODE_OUTPUT_SHA256: &str = "735eae6cb55642b2f956214edccf7a09d0931ab93c6be1bcaaaaac0ceed276b0";
-const COMMAND_INPUT_SHA256: &str =
-    "77777d6a3168724747c8070735690d391c7492ad0255f4d4520188763b298219";
-const COMMAND_OUTPUT_SHA256: &str =
-    "2b6564e583294b3777ae1ec48baa6744a4f169ae010757bb9568674dfabc3d11";
 
 /// Which Capability shape a fixture Provider package implements.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,7 +145,7 @@ fn script(kind: FixtureKind) -> String {
         )
         .to_owned(),
     };
-    format!("#!/bin/sh\nprintf '%s' '{response}'\n")
+    format!("#!/bin/sh\nIFS= read -r payload || true\nprintf '%s' '{response}'\n")
 }
 
 fn manifest(provider_id: &str, kind: FixtureKind) -> String {

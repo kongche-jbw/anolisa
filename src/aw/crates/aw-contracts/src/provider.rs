@@ -653,7 +653,7 @@ mod tests {
                 digest: digest('a'),
                 body: json!({
                     "artifact": {
-                        "id": "art_example",
+                        "id": "art_00000000-0000-4000-8000-000000000001",
                         "digest": "a".repeat(64),
                         "content": "large tool result",
                         "media_type": "text/plain",
