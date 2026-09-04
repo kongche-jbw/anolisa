@@ -258,6 +258,165 @@ impl CkptClient {
         }
     }
 
+    /// Resolves the V2 identity of an already and exactly registered workspace.
+    ///
+    /// This request never falls back to legacy `Checkpoint` or `Init`. The
+    /// connected daemon is authenticated before the path is sent, and the
+    /// returned path and protocol version must exactly match the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns a permission error when trusted-peer authentication is absent,
+    /// a fixed safe rejection for daemon-declared no-effect failures, or a
+    /// transport/protocol error when identity cannot be proven.
+    pub fn workspace_identity_v2(
+        &self,
+        registration_path: &str,
+    ) -> Result<CkptWorkspaceIdentityV2, CoshError> {
+        let owner_uid = self.governed_peer_uid()?;
+        let request = WsCkptRequest::WorkspaceIdentityV2 {
+            registration_path: registration_path.to_owned(),
+        };
+        match self
+            .send_request_classified_with_peer(&request, Some(owner_uid))
+            .map_err(|failure| failure.error)?
+        {
+            WsCkptResponse::WorkspaceIdentityV2Ok {
+                protocol_version,
+                ws_id,
+                registered_path,
+                generation,
+            } if protocol_version == GUARDED_CHECKPOINT_PROTOCOL_VERSION_V2
+                && registered_path == registration_path
+                && is_canonical_workspace_id_v2(&ws_id) =>
+            {
+                Ok(CkptWorkspaceIdentityV2 {
+                    protocol_version,
+                    ws_id,
+                    registered_path,
+                    generation,
+                })
+            }
+            WsCkptResponse::GuardedCheckpointV2Rejected { code, message: _ } => {
+                Err(guarded_rejection_error(code))
+            }
+            _ => Err(unexpected_response()),
+        }
+    }
+
+    /// Creates a checkpoint through the identity-only guarded V2 request.
+    ///
+    /// The caller must first obtain `identity` through
+    /// [`Self::workspace_identity_v2`]. An explicit V2 rejection is classified
+    /// as `KnownNoEffect`; every legacy error, transport failure after request
+    /// bytes are written, malformed response, or mismatched evidence remains
+    /// `PossiblyApplied` and must be reconciled with
+    /// [`Self::checkpoint_evidence_v2`].
+    ///
+    /// # Errors
+    ///
+    /// Returns a classified failure and never retries or falls back to the
+    /// legacy auto-initializing checkpoint API.
+    #[allow(clippy::too_many_arguments)]
+    pub fn guarded_create_v2(
+        &self,
+        identity: &CkptWorkspaceIdentityV2,
+        checkpoint_id: &str,
+        operation_digest: [u8; 32],
+        message: Option<&str>,
+        metadata: Option<&str>,
+        pin: bool,
+    ) -> Result<GuardedCheckpointEvidenceV2, CkptRequestFailure> {
+        let owner_uid = self
+            .governed_peer_uid()
+            .map_err(CkptRequestFailure::known_no_effect)?;
+        if identity.protocol_version != GUARDED_CHECKPOINT_PROTOCOL_VERSION_V2 {
+            return Err(CkptRequestFailure::known_no_effect(guarded_identity_error(
+                "unsupported_protocol_version",
+            )));
+        }
+        let request = WsCkptRequest::GuardedCheckpointV2 {
+            ws_id: identity.ws_id.clone(),
+            expected_generation: identity.generation,
+            checkpoint_id: checkpoint_id.to_owned(),
+            operation_digest,
+            message: message.map(str::to_owned),
+            metadata: metadata.map(str::to_owned),
+            pin,
+        };
+        match self.send_request_classified_with_peer(&request, Some(owner_uid))? {
+            WsCkptResponse::GuardedCheckpointV2Ok { evidence } => validate_guarded_evidence(
+                &evidence,
+                identity,
+                checkpoint_id,
+                operation_digest,
+                nix::unistd::Uid::effective().as_raw(),
+            )
+            .map(|()| evidence)
+            .map_err(CkptRequestFailure::possibly_applied),
+            WsCkptResponse::GuardedCheckpointV2Rejected { code, message: _ } => Err(
+                CkptRequestFailure::known_no_effect(guarded_rejection_error(code)),
+            ),
+            WsCkptResponse::Error { .. } => Err(CkptRequestFailure::possibly_applied(
+                guarded_uncertain_error("daemon_error"),
+            )),
+            _ => Err(CkptRequestFailure::possibly_applied(
+                guarded_uncertain_error("unexpected_response"),
+            )),
+        }
+    }
+
+    /// Queries exact durable V2 evidence without replaying checkpoint creation.
+    ///
+    /// `Ok(None)` means the retained evidence set has no matching record. It is
+    /// an unknown checkpoint outcome, not proof that the backend had no effect.
+    ///
+    /// # Errors
+    ///
+    /// Returns when peer authentication, transport, protocol, rejection, or
+    /// exact evidence validation fails.
+    pub fn checkpoint_evidence_v2(
+        &self,
+        identity: &CkptWorkspaceIdentityV2,
+        checkpoint_id: &str,
+        operation_digest: [u8; 32],
+    ) -> Result<Option<GuardedCheckpointEvidenceV2>, CoshError> {
+        let owner_uid = self.governed_peer_uid()?;
+        if identity.protocol_version != GUARDED_CHECKPOINT_PROTOCOL_VERSION_V2 {
+            return Err(guarded_identity_error("unsupported_protocol_version"));
+        }
+        let request = WsCkptRequest::CheckpointEvidenceV2 {
+            ws_id: identity.ws_id.clone(),
+            expected_generation: identity.generation,
+            checkpoint_id: checkpoint_id.to_owned(),
+            operation_digest,
+        };
+        match self
+            .send_request_classified_with_peer(&request, Some(owner_uid))
+            .map_err(|failure| failure.error)?
+        {
+            WsCkptResponse::CheckpointEvidenceV2Ok { evidence } => evidence
+                .map(|evidence| {
+                    validate_guarded_evidence(
+                        &evidence,
+                        identity,
+                        checkpoint_id,
+                        operation_digest,
+                        nix::unistd::Uid::effective().as_raw(),
+                    )?;
+                    Ok(evidence)
+                })
+                .transpose(),
+            WsCkptResponse::GuardedCheckpointV2Rejected { code, message: _ } => {
+                Err(guarded_rejection_error(code))
+            }
+            WsCkptResponse::Error { .. } => {
+                Err(guarded_uncertain_error("evidence_query_daemon_error"))
+            }
+            _ => Err(unexpected_response()),
+        }
+    }
+
     /// Look up exact durable evidence for one snapshot ID in one workspace.
     ///
     /// This is the read-only reconcile query for a checkpoint whose response was
@@ -579,6 +738,102 @@ fn trusted_peer_configuration_error() -> CoshError {
     .with_hint("Configure the client with require_trusted_peer(owner_uid)")
 }
 
+fn validate_guarded_evidence(
+    evidence: &GuardedCheckpointEvidenceV2,
+    identity: &CkptWorkspaceIdentityV2,
+    checkpoint_id: &str,
+    operation_digest: [u8; 32],
+    caller_uid: u32,
+) -> Result<(), CoshError> {
+    let created_identity_matches = match &evidence.outcome {
+        GuardedCheckpointOutcomeV2::Created { snapshot_id } => snapshot_id == checkpoint_id,
+        GuardedCheckpointOutcomeV2::Skipped { .. } => true,
+    };
+    if evidence.ws_id == identity.ws_id
+        && evidence.registered_path == identity.registered_path
+        && evidence.generation == identity.generation
+        && evidence.checkpoint_id == checkpoint_id
+        && evidence.operation_digest == operation_digest
+        && evidence.caller_uid == caller_uid
+        && created_identity_matches
+    {
+        Ok(())
+    } else {
+        Err(guarded_uncertain_error("evidence_binding_mismatch"))
+    }
+}
+
+fn is_canonical_workspace_id_v2(ws_id: &str) -> bool {
+    let Some(rest) = ws_id.strip_prefix("ws-") else {
+        return false;
+    };
+    let (base, suffix) = rest
+        .split_once('-')
+        .map_or((rest, None), |(base, suffix)| (base, Some(suffix)));
+    if base.len() != 6
+        || !base
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return false;
+    }
+    suffix.is_none_or(|suffix| {
+        !suffix.is_empty()
+            && suffix.bytes().all(|byte| byte.is_ascii_digit())
+            && !suffix.starts_with('0')
+            && suffix.parse::<u64>().is_ok_and(|value| value >= 2)
+    })
+}
+
+fn guarded_identity_error(kind: &str) -> CoshError {
+    CoshError::new(
+        ErrorCode::CheckpointProtocolError,
+        "ws-ckpt did not prove an exact guarded workspace identity",
+        "checkpoint",
+    )
+    .with_details(serde_json::json!({"kind": kind}))
+}
+
+fn guarded_uncertain_error(kind: &str) -> CoshError {
+    CoshError::new(
+        ErrorCode::CheckpointCreateFailed,
+        "guarded checkpoint outcome is uncertain; reconcile durable evidence",
+        "checkpoint",
+    )
+    .with_hint("Query the exact V2 checkpoint evidence before any further action")
+    .with_details(serde_json::json!({"kind": kind}))
+}
+
+fn guarded_rejection_error(code: GuardedCheckpointRejectionCodeV2) -> CoshError {
+    let error_code = match code {
+        GuardedCheckpointRejectionCodeV2::InvalidRegistrationPath
+        | GuardedCheckpointRejectionCodeV2::InvalidWorkspaceId
+        | GuardedCheckpointRejectionCodeV2::InvalidCheckpointId
+        | GuardedCheckpointRejectionCodeV2::InvalidMetadata => ErrorCode::InvalidInput,
+        GuardedCheckpointRejectionCodeV2::WorkspaceNotFound => ErrorCode::CheckpointNotFound,
+        GuardedCheckpointRejectionCodeV2::PeerCredentialsUnavailable
+        | GuardedCheckpointRejectionCodeV2::CallerMismatch => ErrorCode::PermissionDenied,
+        GuardedCheckpointRejectionCodeV2::DaemonNotReady
+        | GuardedCheckpointRejectionCodeV2::GenerationMismatch
+        | GuardedCheckpointRejectionCodeV2::OperationConflict
+        | GuardedCheckpointRejectionCodeV2::WriteLockConflict
+        | GuardedCheckpointRejectionCodeV2::EvidenceCapacityReached => {
+            ErrorCode::CheckpointCreateFailed
+        }
+    };
+    CoshError::new(
+        error_code,
+        "ws-ckpt rejected the guarded request before checkpoint execution",
+        "checkpoint",
+    )
+    .with_details(serde_json::json!({"rejection": format!("{code:?}")}))
+    .recoverable(matches!(
+        code,
+        GuardedCheckpointRejectionCodeV2::DaemonNotReady
+            | GuardedCheckpointRejectionCodeV2::WriteLockConflict
+    ))
+}
+
 // ---------------------------------------------------------------------------
 // Frame encoding/decoding
 // ---------------------------------------------------------------------------
@@ -818,6 +1073,387 @@ mod tests {
 
         let socket_path = socket_path.to_string_lossy().into_owned();
         (dir, socket_path, handle)
+    }
+
+    fn spawn_scripted_daemon<F>(
+        exchanges: usize,
+        handler: F,
+    ) -> (tempfile::TempDir, String, thread::JoinHandle<()>)
+    where
+        F: Fn(WsCkptRequest) -> WsCkptResponse + Send + 'static,
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let socket_path = dir.path().join("ws-ckpt.sock");
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        let handle = thread::spawn(move || {
+            for _ in 0..exchanges {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut len_buf = [0_u8; 4];
+                stream.read_exact(&mut len_buf).unwrap();
+                let mut payload = vec![0_u8; u32::from_le_bytes(len_buf) as usize];
+                stream.read_exact(&mut payload).unwrap();
+                let request = bincode::deserialize(&payload).unwrap();
+                let response = handler(request);
+                let payload = bincode::serialize(&response).unwrap();
+                stream
+                    .write_all(&(payload.len() as u32).to_le_bytes())
+                    .unwrap();
+                stream.write_all(&payload).unwrap();
+            }
+        });
+
+        let socket_path = socket_path.to_string_lossy().into_owned();
+        (dir, socket_path, handle)
+    }
+
+    fn guarded_identity(generation: WorkspaceGenerationTokenV2) -> CkptWorkspaceIdentityV2 {
+        CkptWorkspaceIdentityV2 {
+            protocol_version: GUARDED_CHECKPOINT_PROTOCOL_VERSION_V2,
+            ws_id: "ws-abc123".to_owned(),
+            registered_path: "/registered/workspace".to_owned(),
+            generation,
+        }
+    }
+
+    fn guarded_evidence(
+        generation: WorkspaceGenerationTokenV2,
+        operation_digest: [u8; 32],
+    ) -> GuardedCheckpointEvidenceV2 {
+        GuardedCheckpointEvidenceV2 {
+            ws_id: "ws-abc123".to_owned(),
+            registered_path: "/registered/workspace".to_owned(),
+            generation,
+            checkpoint_id: "checkpoint-1".to_owned(),
+            operation_digest,
+            caller_uid: nix::unistd::Uid::effective().as_raw(),
+            outcome: GuardedCheckpointOutcomeV2::Created {
+                snapshot_id: "checkpoint-1".to_owned(),
+            },
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn guarded_identity_uses_exact_v2_request_without_legacy_init() {
+        let generation = WorkspaceGenerationTokenV2::from_bytes([7; 32]);
+        let (_dir, socket_path, daemon) = spawn_scripted_daemon(1, move |request| {
+            assert!(matches!(
+                request,
+                WsCkptRequest::WorkspaceIdentityV2 { registration_path }
+                    if registration_path == "/registered/workspace"
+            ));
+            WsCkptResponse::WorkspaceIdentityV2Ok {
+                protocol_version: GUARDED_CHECKPOINT_PROTOCOL_VERSION_V2,
+                ws_id: "ws-abc123".to_owned(),
+                registered_path: "/registered/workspace".to_owned(),
+                generation,
+            }
+        });
+
+        let identity = trusted_client(&socket_path)
+            .workspace_identity_v2("/registered/workspace")
+            .unwrap();
+        daemon.join().unwrap();
+
+        assert_eq!(identity, guarded_identity(generation));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn guarded_create_replays_only_v2_and_returns_same_evidence() {
+        let generation = WorkspaceGenerationTokenV2::from_bytes([8; 32]);
+        let operation_digest = [9; 32];
+        let expected = guarded_evidence(generation, operation_digest);
+        let response_evidence = expected.clone();
+        let (_dir, socket_path, daemon) = spawn_scripted_daemon(2, move |request| {
+            assert!(matches!(
+                request,
+                WsCkptRequest::GuardedCheckpointV2 {
+                    ws_id,
+                    expected_generation,
+                    checkpoint_id,
+                    operation_digest: digest,
+                    ..
+                } if ws_id == "ws-abc123"
+                    && expected_generation == generation
+                    && checkpoint_id == "checkpoint-1"
+                    && digest == operation_digest
+            ));
+            WsCkptResponse::GuardedCheckpointV2Ok {
+                evidence: response_evidence.clone(),
+            }
+        });
+        let client = trusted_client(&socket_path);
+        let identity = guarded_identity(generation);
+
+        let first = client
+            .guarded_create_v2(
+                &identity,
+                "checkpoint-1",
+                operation_digest,
+                None,
+                None,
+                false,
+            )
+            .unwrap();
+        let replay = client
+            .guarded_create_v2(
+                &identity,
+                "checkpoint-1",
+                operation_digest,
+                None,
+                None,
+                false,
+            )
+            .unwrap();
+        daemon.join().unwrap();
+
+        assert_eq!(first, expected);
+        assert_eq!(replay, first);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn guarded_rejection_is_known_no_effect_but_legacy_error_is_uncertain() {
+        let generation = WorkspaceGenerationTokenV2::from_bytes([10; 32]);
+        let operation_digest = [11; 32];
+        let responses = std::sync::Mutex::new(vec![
+            WsCkptResponse::Error {
+                code: WsCkptErrorCode::InternalError,
+                message: "backend execution may have started".to_owned(),
+            },
+            WsCkptResponse::GuardedCheckpointV2Rejected {
+                code: GuardedCheckpointRejectionCodeV2::GenerationMismatch,
+                message: "stale generation".to_owned(),
+            },
+        ]);
+        let (_dir, socket_path, daemon) = spawn_scripted_daemon(2, move |request| {
+            assert!(matches!(request, WsCkptRequest::GuardedCheckpointV2 { .. }));
+            responses.lock().unwrap().pop().unwrap()
+        });
+        let client = trusted_client(&socket_path);
+        let identity = guarded_identity(generation);
+
+        let rejected = client
+            .guarded_create_v2(
+                &identity,
+                "checkpoint-1",
+                operation_digest,
+                None,
+                None,
+                false,
+            )
+            .unwrap_err();
+        let uncertain = client
+            .guarded_create_v2(
+                &identity,
+                "checkpoint-1",
+                operation_digest,
+                None,
+                None,
+                false,
+            )
+            .unwrap_err();
+        daemon.join().unwrap();
+
+        assert_eq!(rejected.effect, CkptRequestEffect::KnownNoEffect);
+        assert_eq!(uncertain.effect, CkptRequestEffect::PossiblyApplied);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn guarded_evidence_query_requires_every_operation_binding() {
+        let generation = WorkspaceGenerationTokenV2::from_bytes([12; 32]);
+        let operation_digest = [13; 32];
+        let evidence = guarded_evidence(generation, operation_digest);
+        let (_dir, socket_path, daemon) = spawn_scripted_daemon(1, move |request| {
+            assert!(matches!(
+                request,
+                WsCkptRequest::CheckpointEvidenceV2 {
+                    ws_id,
+                    expected_generation,
+                    checkpoint_id,
+                    operation_digest: digest,
+                } if ws_id == "ws-abc123"
+                    && expected_generation == generation
+                    && checkpoint_id == "checkpoint-1"
+                    && digest == operation_digest
+            ));
+            WsCkptResponse::CheckpointEvidenceV2Ok {
+                evidence: Some(evidence.clone()),
+            }
+        });
+
+        let found = trusted_client(&socket_path)
+            .checkpoint_evidence_v2(
+                &guarded_identity(generation),
+                "checkpoint-1",
+                operation_digest,
+            )
+            .unwrap();
+        daemon.join().unwrap();
+
+        assert_eq!(found, Some(guarded_evidence(generation, operation_digest)));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn ambiguous_guarded_create_reconciles_without_replaying_creation() {
+        let generation = WorkspaceGenerationTokenV2::from_bytes([17; 32]);
+        let operation_digest = [18; 32];
+        let expected = guarded_evidence(generation, operation_digest);
+        let response_evidence = expected.clone();
+        let dir = tempfile::tempdir().unwrap();
+        let socket_path = dir.path().join("ws-ckpt.sock");
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        let daemon = thread::spawn(move || {
+            let read_request = |stream: &mut UnixStream| {
+                let mut len_buf = [0_u8; 4];
+                stream.read_exact(&mut len_buf).unwrap();
+                let mut payload = vec![0_u8; u32::from_le_bytes(len_buf) as usize];
+                stream.read_exact(&mut payload).unwrap();
+                bincode::deserialize::<WsCkptRequest>(&payload).unwrap()
+            };
+
+            let (mut create_stream, _) = listener.accept().unwrap();
+            assert!(matches!(
+                read_request(&mut create_stream),
+                WsCkptRequest::GuardedCheckpointV2 { .. }
+            ));
+            drop(create_stream);
+
+            let (mut evidence_stream, _) = listener.accept().unwrap();
+            assert!(matches!(
+                read_request(&mut evidence_stream),
+                WsCkptRequest::CheckpointEvidenceV2 {
+                    ws_id,
+                    expected_generation,
+                    checkpoint_id,
+                    operation_digest: digest,
+                } if ws_id == "ws-abc123"
+                    && expected_generation == generation
+                    && checkpoint_id == "checkpoint-1"
+                    && digest == operation_digest
+            ));
+            let response = WsCkptResponse::CheckpointEvidenceV2Ok {
+                evidence: Some(response_evidence),
+            };
+            let payload = bincode::serialize(&response).unwrap();
+            evidence_stream
+                .write_all(&(payload.len() as u32).to_le_bytes())
+                .unwrap();
+            evidence_stream.write_all(&payload).unwrap();
+        });
+        let socket_path = socket_path.to_string_lossy().into_owned();
+        let client = trusted_client(&socket_path);
+        let identity = guarded_identity(generation);
+
+        let failure = client
+            .guarded_create_v2(
+                &identity,
+                "checkpoint-1",
+                operation_digest,
+                None,
+                None,
+                false,
+            )
+            .unwrap_err();
+        assert_eq!(failure.effect, CkptRequestEffect::PossiblyApplied);
+
+        let reconciled = client
+            .checkpoint_evidence_v2(&identity, "checkpoint-1", operation_digest)
+            .unwrap();
+        daemon.join().unwrap();
+
+        assert_eq!(reconciled, Some(expected));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn absent_guarded_evidence_remains_unknown() {
+        let generation = WorkspaceGenerationTokenV2::from_bytes([19; 32]);
+        let operation_digest = [20; 32];
+        let (_dir, socket_path, daemon) = spawn_scripted_daemon(1, move |request| {
+            assert!(matches!(
+                request,
+                WsCkptRequest::CheckpointEvidenceV2 { .. }
+            ));
+            WsCkptResponse::CheckpointEvidenceV2Ok { evidence: None }
+        });
+
+        let evidence = trusted_client(&socket_path)
+            .checkpoint_evidence_v2(
+                &guarded_identity(generation),
+                "checkpoint-1",
+                operation_digest,
+            )
+            .unwrap();
+        daemon.join().unwrap();
+
+        assert_eq!(evidence, None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn mismatched_guarded_query_evidence_is_uncertain() {
+        let generation = WorkspaceGenerationTokenV2::from_bytes([21; 32]);
+        let operation_digest = [22; 32];
+        let mut evidence = guarded_evidence(generation, operation_digest);
+        evidence.checkpoint_id = "different-checkpoint".to_owned();
+        let (_dir, socket_path, daemon) = spawn_scripted_daemon(1, move |request| {
+            assert!(matches!(
+                request,
+                WsCkptRequest::CheckpointEvidenceV2 { .. }
+            ));
+            WsCkptResponse::CheckpointEvidenceV2Ok {
+                evidence: Some(evidence.clone()),
+            }
+        });
+
+        let error = trusted_client(&socket_path)
+            .checkpoint_evidence_v2(
+                &guarded_identity(generation),
+                "checkpoint-1",
+                operation_digest,
+            )
+            .unwrap_err();
+        daemon.join().unwrap();
+
+        assert_eq!(error.code, ErrorCode::CheckpointCreateFailed);
+        assert_eq!(
+            error.details,
+            Some(serde_json::json!({"kind": "evidence_binding_mismatch"}))
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn mismatched_guarded_creation_evidence_is_uncertain() {
+        let generation = WorkspaceGenerationTokenV2::from_bytes([14; 32]);
+        let operation_digest = [15; 32];
+        let mut evidence = guarded_evidence(generation, operation_digest);
+        evidence.operation_digest = [16; 32];
+        let (_dir, socket_path, daemon) = spawn_scripted_daemon(1, move |request| {
+            assert!(matches!(request, WsCkptRequest::GuardedCheckpointV2 { .. }));
+            WsCkptResponse::GuardedCheckpointV2Ok {
+                evidence: evidence.clone(),
+            }
+        });
+
+        let failure = trusted_client(&socket_path)
+            .guarded_create_v2(
+                &guarded_identity(generation),
+                "checkpoint-1",
+                operation_digest,
+                None,
+                None,
+                false,
+            )
+            .unwrap_err();
+        daemon.join().unwrap();
+
+        assert_eq!(failure.effect, CkptRequestEffect::PossiblyApplied);
+        assert_eq!(failure.error.code, ErrorCode::CheckpointCreateFailed);
     }
 
     #[test]

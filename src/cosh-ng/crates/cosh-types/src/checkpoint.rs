@@ -8,6 +8,9 @@ use serde::{Deserialize, Serialize};
 /// Default socket path for ws-ckpt daemon.
 pub const DEFAULT_SOCKET_PATH: &str = "/run/ws-ckpt/ws-ckpt.sock";
 
+/// Wire protocol version required by guarded checkpoint operations.
+pub const GUARDED_CHECKPOINT_PROTOCOL_VERSION_V2: u16 = 2;
+
 // ===========================================================================
 // Wire protocol types (must match ws-ckpt-common exactly)
 // ===========================================================================
@@ -78,6 +81,27 @@ pub enum WsCkptRequest {
         workspace: String,
         to: Option<String>,
         num_ancestors: Option<u32>,
+    },
+    /// Resolve the daemon's stable identity for an exactly registered path.
+    WorkspaceIdentityV2 {
+        registration_path: String,
+    },
+    /// Create a checkpoint fenced to one workspace generation and operation.
+    GuardedCheckpointV2 {
+        ws_id: String,
+        expected_generation: WorkspaceGenerationTokenV2,
+        checkpoint_id: String,
+        operation_digest: [u8; 32],
+        message: Option<String>,
+        metadata: Option<String>,
+        pin: bool,
+    },
+    /// Query durable evidence for one exact guarded checkpoint operation.
+    CheckpointEvidenceV2 {
+        ws_id: String,
+        expected_generation: WorkspaceGenerationTokenV2,
+        checkpoint_id: String,
+        operation_digest: [u8; 32],
     },
 }
 
@@ -153,6 +177,26 @@ pub enum WsCkptResponse {
         to: String,
         changes: Vec<DiffEntry>,
     },
+    /// Stable identity returned for an exactly registered workspace path.
+    WorkspaceIdentityV2Ok {
+        protocol_version: u16,
+        ws_id: String,
+        registered_path: String,
+        generation: WorkspaceGenerationTokenV2,
+    },
+    /// Durable evidence returned for an accepted guarded checkpoint request.
+    GuardedCheckpointV2Ok {
+        evidence: GuardedCheckpointEvidenceV2,
+    },
+    /// Durable evidence lookup result; absence does not prove no backend effect.
+    CheckpointEvidenceV2Ok {
+        evidence: Option<GuardedCheckpointEvidenceV2>,
+    },
+    /// Rejection produced before backend execution with a known no-checkpoint effect.
+    GuardedCheckpointV2Rejected {
+        code: GuardedCheckpointRejectionCodeV2,
+        message: String,
+    },
 }
 
 /// Error codes from ws-ckpt daemon.
@@ -172,6 +216,96 @@ pub enum WsCkptErrorCode {
     DiskSpaceInsufficient,
     CwdOccupied,
     CwdScanFailed,
+}
+
+/// Opaque identity for one live writable-subvolume generation.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct WorkspaceGenerationTokenV2([u8; 32]);
+
+impl WorkspaceGenerationTokenV2 {
+    /// Constructs a token from its fixed-width wire representation.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    /// Borrows the fixed-width wire representation.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+
+    /// Consumes the token and returns its fixed-width wire representation.
+    #[must_use]
+    pub const fn into_bytes(self) -> [u8; 32] {
+        self.0
+    }
+}
+
+impl std::fmt::Debug for WorkspaceGenerationTokenV2 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("WorkspaceGenerationTokenV2(<opaque>)")
+    }
+}
+
+/// Outcome durably bound to a guarded checkpoint operation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GuardedCheckpointOutcomeV2 {
+    /// The backend created this snapshot.
+    Created { snapshot_id: String },
+    /// The daemon intentionally skipped backend creation.
+    Skipped { reason: String },
+}
+
+/// Durable proof binding a caller operation to its workspace and peer identity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuardedCheckpointEvidenceV2 {
+    /// Exact daemon workspace identifier used for the operation.
+    pub ws_id: String,
+    /// Verbatim path stored in the daemon registration.
+    pub registered_path: String,
+    /// Writable-subvolume generation checked before backend execution.
+    pub generation: WorkspaceGenerationTokenV2,
+    /// Snapshot identifier reserved while this evidence is retained.
+    pub checkpoint_id: String,
+    /// Caller-defined digest binding the higher-level operation identity.
+    pub operation_digest: [u8; 32],
+    /// Effective UID obtained by the daemon from Unix peer credentials.
+    pub caller_uid: u32,
+    /// Durable checkpoint outcome.
+    pub outcome: GuardedCheckpointOutcomeV2,
+}
+
+/// Pre-backend rejection codes for guarded checkpoint protocol V2.
+///
+/// Every variant guarantees that the daemon did not produce a checkpoint effect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GuardedCheckpointRejectionCodeV2 {
+    DaemonNotReady,
+    PeerCredentialsUnavailable,
+    InvalidRegistrationPath,
+    InvalidWorkspaceId,
+    InvalidCheckpointId,
+    InvalidMetadata,
+    WorkspaceNotFound,
+    GenerationMismatch,
+    OperationConflict,
+    WriteLockConflict,
+    CallerMismatch,
+    EvidenceCapacityReached,
+}
+
+/// Exact registered workspace identity used by guarded checkpoint calls.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CkptWorkspaceIdentityV2 {
+    /// Daemon protocol version, verified as V2 by the client.
+    pub protocol_version: u16,
+    /// Stable daemon workspace identifier.
+    pub ws_id: String,
+    /// Exact registration path echoed by the daemon.
+    pub registered_path: String,
+    /// Opaque writable-subvolume generation fence.
+    pub generation: WorkspaceGenerationTokenV2,
 }
 
 // ===========================================================================
@@ -741,6 +875,33 @@ mod tests {
                     workspace: "/ws".into(),
                     to: Some("snap".into()),
                     num_ancestors: None,
+                },
+            ),
+            (
+                19,
+                WsCkptRequest::WorkspaceIdentityV2 {
+                    registration_path: "/ws".into(),
+                },
+            ),
+            (
+                20,
+                WsCkptRequest::GuardedCheckpointV2 {
+                    ws_id: "ws-abc123".into(),
+                    expected_generation: WorkspaceGenerationTokenV2::from_bytes([1; 32]),
+                    checkpoint_id: "snap".into(),
+                    operation_digest: [2; 32],
+                    message: None,
+                    metadata: None,
+                    pin: false,
+                },
+            ),
+            (
+                21,
+                WsCkptRequest::CheckpointEvidenceV2 {
+                    ws_id: "ws-abc123".into(),
+                    expected_generation: WorkspaceGenerationTokenV2::from_bytes([1; 32]),
+                    checkpoint_id: "snap".into(),
+                    operation_digest: [2; 32],
                 },
             ),
         ];
