@@ -23,14 +23,15 @@ the AW Provider path is production-ready.
 ## Interactive diagrams
 
 - [Provider activation architecture](provider-effect-architecture.html)
-- [Provider activation sequence](provider-effect-sequence.html), carrying one
-  real-field `list_recent_builds` fixture through every data shape
+- [Provider activation sequence](provider-effect-sequence.html), rendered as a
+  Drafter engineering blueprint that keeps real fields and meanings inline
 - [Agent Sec command inspection sequence](security-command-call.html), carrying
   one real pipe-to-shell finding back through Host, Core, and the COSH gate
 - [Current checkpoint creation sequence](checkpoint-create-call.html), explicitly
   separated from the not-yet-implemented AW Provider target
 
-All four HTML files are self-contained Archify artifacts defaulting to the
-bright editorial preset. Each passed the nine showcase validation checks with
-no errors or warnings. The 14 deterministic light-theme schema SVGs are stored
-under `images/schemas/`.
+The Tokenless sequence is a self-contained Drafter HTML with step-focused
+interaction. The other three HTML files are self-contained Archify artifacts
+defaulting to the bright editorial preset; each passed the nine showcase
+validation checks with no errors or warnings. The 14 deterministic light-theme
+schema SVGs are stored under `images/schemas/`.
