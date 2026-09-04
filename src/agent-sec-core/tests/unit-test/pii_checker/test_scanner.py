@@ -3,6 +3,7 @@
 import time
 
 import pytest
+
 from agent_sec_cli.pii_checker.detectors.base import PiiCandidate
 from agent_sec_cli.pii_checker.detectors.regex import RegexPiiDetector
 from agent_sec_cli.pii_checker.models import PiiFinding
@@ -453,9 +454,17 @@ def test_multibyte_truncation_boundary_is_safe():
     result = _scan("备注🙂 alice@example.com", max_bytes=max_bytes, redact_output=True)
 
     assert result["summary"]["truncated"] is True
-    assert result["summary"]["bytes_scanned"] == max_bytes
+    assert result["summary"]["bytes_scanned"] == len("备注".encode("utf-8"))
     assert result["verdict"] == "pass"
     assert result["redacted_text"] == "备注"
+
+
+@pytest.mark.parametrize("max_bytes", [2, 3])
+def test_multibyte_truncation_reports_only_complete_prefix(max_bytes: int):
+    result = _scan("a雪 trailing", max_bytes=max_bytes)
+
+    assert result["summary"]["truncated"] is True
+    assert result["summary"]["bytes_scanned"] == 1
 
 
 def test_large_input_over_default_limit_scans_tail_by_default():

@@ -4,10 +4,10 @@
 //!
 //! The Ledger is the durable, tamper-evident record of every AW boundary
 //! event worth auditing: plan snapshots, Observe evidence, Mediate
-//! credentials, Provider receipts. Every record commits to its body
-//! digest (canonical JSON v1) and to the previous record's digest,
-//! producing a hash chain that any reader can recompute from the stored
-//! bytes.
+//! credentials, Provider receipts, and final COSH history adoption. Every
+//! record commits to its body digest (canonical JSON v1) and to the previous
+//! record's digest, producing a hash chain that any reader can recompute from
+//! the stored bytes.
 //!
 //! This crate owns the admission boundary, the hash chain state, the
 //! content-freedom invariants, the SQLite store, append orchestration,

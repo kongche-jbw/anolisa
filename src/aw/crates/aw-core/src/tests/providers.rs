@@ -48,6 +48,10 @@ pub(crate) enum FixtureKind {
     Projection,
     /// Observe content inspection that reports one credential finding.
     ContentInspect,
+    /// Observe content inspection that reports a verified partial finding.
+    ContentInspectPartial,
+    /// Observe content inspection that falsely claims complete zero-byte coverage.
+    ContentInspectWrongCoverage,
     /// Observe code inspection that reports one dangerous-pattern finding.
     CodeInspect,
     /// Observe content inspection whose process settles as an error.
@@ -56,6 +60,8 @@ pub(crate) enum FixtureKind {
     ContentInspectLeaking,
     /// Mediate command inspection that allows the pending Tool Call.
     CommandInspectAllow,
+    /// Mediate command inspection that falsely allows without scanning the input.
+    CommandInspectWrongCoverage,
     /// Mediate command inspection that denies the pending Tool Call.
     ///
     /// A deny verdict is fixture behaviour. The rules that ship with
@@ -76,9 +82,12 @@ pub(crate) fn write_provider(root: &Path, provider_id: &str, kind: FixtureKind) 
         FixtureKind::Projection => (PROJECTION_INPUT_SCHEMA, PROJECTION_OUTPUT_SCHEMA),
         FixtureKind::CodeInspect => (CODE_INPUT_SCHEMA, CODE_OUTPUT_SCHEMA),
         FixtureKind::CommandInspectAllow
+        | FixtureKind::CommandInspectWrongCoverage
         | FixtureKind::CommandInspectDeny
         | FixtureKind::CommandInspectFailing => (COMMAND_INPUT_SCHEMA, COMMAND_OUTPUT_SCHEMA),
         FixtureKind::ContentInspect
+        | FixtureKind::ContentInspectPartial
+        | FixtureKind::ContentInspectWrongCoverage
         | FixtureKind::ContentInspectFailing
         | FixtureKind::ContentInspectLeaking => (CONTENT_INPUT_SCHEMA, CONTENT_OUTPUT_SCHEMA),
     };
@@ -102,14 +111,28 @@ fn script(kind: FixtureKind) -> String {
             r#"{"disposition":"completed","verdict":"sensitive","#,
             r#""findings":[{"rule_id":"fixture.private_key","category":"credential","#,
             r#""severity":"high","confidence":"high","count":2}],"#,
-            r#""scanned_bytes":42,"truncated":false}"#
+            r#""scanned_bytes":__SCANNED_BYTES__,"truncated":false}"#
+        )
+        .to_owned(),
+        FixtureKind::ContentInspectPartial => concat!(
+            r#"{"disposition":"completed","verdict":"suspicious","#,
+            r#""findings":[{"rule_id":"fixture.partial","category":"dangerous_pattern","#,
+            r#""severity":"medium","confidence":"high","count":1}],"#,
+            r#""scanned_bytes":3,"truncated":true}"#
+        )
+        .to_owned(),
+        FixtureKind::ContentInspectWrongCoverage => concat!(
+            r#"{"disposition":"completed","verdict":"suspicious","#,
+            r#""findings":[{"rule_id":"fixture.zero_coverage","category":"dangerous_pattern","#,
+            r#""severity":"medium","confidence":"high","count":1}],"#,
+            r#""scanned_bytes":0,"truncated":false}"#
         )
         .to_owned(),
         FixtureKind::CodeInspect => concat!(
             r#"{"disposition":"completed","verdict":"suspicious","#,
             r#""findings":[{"rule_id":"fixture.download_exec","category":"dangerous_pattern","#,
             r#""severity":"medium","confidence":"high","count":1}],"#,
-            r#""scanned_bytes":17,"truncated":false,"language_detected":"bash"}"#
+            r#""scanned_bytes":__SCANNED_BYTES__,"truncated":false,"language_detected":"bash"}"#
         )
         .to_owned(),
         FixtureKind::ContentInspectFailing => {
@@ -117,7 +140,12 @@ fn script(kind: FixtureKind) -> String {
         }
         FixtureKind::CommandInspectAllow => concat!(
             r#"{"disposition":"completed","verdict":"allow","#,
-            r#""reasons":[],"findings":[],"scanned_bytes":8}"#
+            r#""reasons":[],"findings":[],"scanned_bytes":__SCANNED_BYTES__}"#
+        )
+        .to_owned(),
+        FixtureKind::CommandInspectWrongCoverage => concat!(
+            r#"{"disposition":"completed","verdict":"allow","#,
+            r#""reasons":[],"findings":[],"scanned_bytes":0}"#
         )
         .to_owned(),
         // The reason list carries codes only. A gate notice rendered from this
@@ -127,7 +155,7 @@ fn script(kind: FixtureKind) -> String {
             r#""reasons":["fixture.recursive_delete"],"#,
             r#""findings":[{"rule_id":"fixture.recursive_delete","#,
             r#""category":"dangerous_pattern","severity":"critical","#,
-            r#""confidence":"high","count":1}],"scanned_bytes":26}"#
+            r#""confidence":"high","count":1}],"scanned_bytes":__SCANNED_BYTES__}"#
         )
         .to_owned(),
         FixtureKind::CommandInspectFailing => {
@@ -145,7 +173,19 @@ fn script(kind: FixtureKind) -> String {
         )
         .to_owned(),
     };
-    format!("#!/bin/sh\nIFS= read -r payload || true\nprintf '%s' '{response}'\n")
+    if response.contains("__SCANNED_BYTES__") {
+        format!(
+            r#"#!/bin/sh
+IFS= read -r payload || true
+value=${{payload#*:\"}}
+value=${{value%??}}
+scanned_bytes=$(printf '%s' "$value" | wc -c | tr -d ' ')
+printf '%s' '{response}' | sed "s/__SCANNED_BYTES__/$scanned_bytes/"
+"#
+        )
+    } else {
+        format!("#!/bin/sh\nIFS= read -r payload || true\nprintf '%s' '{response}'\n")
+    }
 }
 
 fn manifest(provider_id: &str, kind: FixtureKind) -> String {
@@ -305,6 +345,7 @@ value_pointer = "/scanned_bytes"
 "#
         ),
         FixtureKind::CommandInspectAllow
+        | FixtureKind::CommandInspectWrongCoverage
         | FixtureKind::CommandInspectDeny
         | FixtureKind::CommandInspectFailing => format!(
             r#"
@@ -361,6 +402,8 @@ value_pointer = "/scanned_bytes"
 "#
         ),
         FixtureKind::ContentInspect
+        | FixtureKind::ContentInspectPartial
+        | FixtureKind::ContentInspectWrongCoverage
         | FixtureKind::ContentInspectFailing
         | FixtureKind::ContentInspectLeaking => format!(
             r#"

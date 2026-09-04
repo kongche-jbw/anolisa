@@ -34,32 +34,6 @@ pub(super) fn invoke(
     state_root: Option<&Path>,
 ) -> Result<ProviderInvocationResult, ProviderHostError> {
     validate_invocation(provider, capability, invocation)?;
-    validate_invocation_schema(capability, &invocation.input.body)?;
-    let canonical_input = canonical_json_v1_bytes(&invocation.input.body).map_err(|error| {
-        ProviderHostError::InvocationRejected(format!(
-            "input body cannot be encoded as JSON: {error}"
-        ))
-    })?;
-    let input_digest = sha256_digest(&canonical_input);
-    if input_digest != invocation.input.digest {
-        return Err(ProviderHostError::InvocationRejected(
-            "input body digest does not match the admitted invocation".to_owned(),
-        ));
-    }
-    let native_input = map_request(capability, invocation)?;
-    validate_native_input_schema(capability, &native_input)?;
-    let input = canonical_json_v1_bytes(&native_input).map_err(|error| {
-        ProviderHostError::InvocationRejected(format!(
-            "mapped Provider input cannot be encoded as JSON: {error}"
-        ))
-    })?;
-    if input.len() > provider.limits.input_bytes {
-        return Err(ProviderHostError::InvocationRejected(format!(
-            "mapped input exceeds the {}-byte Provider limit",
-            provider.limits.input_bytes
-        )));
-    }
-
     let now_ms = unix_time_ms()?;
     if invocation.deadline_at_ms <= now_ms {
         return Err(ProviderHostError::InvocationRejected(
@@ -88,6 +62,43 @@ pub(super) fn invoke(
             )
         })?;
     let output_limit = provider.limits.output_bytes.min(invocation_output_limit);
+
+    validate_invocation_schema(capability, &invocation.input.body)?;
+    check_deadline(provider, deadline, timeout)?;
+    let canonical_input = canonical_json_v1_bytes(&invocation.input.body).map_err(|error| {
+        ProviderHostError::InvocationRejected(format!(
+            "input body cannot be encoded as JSON: {error}"
+        ))
+    })?;
+    let input_digest = sha256_digest(&canonical_input);
+    if input_digest != invocation.input.digest {
+        return Err(ProviderHostError::InvocationRejected(
+            "input body digest does not match the admitted invocation".to_owned(),
+        ));
+    }
+    check_deadline(provider, deadline, timeout)?;
+    let native_input = map_request(
+        provider,
+        capability,
+        invocation,
+        provider.limits.input_bytes,
+        deadline,
+        timeout,
+    )?;
+    validate_native_input_schema(capability, &native_input)?;
+    check_deadline(provider, deadline, timeout)?;
+    let input = canonical_json_v1_bytes(&native_input).map_err(|error| {
+        ProviderHostError::InvocationRejected(format!(
+            "mapped Provider input cannot be encoded as JSON: {error}"
+        ))
+    })?;
+    if input.len() > provider.limits.input_bytes {
+        return Err(ProviderHostError::InvocationRejected(format!(
+            "mapped input exceeds the {}-byte Provider limit",
+            provider.limits.input_bytes
+        )));
+    }
+
     let state_directory = if provider.requires_state_directory {
         let state_root = state_root.ok_or_else(|| {
             ProviderHostError::InvocationRejected(
@@ -182,9 +193,13 @@ pub(super) fn invoke(
         capability,
         invocation,
         response,
-        output_limit,
-        started_at_ms,
-        started_at_ms,
+        ResponseMappingBounds {
+            output_limit,
+            started_at_ms,
+            completed_at_ms: started_at_ms,
+            deadline,
+            timeout,
+        },
     ) {
         Ok(result) => result,
         Err(error) => {
@@ -328,8 +343,12 @@ fn most_specific_scope(invocation: &CapabilityInvocation) -> ProviderScopeKind {
 }
 
 fn map_request(
+    provider: &AdmittedProvider,
     capability: &AdmittedCapability,
     invocation: &CapabilityInvocation,
+    input_limit: usize,
+    deadline: Instant,
+    timeout: Duration,
 ) -> Result<serde_json::Value, ProviderHostError> {
     let scope = serde_json::to_value(&invocation.scope).map_err(|error| {
         ProviderHostError::InvocationRejected(format!(
@@ -338,22 +357,26 @@ fn map_request(
     })?;
     let mut native = serde_json::json!({});
     for mapping in &capability.codec.request_fields {
+        check_deadline(provider, deadline, timeout)?;
         let value = match &mapping.source {
-            RequestValueSource::Constant(value) => Some(value.clone()),
-            RequestValueSource::Input(pointer) => invocation.input.body.pointer(pointer).cloned(),
+            RequestValueSource::Constant(value) => Some(value),
+            RequestValueSource::Input(pointer) => invocation.input.body.pointer(pointer),
             RequestValueSource::Scope(field) => scope
                 .pointer(scope_field_pointer(*field))
-                .filter(|value| !value.is_null())
-                .cloned(),
+                .filter(|value| !value.is_null()),
         };
         match value {
             Some(value) => {
-                set_object_pointer(&mut native, &mapping.target, value).map_err(|reason| {
-                    ProviderHostError::InvocationRejected(format!(
-                        "request mapping target `{}` is invalid: {reason}",
-                        mapping.target
-                    ))
-                })?
+                reject_mapping_growth(&native, value, input_limit, "mapped Provider input")?;
+                set_object_pointer(&mut native, &mapping.target, value.clone()).map_err(
+                    |reason| {
+                        ProviderHostError::InvocationRejected(format!(
+                            "request mapping target `{}` is invalid: {reason}",
+                            mapping.target
+                        ))
+                    },
+                )?;
+                require_json_within_limit(&native, input_limit, "mapped Provider input")?;
             }
             None if matches!(mapping.on_missing, MissingValueAction::Omit) => {}
             None => {
@@ -365,6 +388,90 @@ fn map_request(
         }
     }
     Ok(native)
+}
+
+fn check_deadline(
+    provider: &AdmittedProvider,
+    deadline: Instant,
+    timeout: Duration,
+) -> Result<(), ProviderHostError> {
+    if remaining_until(deadline).is_zero() {
+        return Err(deadline_error(provider, timeout));
+    }
+    Ok(())
+}
+
+fn reject_mapping_growth(
+    current: &serde_json::Value,
+    source: &serde_json::Value,
+    limit: usize,
+    label: &'static str,
+) -> Result<(), ProviderHostError> {
+    let current_len = bounded_json_len(current, limit, label)?;
+    let source_len = bounded_json_len(source, limit, label)?;
+    if current_len
+        .checked_add(source_len)
+        .is_none_or(|combined| combined > limit)
+    {
+        return Err(ProviderHostError::InvocationRejected(format!(
+            "{label} exceeds the {limit}-byte limit during field mapping"
+        )));
+    }
+    Ok(())
+}
+
+fn require_json_within_limit(
+    value: &serde_json::Value,
+    limit: usize,
+    label: &'static str,
+) -> Result<(), ProviderHostError> {
+    bounded_json_len(value, limit, label).map(|_| ())
+}
+
+fn bounded_json_len(
+    value: &serde_json::Value,
+    limit: usize,
+    label: &'static str,
+) -> Result<usize, ProviderHostError> {
+    let mut counter = BoundedJsonCounter {
+        bytes: 0,
+        limit,
+        exceeded: false,
+    };
+    match serde_json::to_writer(&mut counter, value) {
+        Ok(()) => Ok(counter.bytes),
+        Err(_) if counter.exceeded => Err(ProviderHostError::InvocationRejected(format!(
+            "{label} exceeds the {limit}-byte limit during field mapping"
+        ))),
+        Err(error) => Err(ProviderHostError::InvocationRejected(format!(
+            "{label} cannot be measured during field mapping: {error}"
+        ))),
+    }
+}
+
+struct BoundedJsonCounter {
+    bytes: usize,
+    limit: usize,
+    exceeded: bool,
+}
+
+impl Write for BoundedJsonCounter {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        let Some(bytes) = self.bytes.checked_add(buffer.len()) else {
+            self.exceeded = true;
+            return Err(io::Error::other("JSON byte count overflowed"));
+        };
+        if bytes > self.limit {
+            self.exceeded = true;
+            return Err(io::Error::other("JSON byte limit exceeded"));
+        }
+        self.bytes = bytes;
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 fn scope_field_pointer(field: ScopeField) -> &'static str {
@@ -608,18 +715,21 @@ fn execute(
         .take()
         .ok_or_else(|| ProviderHostError::Process("Provider stderr was not piped".to_owned()))?;
     let writer = spawn_writer(stdin, input).map_err(|error| {
+        let _ = process_groups.kill(process_group);
         let _ = child.kill();
         let _ = child.wait();
         ProviderHostError::Process(format!("failed to start Provider stdin writer: {error}"))
     })?;
     let stdout_reader =
         spawn_capture("aw-provider-stdout", stdout, output_limit).map_err(|error| {
+            let _ = process_groups.kill(process_group);
             let _ = child.kill();
             let _ = child.wait();
             ProviderHostError::Process(format!("failed to start Provider stdout reader: {error}"))
         })?;
     let stderr_reader = spawn_capture("aw-provider-stderr", stderr, MAX_STDERR_CAPTURE_BYTES)
         .map_err(|error| {
+            let _ = process_groups.kill(process_group);
             let _ = child.kill();
             let _ = child.wait();
             ProviderHostError::Process(format!("failed to start Provider stderr reader: {error}"))
@@ -645,6 +755,10 @@ fn execute(
         drop(stdout_reader);
         return Err(timeout_error(provider, timeout, stderr_reader));
     }
+    // One-shot lifecycle owns the complete process group, not only the direct
+    // child. A helper that closed its inherited pipes must not survive a
+    // successful response and continue outside the invocation deadline.
+    kill_process_group(process_group, &process_groups)?;
     let write_result = join_writer(writer)?;
     let stdout = join_capture(stdout_reader, "stdout")?;
     let stderr = join_capture(stderr_reader, "stderr")?;
@@ -808,15 +922,29 @@ fn join_capture(
         })
 }
 
+#[derive(Clone, Copy)]
+struct ResponseMappingBounds {
+    output_limit: usize,
+    started_at_ms: u64,
+    completed_at_ms: u64,
+    deadline: Instant,
+    timeout: Duration,
+}
+
 fn map_response(
     provider: &AdmittedProvider,
     capability: &AdmittedCapability,
     invocation: &CapabilityInvocation,
     response: serde_json::Value,
-    output_limit: usize,
-    started_at_ms: u64,
-    completed_at_ms: u64,
+    bounds: ResponseMappingBounds,
 ) -> Result<ProviderInvocationResult, ProviderHostError> {
+    let response_sha256 = sha256_digest(&canonical_json_v1_bytes(&response).map_err(|error| {
+        invalid_response(
+            provider,
+            &format!("native response cannot be encoded: {error}"),
+            &response,
+        )
+    })?);
     let native_disposition = response
         .pointer(&capability.codec.disposition.source)
         .and_then(serde_json::Value::as_str)
@@ -837,26 +965,45 @@ fn map_response(
     let (output, output_bytes) = if disposition == ProviderDisposition::Produced {
         let mut output_body = serde_json::json!({});
         for mapping in &capability.codec.output_fields {
+            check_deadline(provider, bounds.deadline, bounds.timeout)?;
             if !mapping.when_disposition.contains(&disposition) {
                 continue;
             }
             let value = match &mapping.source {
-                OutputValueSource::Constant(value) => Some(value.clone()),
-                OutputValueSource::Input(pointer) => {
-                    invocation.input.body.pointer(pointer).cloned()
-                }
-                OutputValueSource::Response(pointer) => response.pointer(pointer).cloned(),
+                OutputValueSource::Constant(value) => Some(value),
+                OutputValueSource::Input(pointer) => invocation.input.body.pointer(pointer),
+                OutputValueSource::Response(pointer) => response.pointer(pointer),
             }
             .ok_or_else(|| {
                 invalid_response(provider, "mapped output source is absent", &response)
             })?;
-            set_object_pointer(&mut output_body, &mapping.target, value).map_err(|reason| {
-                invalid_response(
-                    provider,
-                    &format!("mapped output target is invalid: {reason}"),
-                    &response,
-                )
+            reject_mapping_growth(
+                &output_body,
+                value,
+                bounds.output_limit,
+                "mapped canonical output",
+            )
+            .map_err(|error| {
+                classify_output_bound_error(provider, bounds.output_limit, &response_sha256, error)
             })?;
+            set_object_pointer(&mut output_body, &mapping.target, value.clone()).map_err(
+                |reason| {
+                    invalid_response(
+                        provider,
+                        &format!("mapped output target is invalid: {reason}"),
+                        &response,
+                    )
+                },
+            )?;
+            require_json_within_limit(&output_body, bounds.output_limit, "mapped canonical output")
+                .map_err(|error| {
+                    classify_output_bound_error(
+                        provider,
+                        bounds.output_limit,
+                        &response_sha256,
+                        error,
+                    )
+                })?;
         }
         if let Err(reason) =
             schema_failure_reason(&capability.canonical_output_schema, &output_body)
@@ -874,10 +1021,10 @@ fn map_response(
                 &response,
             )
         })?;
-        if encoded.len() > output_limit {
+        if encoded.len() > bounds.output_limit {
             return Err(ProviderHostError::OutputTooLarge {
                 provider_id: provider.descriptor.provider_id.as_str().to_owned(),
-                limit: output_limit,
+                limit: bounds.output_limit,
                 output_sha256: sha256_digest(&encoded).as_str().to_owned(),
             });
         }
@@ -938,13 +1085,29 @@ fn map_response(
         error,
         meters,
         evidence: Vec::<ProviderEvidenceRef>::new(),
-        started_at_ms,
-        completed_at_ms,
+        started_at_ms: bounds.started_at_ms,
+        completed_at_ms: bounds.completed_at_ms,
     };
     Ok(ProviderInvocationResult {
         outcome: ProviderInvocationOutcome { output },
         receipt,
     })
+}
+
+fn classify_output_bound_error(
+    provider: &AdmittedProvider,
+    limit: usize,
+    response_sha256: &Digest,
+    error: ProviderHostError,
+) -> ProviderHostError {
+    match error {
+        ProviderHostError::InvocationRejected(_) => ProviderHostError::OutputTooLarge {
+            provider_id: provider.descriptor.provider_id.as_str().to_owned(),
+            limit,
+            output_sha256: response_sha256.as_str().to_owned(),
+        },
+        error => error,
+    }
 }
 
 fn accepted_failure(

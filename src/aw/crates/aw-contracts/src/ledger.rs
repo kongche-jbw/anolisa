@@ -3,9 +3,9 @@
 //!
 //! The Ledger is the durable append-only record of every AW boundary event
 //! worth auditing: plan snapshots, Observe evidence, Mediate credentials,
-//! Provider receipts, and their hash chain. This module owns only the
-//! schema-shaped types and the event taxonomy. Storage, admission, hash-chain
-//! verification, and queries live in `aw-ledger`.
+//! Provider receipts, final COSH history adoption, and their hash chain. This
+//! module owns only the schema-shaped types and the event taxonomy. Storage,
+//! admission, hash-chain verification, and queries live in `aw-ledger`.
 //!
 //! Content-freedom rule: Ledger records carry bounded metadata, digests, and
 //! IDs only. Raw tool input, tool output, and command text are never stored
@@ -13,10 +13,10 @@
 //! receipts.
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
 
 use crate::common::{BoundedName, Digest};
 use crate::context::ContextReversibility;
+use crate::error::ErrorCode;
 use crate::ids::{
     ArtifactId, AttemptId, LedgerCredentialId, LedgerEventId, LedgerEvidenceId, LedgerProjectionId,
     ProviderInvocationId, ToolUseId,
@@ -34,6 +34,9 @@ pub const LEDGER_POST_TOOL_USE_PLAN_SCHEMA: &str = "aw.ledger.post_tool_use_plan
 /// Schema revision governing [`PreToolUseGateBody`].
 pub const LEDGER_PRE_TOOL_USE_GATE_SCHEMA: &str = "aw.ledger.pre_tool_use_gate/v1";
 
+/// Schema revision governing [`ContextAdoptionBody`].
+pub const LEDGER_CONTEXT_ADOPTION_SCHEMA: &str = "aw.ledger.context_adoption/v1";
+
 /// Taxonomy of events the Ledger records.
 ///
 /// Variants are additive: a later release can append a variant without
@@ -48,6 +51,9 @@ pub enum LedgerEventKind {
     /// The PreToolUse Mediate gate produced a credential (block, ask, allow,
     /// or warn).
     PreToolUseGate,
+    /// COSH committed the exact effective tool-result bytes to its model
+    /// history slot after a PostToolUse plan settled.
+    ContextAdoption,
     /// A Provider invocation completed and its receipt was admitted.
     ProviderInvoked,
     /// An Observe evidence bundle was attached to an existing plan event.
@@ -186,6 +192,13 @@ pub struct LedgerInvocationRef {
     pub input_schema: VersionedSchema,
     /// Digest of the canonical input body accepted by Core.
     pub input_digest: Digest,
+    /// Attempt scope copied from the accepted invocation, when Agent Work
+    /// allocated one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attempt_id: Option<AttemptId>,
+    /// Tool call scope copied from the accepted invocation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_use_id: Option<ToolUseId>,
     /// Terminal classification Core assigned to the invocation.
     pub disposition: ProviderDisposition,
     /// Schema of the transient Provider output, when one existed.
@@ -195,6 +208,11 @@ pub struct LedgerInvocationRef {
     /// body itself is never stored.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_digest: Option<Digest>,
+    /// Stable error code from the receipt, when the terminal disposition
+    /// requires one. Messages and Provider-controlled diagnostic text are not
+    /// copied into the Ledger.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<ErrorCode>,
     /// Unix timestamp at which Provider work began.
     pub started_at_ms: u64,
     /// Unix timestamp at which the Provider reported the terminal fact.
@@ -213,9 +231,12 @@ impl LedgerInvocationRef {
             capability: receipt.capability.clone(),
             input_schema: receipt.input_schema.clone(),
             input_digest: receipt.input_digest.clone(),
+            attempt_id: receipt.scope.attempt_id.clone(),
+            tool_use_id: receipt.scope.tool_use_id.clone(),
             disposition: receipt.disposition,
             output_schema: receipt.output_schema.clone(),
             output_digest: receipt.output_digest.clone(),
+            error_code: receipt.error.as_ref().map(|error| error.code.clone()),
             started_at_ms: receipt.started_at_ms,
             completed_at_ms: receipt.completed_at_ms,
         }
@@ -261,9 +282,7 @@ impl From<&SecurityFinding> for LedgerRuleFinding {
 /// [`SecurityRuleId::as_str`].
 #[must_use]
 pub fn security_rule_id_digest(rule_id: &SecurityRuleId) -> Digest {
-    let hex = format!("{:x}", Sha256::digest(rule_id.as_str().as_bytes()));
-    // LowerHex over SHA-256's fixed 32 bytes always produces canonical text.
-    Digest::parse(hex).expect("SHA-256 output is a canonical digest")
+    Digest::sha256(rule_id.as_str().as_bytes())
 }
 
 /// Content-free record of one Observe step that produced facts.
@@ -298,6 +317,10 @@ pub struct LedgerObservationGap {
     pub capability: VersionedSchema,
     /// Why the observation is absent.
     pub reason: ObservationGapReason,
+    /// Provider target for an invocation-level gap. Route-level gaps have no
+    /// target because Core selected no implementation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_id: Option<BoundedName>,
     /// Invocation reference when the step reached a settled receipt.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub invocation: Option<LedgerInvocationRef>,
@@ -313,6 +336,23 @@ pub struct LedgerObservationGap {
 pub struct LedgerProjectionOutcome {
     /// Whether the Provider offered a candidate at all.
     pub candidate_offered: bool,
+    /// Canonical digest of the complete Provider output envelope.
+    ///
+    /// This is the same digest admitted in the projection invocation receipt,
+    /// so a later adoption can refer to the exact transient candidate without
+    /// copying its content into the Ledger.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub candidate_envelope_digest: Option<Digest>,
+    /// SHA-256 of the exact transient candidate content bytes.
+    ///
+    /// The envelope digest identifies the complete Provider output. This
+    /// second digest binds a later local-history adoption to the precise
+    /// content selected from that envelope.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub candidate_content_digest: Option<Digest>,
+    /// UTF-8 byte count of the transient candidate, when one was offered.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub candidate_byte_count: Option<u64>,
     /// Number of transformations the Provider declared.
     ///
     /// Transformation names are Provider-controlled text, so the durable
@@ -338,12 +378,71 @@ pub struct PostToolUsePlanBody {
     pub source_artifact_id: ArtifactId,
     /// SHA-256 of the original tool-result content.
     pub source_digest: Digest,
+    /// UTF-8 byte count of the original tool-result content.
+    pub source_byte_count: u64,
     /// Observe facts in deterministic plan order.
     pub observations: Vec<LedgerObservation>,
     /// Planned Observe Capabilities that produced no fact, and why.
     pub observation_gaps: Vec<LedgerObservationGap>,
     /// Result of the single Advise context-projection step.
     pub projection: LedgerProjectionOutcome,
+}
+
+/// Whether COSH committed a Provider candidate or kept the source bytes.
+///
+/// This records a local history mutation only. It does not claim that a
+/// remote model received or consumed those bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextAdoptionDecision {
+    /// COSH committed the validated lossless candidate bytes.
+    Adopted,
+    /// COSH committed the unchanged source bytes instead of a Provider offer.
+    Preserved,
+}
+
+/// Closed reason for a [`ContextAdoptionDecision`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextAdoptionReason {
+    /// A lossless candidate passed source and digest validation.
+    LosslessCandidate,
+    /// The settled plan offered no candidate, so source bytes were retained.
+    NoCandidate,
+    /// The Provider offered an empty candidate, so source bytes were retained.
+    EmptyCandidate,
+    /// The Provider candidate could not reconstruct the exact source bytes.
+    CandidateNotLossless,
+}
+
+/// Body of a [`LedgerEventKind::ContextAdoption`] record.
+///
+/// This is content-free evidence that COSH committed exact bytes to one local
+/// model-history Tool Result slot. Digests identify the transient source,
+/// candidate envelope, and committed representation without persisting any of
+/// their text. `plan_event_id` binds the decision to the preceding typed plan.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContextAdoptionBody {
+    /// PostToolUse plan whose settled result COSH interpreted.
+    pub plan_event_id: LedgerEventId,
+    /// Immutable source artifact allocated by AW Core.
+    pub source_artifact_id: ArtifactId,
+    /// SHA-256 of the exact provisional bytes submitted to AW Core.
+    pub source_digest: Digest,
+    /// Canonical JSON digest of the transient candidate envelope, when offered.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub candidate_envelope_digest: Option<Digest>,
+    /// SHA-256 of the exact bytes committed to the COSH history slot.
+    pub effective_digest: Digest,
+    /// UTF-8 byte count of the exact bytes committed to the history slot.
+    pub effective_byte_count: u64,
+    /// Whether the committed bytes came from the candidate or source.
+    pub decision: ContextAdoptionDecision,
+    /// Closed explanation for the decision.
+    pub reason: ContextAdoptionReason,
+    /// Content-free Provider invocations consumed by the corresponding plan.
+    pub provider_invocations: Vec<LedgerInvocationRef>,
 }
 
 /// Body of a [`LedgerEventKind::PreToolUseGate`] record.
@@ -354,6 +453,10 @@ pub struct PostToolUsePlanBody {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PreToolUseGateBody {
+    /// SHA-256 of the exact command bytes submitted for mediation.
+    pub command_digest: Digest,
+    /// UTF-8 byte count of the exact command submitted for mediation.
+    pub command_byte_count: u64,
     /// Gate outcome Core required the Agent Environment to honour.
     pub gate: ToolCallGate,
     /// SHA-256 identities of transient Provider rationale codes.
@@ -381,6 +484,7 @@ mod tests {
         let cases = [
             (LedgerEventKind::PostToolUsePlan, "\"post_tool_use_plan\""),
             (LedgerEventKind::PreToolUseGate, "\"pre_tool_use_gate\""),
+            (LedgerEventKind::ContextAdoption, "\"context_adoption\""),
             (LedgerEventKind::ProviderInvoked, "\"provider_invoked\""),
             (LedgerEventKind::EvidenceStored, "\"evidence_stored\""),
             (LedgerEventKind::ReceiptStored, "\"receipt_stored\""),

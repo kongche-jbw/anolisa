@@ -708,7 +708,7 @@ mod tests {
     use aw_contracts::ids::{ArtifactId, ProviderInvocationId};
     use aw_contracts::ledger::security_rule_id_digest;
     use aw_contracts::provider::{ProviderMeasurementKind, ProviderMeter, VersionedSchema};
-    use aw_contracts::security::SecurityRuleId;
+    use aw_contracts::security::{ObservationGapReason, SecurityRuleId};
 
     #[test]
     fn extracts_only_the_model_visible_cosh_slot() {
@@ -867,6 +867,7 @@ mod tests {
             vec![ObservationGap {
                 capability: schema("security.content.inspect"),
                 reason: aw_contracts::security::ObservationGapReason::NoImplementation,
+                provider_id: None,
                 error: None,
                 receipt: None,
             }],
@@ -1043,7 +1044,20 @@ mod tests {
         reasons: &[&str],
         degradation: Option<GateDegradation>,
     ) -> ToolCallDecision {
+        let receipt = if degradation.is_none() {
+            let mut receipt = receipt(ProviderDisposition::Produced);
+            receipt.capability = schema("security.command.inspect");
+            receipt.input_schema = schema("security.command.inspect.input");
+            receipt.output_schema = Some(schema("security.command.inspect.output"));
+            receipt.output_digest = Some(digest('d'));
+            receipt.output_bytes = Some(42);
+            Some(receipt)
+        } else {
+            None
+        };
         ToolCallDecision {
+            command_digest: digest('e'),
+            command_byte_count: 42,
             gate,
             reasons: reasons
                 .iter()
@@ -1052,9 +1066,22 @@ mod tests {
                         .expect("fixture rule id is a stable label")
                 })
                 .collect(),
-            receipt: None,
+            receipt,
             degradation,
         }
+    }
+
+    fn decision_for_tool(
+        gate: ToolCallGate,
+        reasons: &[&str],
+        degradation: Option<GateDegradation>,
+        tool_use_id: &ToolUseId,
+    ) -> ToolCallDecision {
+        let mut decision = decision(gate, reasons, degradation);
+        if let Some(receipt) = &mut decision.receipt {
+            receipt.scope.tool_use_id = Some(tool_use_id.clone());
+        }
+        decision
     }
 
     fn unreachable_provider_config() -> CoshHookConfig {
@@ -1102,12 +1129,19 @@ mod tests {
             .as_ref()
             .map(|candidate| candidate.source_digest.clone())
             .unwrap_or_else(|| digest('a'));
+        let mut projection_receipt = receipt(disposition);
+        if candidate.is_some() && disposition == ProviderDisposition::Produced {
+            projection_receipt.output_schema = Some(schema("context.projection.prepare.output"));
+            projection_receipt.output_digest = Some(digest('c'));
+            projection_receipt.output_bytes = Some(42);
+        }
         ToolResultOutcome {
             source_artifact_id,
             source_digest,
+            source_byte_count: 0,
             projection: aw_core::PreparedProjection {
                 candidate,
-                receipt: receipt(disposition),
+                receipt: projection_receipt,
             },
             observations,
             observation_gaps,
@@ -1209,8 +1243,14 @@ mod tests {
     fn a_recorded_gate_lands_in_a_verifiable_chain() {
         let dir = tempfile::tempdir().expect("temp dir");
         let spec = ledger_spec(dir.path().to_path_buf(), LedgerAssurance::Required);
-        let body = decision(ToolCallGate::Block, &["fixture.recursive_delete"], None).ledger_body();
         let tool_use_id = ToolUseId::new();
+        let body = decision_for_tool(
+            ToolCallGate::Block,
+            &["fixture.recursive_delete"],
+            None,
+            &tool_use_id,
+        )
+        .ledger_body();
 
         let record = ledger::append_record(
             &spec,
@@ -1241,14 +1281,36 @@ mod tests {
         let spec = ledger_spec(dir.path().to_path_buf(), LedgerAssurance::Required);
         let tool_use_id = ToolUseId::new();
 
-        let gate = decision(ToolCallGate::Warn, &["fixture.download_exec"], None).ledger_body();
-        let plan = outcome_with(
+        let gate = decision_for_tool(
+            ToolCallGate::Warn,
+            &["fixture.download_exec"],
+            None,
+            &tool_use_id,
+        )
+        .ledger_body();
+        let mut outcome = outcome_with(
             Some(candidate()),
             ProviderDisposition::Produced,
             Vec::new(),
-            Vec::new(),
-        )
-        .ledger_body();
+            vec![
+                ObservationGap {
+                    capability: schema("security.content.inspect"),
+                    reason: ObservationGapReason::NoImplementation,
+                    provider_id: None,
+                    error: None,
+                    receipt: None,
+                },
+                ObservationGap {
+                    capability: schema("security.code.inspect"),
+                    reason: ObservationGapReason::NoImplementation,
+                    provider_id: None,
+                    error: None,
+                    receipt: None,
+                },
+            ],
+        );
+        outcome.projection.receipt.scope.tool_use_id = Some(tool_use_id.clone());
+        let plan = outcome.ledger_body();
 
         for (kind, body) in [
             (
@@ -1279,7 +1341,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let spec = ledger_spec(dir.path().to_path_buf(), LedgerAssurance::Required);
         let tool_use_id = ToolUseId::new();
-        let body = decision(ToolCallGate::Allow, &[], None).ledger_body();
+        let body = decision_for_tool(ToolCallGate::Allow, &[], None, &tool_use_id).ledger_body();
 
         ledger::append_record(
             &spec,
@@ -1349,13 +1411,20 @@ mod tests {
     fn a_recorded_gate_body_never_carries_the_command() {
         let dir = tempfile::tempdir().expect("temp dir");
         let spec = ledger_spec(dir.path().to_path_buf(), LedgerAssurance::Required);
-        let body = decision(ToolCallGate::Block, &["fixture.recursive_delete"], None).ledger_body();
+        let tool_use_id = ToolUseId::new();
+        let body = decision_for_tool(
+            ToolCallGate::Block,
+            &["fixture.recursive_delete"],
+            None,
+            &tool_use_id,
+        )
+        .ledger_body();
 
         let record = ledger::append_record(
             &spec,
             LedgerEventKind::PreToolUseGate,
             &body,
-            &scope_for(&ToolUseId::new()),
+            &scope_for(&tool_use_id),
         )
         .expect("the append settles")
         .expect("a record was written");

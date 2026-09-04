@@ -177,6 +177,7 @@ fn parse_kind(s: &str) -> Option<LedgerEventKind> {
     match s {
         "post_tool_use_plan" => Some(LedgerEventKind::PostToolUsePlan),
         "pre_tool_use_gate" => Some(LedgerEventKind::PreToolUseGate),
+        "context_adoption" => Some(LedgerEventKind::ContextAdoption),
         "provider_invoked" => Some(LedgerEventKind::ProviderInvoked),
         "evidence_stored" => Some(LedgerEventKind::EvidenceStored),
         "receipt_stored" => Some(LedgerEventKind::ReceiptStored),

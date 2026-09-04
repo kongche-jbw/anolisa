@@ -176,6 +176,7 @@ pub(crate) fn kind_to_str(kind: aw_contracts::ledger::LedgerEventKind) -> &'stat
     match kind {
         aw_contracts::ledger::LedgerEventKind::PostToolUsePlan => "post_tool_use_plan",
         aw_contracts::ledger::LedgerEventKind::PreToolUseGate => "pre_tool_use_gate",
+        aw_contracts::ledger::LedgerEventKind::ContextAdoption => "context_adoption",
         aw_contracts::ledger::LedgerEventKind::ProviderInvoked => "provider_invoked",
         aw_contracts::ledger::LedgerEventKind::EvidenceStored => "evidence_stored",
         aw_contracts::ledger::LedgerEventKind::ReceiptStored => "receipt_stored",

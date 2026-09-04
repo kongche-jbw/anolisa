@@ -46,7 +46,7 @@ def _limit_text(text: str, max_bytes: int | None) -> tuple[str, bool, int]:
     if len(encoded) <= max_bytes:
         return text, False, len(encoded)
     trimmed = _decode_utf8_prefix(encoded[:max_bytes])
-    return trimmed, True, max_bytes
+    return trimmed, True, len(trimmed.encode("utf-8"))
 
 
 def _aggregate_verdict(findings: list[PiiFinding]) -> str:

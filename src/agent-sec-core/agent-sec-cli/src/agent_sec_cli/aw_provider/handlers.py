@@ -66,7 +66,6 @@ def handle(request: ProviderRequest) -> ProviderResponse:
 
 def _content_inspect(request: ContentInspectRequest) -> ProviderResponse:
     """Reports secret and personal-data findings in model-visible content."""
-    scanned_bytes = _input_bytes(request.content)
     scanner = PiiScanner(detectors=[RegexPiiDetector()])
     try:
         result: PiiScanResult = scanner.scan(
@@ -76,22 +75,31 @@ def _content_inspect(request: ContentInspectRequest) -> ProviderResponse:
             raw_evidence=False,
             redact_output=False,
         )
+    except Exception:
+        return _failed(request.operation, scanned_bytes=0)
+
+    progress = _pii_progress(result)
+    if progress is None:
+        return _failed(request.operation, scanned_bytes=0)
+    scanned_bytes, truncated = progress
+    if not result.ok or result.verdict == PiiVerdict.ERROR.value:
+        return _failed(request.operation, scanned_bytes=scanned_bytes)
+    try:
         findings = _pii_findings(result)
+        verdict = _inspection_verdict(result.verdict)
     except Exception:
         return _failed(request.operation, scanned_bytes=scanned_bytes)
-
-    truncated = bool(result.summary.get("truncated", False))
-    if not result.ok or result.verdict == PiiVerdict.ERROR.value or truncated:
+    if truncated and verdict is InspectionVerdict.CLEAN:
         return _failed(request.operation, scanned_bytes=scanned_bytes)
 
     return ContentCompletedResponse(
         operation=request.operation,
         disposition=Disposition.COMPLETED,
-        verdict=_inspection_verdict(result.verdict),
+        verdict=verdict,
         findings=findings,
         findings_total=sum(finding.count for finding in findings),
         scanned_bytes=scanned_bytes,
-        truncated=False,
+        truncated=truncated,
     )
 
 
@@ -102,9 +110,9 @@ def _code_inspect(request: CodeInspectRequest) -> ProviderResponse:
         results, language_detected = _scan_code(request.content, request.language)
         findings = _code_findings(results)
     except Exception:
-        return _failed(request.operation, scanned_bytes=scanned_bytes)
+        return _failed(request.operation, scanned_bytes=0)
     if not _scan_completed(results):
-        return _failed(request.operation, scanned_bytes=scanned_bytes)
+        return _failed(request.operation, scanned_bytes=0)
 
     return CodeCompletedResponse(
         operation=request.operation,
@@ -125,9 +133,9 @@ def _command_inspect(request: CommandInspectRequest) -> ProviderResponse:
         results, language_detected = _scan_code(request.content, request.language)
         findings = _code_findings(results)
     except Exception:
-        return _failed(request.operation, scanned_bytes=scanned_bytes)
+        return _failed(request.operation, scanned_bytes=0)
     if not _scan_completed(results):
-        return _failed(request.operation, scanned_bytes=scanned_bytes)
+        return _failed(request.operation, scanned_bytes=0)
 
     reasons = list(dict.fromkeys(finding.rule_id for finding in findings))
     if len(reasons) > MAX_REASONS:
@@ -200,6 +208,20 @@ def _failed(operation: Operation, *, scanned_bytes: int) -> ProviderErrorRespons
 def _input_bytes(content: str) -> int:
     """Returns the exact UTF-8 size of the submitted scanner input."""
     return len(content.encode("utf-8"))
+
+
+def _pii_progress(result: PiiScanResult) -> tuple[int, bool] | None:
+    """Returns scanner-reported byte coverage when its metadata is usable."""
+    scanned_bytes = result.summary.get("bytes_scanned")
+    truncated = result.summary.get("truncated")
+    if (
+        not isinstance(scanned_bytes, int)
+        or isinstance(scanned_bytes, bool)
+        or scanned_bytes < 0
+        or not isinstance(truncated, bool)
+    ):
+        return None
+    return scanned_bytes, truncated
 
 
 def _pii_findings(result: PiiScanResult) -> list[ProviderFinding]:

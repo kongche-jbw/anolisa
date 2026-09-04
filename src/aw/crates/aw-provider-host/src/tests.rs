@@ -48,6 +48,15 @@ case "$mode" in
       printf '%s' 'survived' > ./orphan-survived
     ) &
     ;;
+  orphan_closed)
+    printf '%s' 'started' > ./orphan-started
+    (
+      exec </dev/null >/dev/null 2>&1
+      /bin/sleep 1
+      printf '%s' 'survived' > ./orphan-survived
+    ) &
+    printf '%s' '{"disposition":"applied","output":"compressed","before_tokens":1200,"after_tokens":180,"meter_method":"fixture-estimator-v1"}'
+    ;;
   crash)
     printf '%s' 'credential-secret' >&2
     exit 7
@@ -471,6 +480,32 @@ fn json_map_builds_native_input_without_forwarding_the_canonical_body() {
 }
 
 #[test]
+fn manifest_bounds_json_map_field_work() {
+    let fixture = Fixture::new("success", 4096);
+    let mut manifest = fs::read_to_string(&fixture.manifest).unwrap();
+    for index in 0..128 {
+        manifest.push_str(&format!(
+            r#"
+[[capabilities.codec.request.fields]]
+target = "/extra_{index}"
+source = {{ kind = "const", value = {index} }}
+on_missing = "reject"
+"#
+        ));
+    }
+    fs::write(&fixture.manifest, manifest).unwrap();
+
+    assert!(matches!(
+        ProviderCatalog::discover(
+            ProviderManifestSource::File(fixture.manifest.clone()),
+            &ProviderAdmissionOptions::default(),
+        ),
+        Err(ProviderHostError::InvalidManifest { reason, .. })
+            if reason.contains("request fields exceed the 128-item limit")
+    ));
+}
+
+#[test]
 fn accepted_timeout_and_nonzero_exit_return_content_free_failed_receipts() {
     let timeout = Fixture::new("timeout", 4096);
     let catalog = timeout.catalog();
@@ -526,6 +561,24 @@ fn wall_time_covers_pipe_drain_and_kills_the_process_group() {
 }
 
 #[test]
+fn successful_one_shot_cleanup_kills_background_descendants() {
+    let fixture = Fixture::new("orphan_closed", 4096);
+    let catalog = fixture.catalog();
+
+    let result = catalog
+        .invoke(&invocation(&catalog), Some(&fixture.state_root))
+        .unwrap();
+
+    assert_eq!(result.receipt.disposition, ProviderDisposition::Produced);
+    assert!(fixture.directory.path().join("orphan-started").is_file());
+    thread::sleep(Duration::from_millis(1_100));
+    assert!(
+        !fixture.directory.path().join("orphan-survived").exists(),
+        "a background descendant survived a successful one-shot invocation"
+    );
+}
+
+#[test]
 fn accepted_malformed_and_oversized_stdout_return_content_free_failed_receipts() {
     let malformed = Fixture::new("malformed", 4096);
     let catalog = malformed.catalog();
@@ -576,6 +629,10 @@ fn canonical_output_cannot_exceed_the_invocation_budget() {
         .invoke(&invocation, Some(&fixture.state_root))
         .unwrap();
     assert_failed_receipt(&result);
+    assert_eq!(
+        result.receipt.error.as_ref().unwrap().code.as_str(),
+        "provider_output_too_large"
+    );
 }
 
 #[test]

@@ -28,6 +28,7 @@ from agent_sec_cli.aw_provider.protocol import (
 from agent_sec_cli.aw_provider.runner import ProviderProtocolError, run_provider
 from agent_sec_cli.code_scanner import scanner as code_scanner
 from agent_sec_cli.code_scanner.models import Language as CodeLanguage
+from agent_sec_cli.pii_checker.scanner import PiiScanner
 
 ALIYUN_KEY = "AccessKeyId: LTAI5tExampleAccessKey1"
 PRIVATE_KEY = (
@@ -93,6 +94,42 @@ def test_credential_content_reports_a_sensitive_verdict():
     assert response.findings_total == sum(
         finding.count for finding in response.findings
     )
+
+
+def test_partial_sensitive_scan_keeps_verified_findings(monkeypatch):
+    real_scan = PiiScanner.scan
+    prefix = ALIYUN_KEY
+
+    def limited_scan(scanner, text, **kwargs):
+        return real_scan(
+            scanner,
+            text,
+            max_bytes=len(prefix.encode("utf-8")),
+            **kwargs,
+        )
+
+    monkeypatch.setattr(PiiScanner, "scan", limited_scan)
+    response = handle(_request(content=f"{prefix} trailing unscanned text"))
+
+    assert response.disposition is Disposition.COMPLETED
+    assert response.verdict is InspectionVerdict.SENSITIVE
+    assert response.truncated is True
+    assert response.scanned_bytes == len(prefix.encode("utf-8"))
+    assert response.findings
+
+
+def test_partial_clean_scan_returns_no_unsupported_verdict(monkeypatch):
+    real_scan = PiiScanner.scan
+
+    def limited_scan(scanner, text, **kwargs):
+        return real_scan(scanner, text, max_bytes=3, **kwargs)
+
+    monkeypatch.setattr(PiiScanner, "scan", limited_scan)
+    response = handle(_request(content="nothing sensitive here"))
+
+    assert response.disposition is Disposition.ERROR
+    assert response.scanned_bytes == 3
+    assert "verdict" not in response.model_dump(mode="json")
 
 
 def test_findings_never_carry_the_matched_value():
@@ -208,6 +245,7 @@ def test_scanner_exception_returns_a_content_free_error(monkeypatch):
     encoded = response.model_dump_json()
 
     assert response.disposition is Disposition.ERROR
+    assert response.scanned_bytes == 0
     assert "secret diagnostic" not in encoded
     assert "private payload" not in encoded
 

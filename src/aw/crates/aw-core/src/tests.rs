@@ -14,7 +14,7 @@ use aw_contracts::ids::{
     ActorId, AgentSessionId, AgentWorkId, AttemptId, EnvironmentId, ExecutionContextId, ToolUseId,
     TurnId,
 };
-use aw_contracts::provider::ProviderDisposition;
+use aw_contracts::provider::{ProviderDisposition, ProviderMeasurementKind, ProviderMeter};
 use aw_contracts::security::{
     GateDegradation, ObservationGapReason, PendingToolCallSubmission, SecurityCodeLanguage,
     SecurityRuleId,
@@ -23,8 +23,9 @@ use aw_provider_host::{ProviderAdmissionOptions, ProviderCatalog, ProviderManife
 use serde_json::json;
 
 use super::{
-    context_artifact_id, context_projection_input, sha256_digest, CapabilityPreferences, Core,
-    CoreConfig, CoreError, MediationFailurePolicy, SessionContextSpec, ToolCallGate,
+    context_artifact_id, context_projection_input, sha256_digest, validate_meter,
+    CapabilityPreferences, Core, CoreConfig, CoreError, MediationFailurePolicy, SessionContextSpec,
+    ToolCallGate,
 };
 use crate::execute::capability_idempotency_key;
 use crate::plan::PlanBoundary;
@@ -37,6 +38,52 @@ use providers::{write_provider, FixtureKind};
 /// production default just to spawn the fixture, and a deadline there would
 /// report `provider_timeout` instead of the routing under test.
 const FIXTURE_WALL_TIME_MS: u64 = 30_000;
+
+#[test]
+fn security_meters_must_match_the_canonical_fact() {
+    let meter = ProviderMeter {
+        meter_id: BoundedName::new("security.scanned_bytes").expect("meter id is valid"),
+        unit: BoundedName::new("bytes").expect("meter unit is valid"),
+        measurement_kind: ProviderMeasurementKind::Observed,
+        method: None,
+        value: 38,
+    };
+    assert!(validate_meter(
+        std::slice::from_ref(&meter),
+        "security.scanned_bytes",
+        "bytes",
+        ProviderMeasurementKind::Observed,
+        38,
+    )
+    .is_ok());
+    assert!(matches!(
+        validate_meter(
+            std::slice::from_ref(&meter),
+            "security.scanned_bytes",
+            "bytes",
+            ProviderMeasurementKind::Observed,
+            37,
+        ),
+        Err(CoreError::SecurityMeterMismatch {
+            meter_id: "security.scanned_bytes"
+        })
+    ));
+    assert!(matches!(
+        validate_meter(
+            &[ProviderMeter {
+                unit: BoundedName::new("tokens").expect("unit is valid"),
+                ..meter
+            }],
+            "security.scanned_bytes",
+            "bytes",
+            ProviderMeasurementKind::Observed,
+            38,
+        ),
+        Err(CoreError::SecurityMeterMismatch {
+            meter_id: "security.scanned_bytes"
+        })
+    ));
+}
 
 #[test]
 fn execution_context_allocates_once_or_preserves_a_propagated_identity() {
@@ -166,6 +213,29 @@ fn tool_result_route_populates_exact_scope_and_returns_content_free_receipt() {
     let encoded = serde_json::to_string(receipt).expect("receipt serializes");
     assert!(!encoded.contains("sensitive original output"));
     assert!(!encoded.contains("projected output"));
+}
+
+#[test]
+fn projection_cannot_change_media_type_when_reencoding_is_forbidden() {
+    let (_packages, mut core) = core_fixture(&[("projection-a", FixtureKind::Projection)]);
+    let context = core
+        .establish_execution_context(context_spec(None))
+        .expect("session scope is valid");
+    let mut input = submission(r#"{"status":"ready"}"#);
+    input.media_type = BoundedName::new("application/json").expect("fixture type is bounded");
+    input.allow_text_reencoding = false;
+
+    let error = core
+        .observe_tool_result(
+            &context,
+            TurnId::new(),
+            ToolUseId::new(),
+            input,
+            &CapabilityPreferences::default(),
+        )
+        .expect_err("text output cannot override a structured representation constraint");
+
+    assert!(matches!(error, CoreError::TextReencodingForbidden));
 }
 
 #[test]
@@ -402,6 +472,62 @@ fn observe_steps_reach_every_distinct_provider() {
 }
 
 #[test]
+fn a_partial_risk_fact_keeps_its_verified_coverage() {
+    let (_packages, mut core) = core_fixture(&[
+        ("projection-a", FixtureKind::Projection),
+        ("scanner-a", FixtureKind::ContentInspectPartial),
+    ]);
+    let context = core
+        .establish_execution_context(context_spec(None))
+        .expect("session scope is valid");
+
+    let outcome = core
+        .observe_tool_result(
+            &context,
+            TurnId::new(),
+            ToolUseId::new(),
+            submission("source"),
+            &CapabilityPreferences::default(),
+        )
+        .expect("a partial fact is still usable when its coverage is explicit");
+
+    assert_eq!(outcome.observations.len(), 1);
+    assert_eq!(outcome.observations[0].scanned_bytes, 3);
+    assert!(outcome.observations[0].truncated);
+    assert!(outcome.observation_gaps.iter().all(|gap| {
+        gap.capability.id.as_str() == "security.code.inspect"
+            && gap.reason == ObservationGapReason::NoImplementation
+    }));
+}
+
+#[test]
+fn a_complete_observation_without_input_coverage_becomes_a_gap() {
+    let (_packages, mut core) = core_fixture(&[
+        ("projection-a", FixtureKind::Projection),
+        ("scanner-a", FixtureKind::ContentInspectWrongCoverage),
+    ]);
+    let context = core
+        .establish_execution_context(context_spec(None))
+        .expect("session scope is valid");
+
+    let outcome = core
+        .observe_tool_result(
+            &context,
+            TurnId::new(),
+            ToolUseId::new(),
+            submission("source"),
+            &CapabilityPreferences::default(),
+        )
+        .expect("an invalid Observe result degrades only its own step");
+
+    assert!(outcome.observations.is_empty());
+    assert!(outcome.observation_gaps.iter().any(|gap| {
+        gap.capability.id.as_str() == "security.content.inspect"
+            && gap.reason == ObservationGapReason::InvalidOutput
+    }));
+}
+
+#[test]
 fn an_advise_candidate_survives_a_failed_observation() {
     let (_packages, mut core) = core_fixture(&[
         ("projection-a", FixtureKind::Projection),
@@ -605,6 +731,29 @@ fn an_allow_verdict_carries_no_reason_codes() {
     assert_eq!(decision.gate, ToolCallGate::Allow, "{decision:#?}");
     assert!(decision.reasons.is_empty());
     assert_eq!(decision.degradation, None);
+}
+
+#[test]
+fn an_allow_without_input_coverage_uses_the_failure_gate() {
+    let (_packages, mut core) =
+        core_fixture(&[("gate-a", FixtureKind::CommandInspectWrongCoverage)]);
+    let context = core
+        .establish_execution_context(context_spec(None))
+        .expect("session scope is valid");
+
+    let decision = core
+        .mediate_tool_call(
+            &context,
+            TurnId::new(),
+            ToolUseId::new(),
+            pending_call("ls -la"),
+            &CapabilityPreferences::default(),
+        )
+        .expect("a contradictory Provider result settles to policy");
+
+    assert_eq!(decision.gate, ToolCallGate::Ask);
+    assert!(decision.reasons.is_empty());
+    assert_eq!(decision.degradation, Some(GateDegradation::InvalidOutput));
 }
 
 #[test]

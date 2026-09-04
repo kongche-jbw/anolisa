@@ -39,10 +39,10 @@ telemetry = "disabled"
 capability = "context.projection.prepare/v1"
 authority = "advise"
 scopes = ["agent_session", "turn", "tool_call"]
-input_contract = { schema = "context.projection.prepare.input/v1", resource = "schemas/context-projection-prepare-input-v1.schema.json", sha256 = "07d62b903479892f45620173c1ce7804176cfd8b97350e6035b52823f15053cb" }
+input_contract = { schema = "context.projection.prepare.input/v1", resource = "schemas/context-projection-prepare-input-v1.schema.json", sha256 = "6dbf20f28017d718683679e779bd97b6f85a78a8feb44b7237dd79ede2e74773" }
 output_contract = { schema = "context.projection.prepare.output/v1", resource = "schemas/context-projection-prepare-output-v1.schema.json", sha256 = "4a171682511cfad0611626ab942c31d33928140b8eccd99a7e4d3c2e63997f37" }
-native_input = { resource = "schemas/tokenless-compression-request-v1.schema.json", sha256 = "f227f5179a54f759ce9db0166a76c29636de4ba2effb4501821f4d6c453fd828" }
-native_output = { resource = "schemas/tokenless-compression-response-v1.schema.json", sha256 = "293dc3e02e3a975f5d9fecf7e97b866457689daf8e1521c50436b434726ea7f7" }
+native_input = { resource = "schemas/tokenless-compression-request-v1.schema.json", sha256 = "6c84b417a364fa4d4529288156965b89173de9de9319da827c6f66520f83fc25" }
+native_output = { resource = "schemas/tokenless-compression-response-v1.schema.json", sha256 = "18cbdfdffe8205471a6cda9c5431ffa9235368e5e7f813f11c39938bd5c0d8a1" }
 
 [capabilities.codec]
 kind = "json-map/v1"
@@ -58,8 +58,13 @@ source = { kind = "input", pointer = "/artifact/content" }
 on_missing = "reject"
 
 [[capabilities.codec.request.fields]]
+target = "/input_media_type"
+source = { kind = "input", pointer = "/artifact/media_type" }
+on_missing = "reject"
+
+[[capabilities.codec.request.fields]]
 target = "/agent_id"
-source = { kind = "scope", field = "environment_id" }
+source = { kind = "const", value = "aw-provider" }
 on_missing = "reject"
 
 [[capabilities.codec.request.fields]]
@@ -132,7 +137,7 @@ when_disposition = ["produced"]
 
 [[capabilities.codec.response.output_fields]]
 target = "/candidate/media_type"
-source = { kind = "const", value = "text/plain" }
+source = { kind = "response", pointer = "/output_media_type" }
 when_disposition = ["produced"]
 
 [[capabilities.codec.response.output_fields]]

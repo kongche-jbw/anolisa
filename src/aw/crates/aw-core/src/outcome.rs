@@ -77,6 +77,10 @@ pub struct ObservationGap {
     pub capability: VersionedSchema,
     /// Why the observation is absent.
     pub reason: ObservationGapReason,
+    /// Provider target for an invocation-level gap. Route-level gaps have no
+    /// target because Core selected no implementation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_id: Option<aw_contracts::common::BoundedName>,
     /// Bounded safe failure, when the invocation reached a settled receipt.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<ContractError>,
@@ -92,6 +96,8 @@ pub struct ToolResultOutcome {
     pub source_artifact_id: ArtifactId,
     /// SHA-256 of the original tool-result content.
     pub source_digest: Digest,
+    /// UTF-8 byte count of the original tool-result content.
+    pub source_byte_count: u64,
     /// Result of the single Advise context-projection step.
     pub projection: PreparedProjection,
     /// Content-free Observe facts in deterministic plan order.
@@ -101,11 +107,12 @@ pub struct ToolResultOutcome {
 }
 
 impl ToolResultOutcome {
-    /// Returns every accepted receipt in deterministic plan order.
+    /// Returns every accepted receipt in deterministic outcome-group order.
     ///
-    /// Observe receipts precede the Advise receipt because Core invokes the
-    /// steps in that order. A gap that never reached an accepted invocation
-    /// contributes no receipt.
+    /// Produced Observe facts come first, followed by settled Observe gaps and
+    /// then the Advise receipt. Because facts and gaps have separate public
+    /// collections, their receipts do not reconstruct an interleaved plan.
+    /// A gap that never reached an accepted invocation contributes no receipt.
     #[must_use]
     pub fn receipts(&self) -> Vec<&ProviderReceipt> {
         self.observations
@@ -150,6 +157,7 @@ impl ToolResultOutcome {
         PostToolUsePlanBody {
             source_artifact_id: self.source_artifact_id.clone(),
             source_digest: self.source_digest.clone(),
+            source_byte_count: self.source_byte_count,
             observations: self
                 .observations
                 .iter()
@@ -173,11 +181,27 @@ impl ToolResultOutcome {
                 .map(|gap| LedgerObservationGap {
                     capability: gap.capability.clone(),
                     reason: gap.reason,
+                    provider_id: gap.provider_id.clone(),
                     invocation: gap.receipt.as_ref().map(LedgerInvocationRef::from_receipt),
                 })
                 .collect(),
             projection: LedgerProjectionOutcome {
                 candidate_offered: self.projection.candidate.is_some(),
+                candidate_envelope_digest: self
+                    .projection
+                    .candidate
+                    .as_ref()
+                    .and(self.projection.receipt.output_digest.clone()),
+                candidate_content_digest: self
+                    .projection
+                    .candidate
+                    .as_ref()
+                    .map(|candidate| Digest::sha256(candidate.content.as_bytes())),
+                candidate_byte_count: self
+                    .projection
+                    .candidate
+                    .as_ref()
+                    .map(|candidate| candidate.content.len() as u64),
                 transform_count: self
                     .projection
                     .candidate
@@ -201,6 +225,10 @@ impl ToolResultOutcome {
 /// than read the absence of an opinion as permission.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ToolCallDecision {
+    /// SHA-256 of the exact command bytes submitted to Core.
+    pub command_digest: Digest,
+    /// UTF-8 byte count of the exact command submitted to Core.
+    pub command_byte_count: u64,
     /// Gate outcome the Agent Environment must honour.
     pub gate: ToolCallGate,
     /// Rationale codes safe for operator presentation.
@@ -225,6 +253,8 @@ impl ToolCallDecision {
     #[must_use]
     pub fn ledger_body(&self) -> PreToolUseGateBody {
         PreToolUseGateBody {
+            command_digest: self.command_digest.clone(),
+            command_byte_count: self.command_byte_count,
             gate: self.gate,
             reasons: self.reasons.iter().map(security_rule_id_digest).collect(),
             degradation: self.degradation,

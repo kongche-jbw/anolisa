@@ -14,13 +14,16 @@ use std::time::{SystemTime, SystemTimeError, UNIX_EPOCH};
 use aw_contracts::common::{BoundedName, BoundedStringError, Digest, DigestError, TargetRef};
 use aw_contracts::context::{
     ContextArtifactOrigin, ContextContractBuildError, ContextProjectionCandidate,
-    ToolResultSubmission,
+    ToolResultSubmission, MAX_TRANSFORM_CHAIN_ITEMS,
 };
 use aw_contracts::ids::{
     ActorId, AgentSessionId, AgentWorkId, ArtifactId, AttemptId, EnvironmentId, ExecutionContextId,
     IdError, ToolUseId, TurnId,
 };
-use aw_contracts::provider::{ExecutionScope, ProviderDisposition, VersionedSchema};
+use aw_contracts::provider::{
+    ExecutionScope, ProviderDisposition, ProviderMeasurementKind, ProviderMeter, ProviderReceipt,
+    VersionedSchema,
+};
 use aw_contracts::security::{
     CodeInspection, CommandInspection, CommandVerdict, ContentInspection, GateDegradation,
     ObservationGapReason, PendingToolCallSubmission, SecurityBoundary, SecurityCodeLanguage,
@@ -44,8 +47,6 @@ pub use outcome::{
 
 use execute::schema_label;
 use plan::{PlanBoundary, StepKind};
-
-const MAX_TRANSFORM_CHAIN_ITEMS: usize = 64;
 
 /// Caller-owned identities used to establish one governed Agent execution.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -278,6 +279,8 @@ impl Core {
         }
 
         let source_digest = sha256_digest(submission.content.as_bytes())?;
+        let source_byte_count =
+            u64::try_from(submission.content.len()).map_err(CoreError::InputSizeOutOfRange)?;
         let artifact_id = context_artifact_id(
             context.execution_context_id(),
             &turn_id,
@@ -296,6 +299,7 @@ impl Core {
                 observation_gaps.push(ObservationGap {
                     capability: step.capability.clone(),
                     reason: route_gap.as_observation_reason(),
+                    provider_id: None,
                     error: None,
                     receipt: None,
                 });
@@ -327,6 +331,7 @@ impl Core {
                         &result,
                         &artifact_id,
                         &source_digest,
+                        &submission,
                     )?;
                     projection = Some(PreparedProjection {
                         candidate,
@@ -337,6 +342,7 @@ impl Core {
                     let input =
                         inspection_input(step.kind, &artifact_id, &source_digest, &submission)?;
                     for target in resolved_step.targets {
+                        let target_provider_id = target.provider_id.clone();
                         let invoked = self.invoke_step(
                             &step,
                             PlanBoundary::PostToolUse,
@@ -346,27 +352,32 @@ impl Core {
                             input.clone(),
                         );
                         match invoked {
-                            Ok(result) => match self.accept_observation(&step, &result) {
-                                Ok(Some(observation)) => observations.push(observation),
-                                Ok(None) => observation_gaps.push(ObservationGap {
-                                    capability: step.capability.clone(),
-                                    reason: ObservationGapReason::NotProduced,
-                                    error: result.receipt.error.clone(),
-                                    receipt: Some(result.receipt),
-                                }),
-                                Err(_) => observation_gaps.push(ObservationGap {
-                                    capability: step.capability.clone(),
-                                    reason: ObservationGapReason::InvalidOutput,
-                                    error: result.receipt.error.clone(),
-                                    receipt: Some(result.receipt),
-                                }),
-                            },
+                            Ok(result) => {
+                                match self.accept_observation(&step, &result, source_byte_count) {
+                                    Ok(Some(observation)) => observations.push(observation),
+                                    Ok(None) => observation_gaps.push(ObservationGap {
+                                        capability: step.capability.clone(),
+                                        reason: ObservationGapReason::NotProduced,
+                                        provider_id: Some(result.receipt.provider_id.clone()),
+                                        error: result.receipt.error.clone(),
+                                        receipt: Some(result.receipt),
+                                    }),
+                                    Err(_) => observation_gaps.push(ObservationGap {
+                                        capability: step.capability.clone(),
+                                        reason: ObservationGapReason::InvalidOutput,
+                                        provider_id: Some(result.receipt.provider_id.clone()),
+                                        error: result.receipt.error.clone(),
+                                        receipt: Some(result.receipt),
+                                    }),
+                                }
+                            }
                             // An Observe Capability only reports facts. It must
                             // never decide whether the Advise result reaches a
                             // model, so a Host failure degrades this step alone.
                             Err(_) => observation_gaps.push(ObservationGap {
                                 capability: step.capability.clone(),
                                 reason: ObservationGapReason::HostFailure,
+                                provider_id: Some(target_provider_id),
                                 error: None,
                                 receipt: None,
                             }),
@@ -379,6 +390,7 @@ impl Core {
         Ok(ToolResultOutcome {
             source_artifact_id: artifact_id,
             source_digest,
+            source_byte_count,
             projection: projection.ok_or(CoreError::MissingResolvedRoute)?,
             observations,
             observation_gaps,
@@ -389,6 +401,7 @@ impl Core {
         &self,
         step: &plan::CapabilityPlanStep,
         result: &aw_contracts::provider::ProviderInvocationResult,
+        source_byte_count: u64,
     ) -> Result<Option<CapabilityObservation>, CoreError> {
         if result.receipt.disposition != ProviderDisposition::Produced {
             if receipt_reports_invalid_output(&result.receipt) {
@@ -411,6 +424,16 @@ impl Core {
                 let envelope: ContentInspectionOutput =
                     serde_json::from_value(output.body.clone())?;
                 envelope.inspection.validate()?;
+                validate_scan_coverage(
+                    envelope.inspection.scanned_bytes,
+                    envelope.inspection.truncated,
+                    source_byte_count,
+                )?;
+                validate_security_meters(
+                    &result.receipt,
+                    envelope.inspection.scanned_bytes,
+                    findings_total(&envelope.inspection.findings),
+                )?;
                 CapabilityObservation {
                     capability: step.capability.clone(),
                     verdict: envelope.inspection.verdict,
@@ -424,6 +447,16 @@ impl Core {
             StepKind::CodeInspection => {
                 let envelope: CodeInspectionOutput = serde_json::from_value(output.body.clone())?;
                 envelope.inspection.validate()?;
+                validate_scan_coverage(
+                    envelope.inspection.scanned_bytes,
+                    envelope.inspection.truncated,
+                    source_byte_count,
+                )?;
+                validate_security_meters(
+                    &result.receipt,
+                    envelope.inspection.scanned_bytes,
+                    findings_total(&envelope.inspection.findings),
+                )?;
                 CapabilityObservation {
                     capability: step.capability.clone(),
                     verdict: envelope.inspection.verdict,
@@ -476,6 +509,9 @@ impl Core {
         }
 
         let scope = context.tool_scope(turn_id, tool_use_id.clone());
+        let command_digest = sha256_digest(submission.command.as_bytes())?;
+        let command_byte_count =
+            u64::try_from(submission.command.len()).map_err(CoreError::InputSizeOutOfRange)?;
         let resolved = self.resolve_plan(plan::pre_tool_use_plan()?, preferences)?;
         let step = resolved
             .into_iter()
@@ -493,6 +529,8 @@ impl Core {
                 self.config.mediation_failure.gate()
             };
             return Ok(ToolCallDecision {
+                command_digest,
+                command_byte_count,
                 gate,
                 reasons: Vec::new(),
                 receipt: None,
@@ -505,7 +543,6 @@ impl Core {
             .into_iter()
             .next()
             .ok_or(CoreError::MissingResolvedRoute)?;
-        let command_digest = sha256_digest(submission.command.as_bytes())?;
         let input = command_inspection_input(&command_digest, &submission)?;
         let result = match self.invoke_step(
             &step.step,
@@ -518,6 +555,8 @@ impl Core {
             Ok(result) => result,
             Err(_) => {
                 return Ok(ToolCallDecision {
+                    command_digest,
+                    command_byte_count,
                     gate: self.config.mediation_failure.gate(),
                     reasons: Vec::new(),
                     receipt: None,
@@ -526,36 +565,45 @@ impl Core {
             }
         };
 
-        Ok(match self.accept_command_decision(&step.step, &result) {
-            Ok(Some(inspection)) => ToolCallDecision {
-                gate: match inspection.verdict {
-                    CommandVerdict::Allow => ToolCallGate::Allow,
-                    CommandVerdict::Warn => ToolCallGate::Warn,
-                    CommandVerdict::Deny => ToolCallGate::Block,
+        Ok(
+            match self.accept_command_decision(&step.step, &result, command_byte_count) {
+                Ok(Some(inspection)) => ToolCallDecision {
+                    command_digest: command_digest.clone(),
+                    command_byte_count,
+                    gate: match inspection.verdict {
+                        CommandVerdict::Allow => ToolCallGate::Allow,
+                        CommandVerdict::Warn => ToolCallGate::Warn,
+                        CommandVerdict::Deny => ToolCallGate::Block,
+                    },
+                    reasons: inspection.reasons,
+                    receipt: Some(result.receipt),
+                    degradation: None,
                 },
-                reasons: inspection.reasons,
-                receipt: Some(result.receipt),
-                degradation: None,
+                Ok(None) => ToolCallDecision {
+                    command_digest: command_digest.clone(),
+                    command_byte_count,
+                    gate: self.config.mediation_failure.gate(),
+                    reasons: Vec::new(),
+                    receipt: Some(result.receipt),
+                    degradation: Some(GateDegradation::NotProduced),
+                },
+                Err(_) => ToolCallDecision {
+                    command_digest,
+                    command_byte_count,
+                    gate: self.config.mediation_failure.gate(),
+                    reasons: Vec::new(),
+                    receipt: Some(result.receipt),
+                    degradation: Some(GateDegradation::InvalidOutput),
+                },
             },
-            Ok(None) => ToolCallDecision {
-                gate: self.config.mediation_failure.gate(),
-                reasons: Vec::new(),
-                receipt: Some(result.receipt),
-                degradation: Some(GateDegradation::NotProduced),
-            },
-            Err(_) => ToolCallDecision {
-                gate: self.config.mediation_failure.gate(),
-                reasons: Vec::new(),
-                receipt: Some(result.receipt),
-                degradation: Some(GateDegradation::InvalidOutput),
-            },
-        })
+        )
     }
 
     fn accept_command_decision(
         &self,
         step: &plan::CapabilityPlanStep,
         result: &aw_contracts::provider::ProviderInvocationResult,
+        command_byte_count: u64,
     ) -> Result<Option<CommandInspection>, CoreError> {
         if result.receipt.disposition != ProviderDisposition::Produced {
             if receipt_reports_invalid_output(&result.receipt) {
@@ -575,6 +623,12 @@ impl Core {
         }
         let envelope: CommandInspectionOutput = serde_json::from_value(output.body.clone())?;
         envelope.decision.validate()?;
+        validate_scan_coverage(envelope.decision.scanned_bytes, false, command_byte_count)?;
+        validate_security_meters(
+            &result.receipt,
+            envelope.decision.scanned_bytes,
+            findings_total(&envelope.decision.findings),
+        )?;
         if envelope.decision.findings.len() > MAX_OBSERVATION_FINDINGS
             || envelope.decision.reasons.len() > MAX_GATE_REASONS
         {
@@ -589,6 +643,7 @@ impl Core {
         result: &aw_contracts::provider::ProviderInvocationResult,
         artifact_id: &ArtifactId,
         source_digest: &Digest,
+        submission: &ToolResultSubmission,
     ) -> Result<Option<ContextProjectionCandidate>, CoreError> {
         if result.receipt.disposition != ProviderDisposition::Produced {
             return Ok(None);
@@ -604,7 +659,7 @@ impl Core {
             });
         }
         let envelope: ContextProjectionOutput = serde_json::from_value(output.body.clone())?;
-        validate_candidate(&envelope.candidate, artifact_id, source_digest)?;
+        validate_candidate(&envelope.candidate, artifact_id, source_digest, submission)?;
         Ok(Some(envelope.candidate))
     }
 }
@@ -686,9 +741,24 @@ pub enum CoreError {
     /// Candidate exceeds the canonical transformation-chain bound.
     #[error("Provider candidate transform chain exceeds {MAX_TRANSFORM_CHAIN_ITEMS} items")]
     TransformChainTooLong,
+    /// A candidate changes media representation when the caller forbids it.
+    #[error("Provider candidate changes the submitted media representation")]
+    TextReencodingForbidden,
     /// Inspection result exceeds the canonical findings bound.
     #[error("Provider inspection exceeds {MAX_OBSERVATION_FINDINGS} findings")]
     TooManyFindings,
+    /// A security fact's byte coverage contradicts the submitted input.
+    #[error("Provider security fact does not cover the submitted input bytes")]
+    ScanCoverageMismatch,
+    /// A receipt meter contradicts the canonical security fact it describes.
+    #[error("Provider security meter `{meter_id}` contradicts the canonical output")]
+    SecurityMeterMismatch {
+        /// Stable meter whose value did not match the canonical fact.
+        meter_id: &'static str,
+    },
+    /// Submitted content length cannot be represented by the public Contract.
+    #[error("submitted input byte count cannot be represented as u64")]
+    InputSizeOutOfRange(#[source] TryFromIntError),
     /// System time precedes the Unix epoch.
     #[error("system clock precedes the Unix epoch")]
     ClockBeforeEpoch(#[source] SystemTimeError),
@@ -914,12 +984,78 @@ fn validate_candidate(
     candidate: &ContextProjectionCandidate,
     artifact_id: &ArtifactId,
     source_digest: &Digest,
+    submission: &ToolResultSubmission,
 ) -> Result<(), CoreError> {
     if candidate.source_artifact_id != *artifact_id || candidate.source_digest != *source_digest {
         return Err(CoreError::CandidateSourceMismatch);
     }
     if candidate.transform_chain.len() > MAX_TRANSFORM_CHAIN_ITEMS {
         return Err(CoreError::TransformChainTooLong);
+    }
+    if !submission.allow_text_reencoding && candidate.media_type != submission.media_type {
+        return Err(CoreError::TextReencodingForbidden);
+    }
+    Ok(())
+}
+
+fn validate_scan_coverage(
+    scanned_bytes: u64,
+    truncated: bool,
+    input_bytes: u64,
+) -> Result<(), CoreError> {
+    let valid = if truncated {
+        scanned_bytes > 0 && scanned_bytes < input_bytes
+    } else {
+        scanned_bytes == input_bytes
+    };
+    if !valid {
+        return Err(CoreError::ScanCoverageMismatch);
+    }
+    Ok(())
+}
+
+fn findings_total(findings: &[aw_contracts::security::SecurityFinding]) -> u64 {
+    findings
+        .iter()
+        .map(|finding| u64::from(finding.count))
+        .sum()
+}
+
+fn validate_security_meters(
+    receipt: &ProviderReceipt,
+    scanned_bytes: u64,
+    findings_total: u64,
+) -> Result<(), CoreError> {
+    validate_meter(
+        &receipt.meters,
+        "security.scanned_bytes",
+        "bytes",
+        ProviderMeasurementKind::Observed,
+        scanned_bytes,
+    )?;
+    validate_meter(
+        &receipt.meters,
+        "security.findings_total",
+        "findings",
+        ProviderMeasurementKind::Observed,
+        findings_total,
+    )
+}
+
+fn validate_meter(
+    meters: &[ProviderMeter],
+    meter_id: &'static str,
+    unit: &'static str,
+    measurement_kind: ProviderMeasurementKind,
+    expected: u64,
+) -> Result<(), CoreError> {
+    if meters.iter().any(|meter| {
+        meter.meter_id.as_str() == meter_id
+            && (meter.unit.as_str() != unit
+                || meter.measurement_kind != measurement_kind
+                || meter.value != expected)
+    }) {
+        return Err(CoreError::SecurityMeterMismatch { meter_id });
     }
     Ok(())
 }

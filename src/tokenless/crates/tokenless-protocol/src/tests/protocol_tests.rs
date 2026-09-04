@@ -9,6 +9,7 @@ fn applied_response(reversibility: Reversibility, stash_keys: Vec<String>) -> Co
         protocol_version: PROTOCOL_VERSION,
         output: "compressed".into(),
         disposition: Disposition::Applied,
+        output_media_type: "text/plain".into(),
         content_type: Some("json".into()),
         compressor_chain: vec!["json-cleanup".into()],
         reversibility,
@@ -64,6 +65,7 @@ fn response_roadmap_example_parses() {
     assert_eq!(resp.reversibility, Reversibility::Retrievable);
     assert_eq!((resp.before_tokens, resp.after_tokens), (1200, 340));
     assert_eq!(resp.stash_keys, ["0123456789abcdef01234567"]);
+    assert_eq!(resp.output_media_type, DEFAULT_OUTPUT_MEDIA_TYPE);
     // The example predates the field; absence reads as the heuristic
     // estimator, the only counter that ever shipped before the field.
     assert_eq!(resp.tokenizer_id, TOKENIZER_ID);
@@ -72,6 +74,7 @@ fn response_roadmap_example_parses() {
 #[test]
 fn request_round_trips() {
     let mut req = CompressionRequest::new("hello world", "codex", Seam::PostTool);
+    req.input_media_type = Some("application/json".into());
     req.session_id = Some("s-1".into());
     req.tool_use_id = Some("tu-1".into());
     req.tool_name = Some("Bash".into());
@@ -108,6 +111,7 @@ fn missing_optionals_take_defaults() {
     assert_eq!(req.session_id, None);
     assert_eq!(req.tool_use_id, None);
     assert_eq!(req.tool_name, None);
+    assert_eq!(req.input_media_type, None);
     assert!(!req.capabilities.replace_output);
     assert!(!req.capabilities.publish_retrieve_tool);
     assert!(!req.capabilities.replace_with_text);
@@ -207,7 +211,7 @@ fn wire_format_is_stable() {
     resp.compressor_chain = vec!["search".into()];
     assert_eq!(
         resp.to_json().unwrap(),
-        r#"{"protocol_version":1,"output":"o","disposition":"applied","content_type":"search_results","compressor_chain":["search"],"reversibility":"retrievable","before_tokens":10,"after_tokens":4,"stash_keys":["k"],"tokenizer_id":"heuristic-v1"}"#
+        r#"{"protocol_version":1,"output":"o","output_media_type":"text/plain","disposition":"applied","content_type":"search_results","compressor_chain":["search"],"reversibility":"retrievable","before_tokens":10,"after_tokens":4,"stash_keys":["k"],"tokenizer_id":"heuristic-v1"}"#
     );
 
     let mut error = CompressionResponse::passthrough(
@@ -218,7 +222,7 @@ fn wire_format_is_stable() {
     error.diagnostic = Some("d".into());
     assert_eq!(
         error.to_json().unwrap(),
-        r#"{"protocol_version":1,"output":"o","disposition":"error","compressor_chain":[],"reversibility":"lossless","before_tokens":1,"after_tokens":1,"stash_keys":[],"tokenizer_id":"heuristic-v1","diagnostic":"d"}"#
+        r#"{"protocol_version":1,"output":"o","output_media_type":"text/plain","disposition":"error","compressor_chain":[],"reversibility":"lossless","before_tokens":1,"after_tokens":1,"stash_keys":[],"tokenizer_id":"heuristic-v1","diagnostic":"d"}"#
     );
 }
 

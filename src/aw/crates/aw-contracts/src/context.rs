@@ -19,7 +19,7 @@ pub const CONTEXT_PROJECTION_PREPARE_INPUT_SCHEMA_ID: &str = "context.projection
 pub const CONTEXT_PROJECTION_PREPARE_INPUT_SCHEMA_VERSION: u16 = 1;
 /// SHA-256 of the current canonical context-projection input schema resource.
 pub const CONTEXT_PROJECTION_PREPARE_INPUT_SCHEMA_SHA256: &str =
-    "07d62b903479892f45620173c1ce7804176cfd8b97350e6035b52823f15053cb";
+    "6dbf20f28017d718683679e779bd97b6f85a78a8feb44b7237dd79ede2e74773";
 /// Stable identity of the canonical context-projection output schema.
 pub const CONTEXT_PROJECTION_PREPARE_OUTPUT_SCHEMA_ID: &str = "context.projection.prepare.output";
 /// Current revision of the canonical context-projection output schema.
@@ -27,6 +27,8 @@ pub const CONTEXT_PROJECTION_PREPARE_OUTPUT_SCHEMA_VERSION: u16 = 1;
 /// SHA-256 of the current canonical context-projection output schema resource.
 pub const CONTEXT_PROJECTION_PREPARE_OUTPUT_SCHEMA_SHA256: &str =
     "4a171682511cfad0611626ab942c31d33928140b8eccd99a7e4d3c2e63997f37";
+/// Maximum number of named transformations in one projection candidate.
+pub const MAX_TRANSFORM_CHAIN_ITEMS: usize = 64;
 
 /// Describes where model-visible context entered the governed execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -55,7 +57,10 @@ pub struct ToolResultSubmission {
     /// Tool name when the Environment can provide one safely.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<BoundedName>,
-    /// Whether a Provider may replace the original representation with text.
+    /// Whether a Provider may change the source media representation to text.
+    ///
+    /// When false, Core accepts a candidate only when its media type matches
+    /// the submitted artifact's media type.
     pub allow_text_reencoding: bool,
 }
 

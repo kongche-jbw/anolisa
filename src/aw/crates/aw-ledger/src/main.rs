@@ -58,6 +58,7 @@ enum Command {
 enum EventKindArg {
     PostToolUsePlan,
     PreToolUseGate,
+    ContextAdoption,
     ProviderInvoked,
     EvidenceStored,
     ReceiptStored,
@@ -68,6 +69,7 @@ impl From<EventKindArg> for LedgerEventKind {
         match value {
             EventKindArg::PostToolUsePlan => Self::PostToolUsePlan,
             EventKindArg::PreToolUseGate => Self::PreToolUseGate,
+            EventKindArg::ContextAdoption => Self::ContextAdoption,
             EventKindArg::ProviderInvoked => Self::ProviderInvoked,
             EventKindArg::EvidenceStored => Self::EvidenceStored,
             EventKindArg::ReceiptStored => Self::ReceiptStored,
@@ -122,6 +124,7 @@ fn all_records(store: &LedgerStore) -> Result<Vec<StoredRecord>, Box<dyn std::er
     for kind in [
         LedgerEventKind::PostToolUsePlan,
         LedgerEventKind::PreToolUseGate,
+        LedgerEventKind::ContextAdoption,
         LedgerEventKind::ProviderInvoked,
         LedgerEventKind::EvidenceStored,
         LedgerEventKind::ReceiptStored,
@@ -153,6 +156,7 @@ fn kind_label(kind: LedgerEventKind) -> &'static str {
     match kind {
         LedgerEventKind::PostToolUsePlan => "post_tool_use_plan",
         LedgerEventKind::PreToolUseGate => "pre_tool_use_gate",
+        LedgerEventKind::ContextAdoption => "context_adoption",
         LedgerEventKind::ProviderInvoked => "provider_invoked",
         LedgerEventKind::EvidenceStored => "evidence_stored",
         LedgerEventKind::ReceiptStored => "receipt_stored",

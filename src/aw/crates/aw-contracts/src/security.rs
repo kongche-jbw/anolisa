@@ -31,7 +31,7 @@ pub const SECURITY_CONTENT_INSPECT_OUTPUT_SCHEMA_ID: &str = "security.content.in
 pub const SECURITY_CONTENT_INSPECT_OUTPUT_SCHEMA_VERSION: u16 = 1;
 /// SHA-256 of the current canonical content-inspection output schema resource.
 pub const SECURITY_CONTENT_INSPECT_OUTPUT_SCHEMA_SHA256: &str =
-    "4a7a0771081fba792a889d8a1182b7ade08e4a7864c93dd5badb46f259e83bd5";
+    "ff54d68d234e1e00926341ac499aa771a2697f6a2781617f16cc2e6bd3948449";
 
 /// Stable identity of the code-inspection Capability.
 pub const SECURITY_CODE_INSPECT_CAPABILITY_ID: &str = "security.code.inspect";
@@ -50,7 +50,7 @@ pub const SECURITY_CODE_INSPECT_OUTPUT_SCHEMA_ID: &str = "security.code.inspect.
 pub const SECURITY_CODE_INSPECT_OUTPUT_SCHEMA_VERSION: u16 = 1;
 /// SHA-256 of the current canonical code-inspection output schema resource.
 pub const SECURITY_CODE_INSPECT_OUTPUT_SCHEMA_SHA256: &str =
-    "d41ea55912472845fab80695e5bc78a2cb84996bccaf49264b8b4c99064308f7";
+    "380e5d8ad43012dd607576b261d41e08edf46a85734e0144a3b4104252d7a7f3";
 
 /// Stable identity of the command-inspection Capability.
 pub const SECURITY_COMMAND_INSPECT_CAPABILITY_ID: &str = "security.command.inspect";
@@ -69,7 +69,7 @@ pub const SECURITY_COMMAND_INSPECT_OUTPUT_SCHEMA_ID: &str = "security.command.in
 pub const SECURITY_COMMAND_INSPECT_OUTPUT_SCHEMA_VERSION: u16 = 1;
 /// SHA-256 of the current canonical command-inspection output schema resource.
 pub const SECURITY_COMMAND_INSPECT_OUTPUT_SCHEMA_SHA256: &str =
-    "3618b57a48d32f6d7f1dcbb3ac18594fa48196deaee60131649014345ea9c57b";
+    "3be1f76aec1fb88078e135a1bc93c73c85da0bd68e2a7a9094d53017bc2917a5";
 
 /// Maximum UTF-8 byte length of a security rule identity.
 pub const MAX_SECURITY_RULE_ID_BYTES: usize = 64;

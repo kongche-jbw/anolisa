@@ -109,6 +109,10 @@ fn is_cjk(character: char) -> bool {
 /// pipeline can never bloat the response payload it is supposed to shrink
 /// (roadmap principle 6: diagnostics stay bounded).
 pub const DIAGNOSTIC_MAX_BYTES: usize = 4096;
+/// Default media type used when a legacy caller supplied no source type.
+pub const DEFAULT_OUTPUT_MEDIA_TYPE: &str = "text/plain";
+/// Media type emitted by the structured JSON compressor.
+pub const JSON_OUTPUT_MEDIA_TYPE: &str = "application/json";
 
 /// Error returned when a protocol payload cannot be accepted or produced.
 #[derive(Debug, thiserror::Error)]
@@ -244,6 +248,12 @@ pub struct CompressionRequest {
     pub protocol_version: u32,
     /// The model-visible content to consider for compression.
     pub content: String,
+    /// Media type assigned to the source representation by the host.
+    ///
+    /// Older adapters may omit it. Provider integrations should supply it so
+    /// a structured replacement can preserve the exact host contract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_media_type: Option<String>,
     /// Stable identifier of the requesting agent frontend
     /// (e.g. `claude-code`).
     pub agent_id: String,
@@ -277,6 +287,7 @@ impl CompressionRequest {
         Self {
             protocol_version: PROTOCOL_VERSION,
             content: content.into(),
+            input_media_type: None,
             agent_id: agent_id.into(),
             session_id: None,
             tool_use_id: None,
@@ -458,6 +469,9 @@ pub enum ResponseStateError {
     /// Token estimates without a counter identity cannot be interpreted.
     #[error("tokenizer_id must not be empty")]
     EmptyTokenizerId,
+    /// The emitted representation lacks a stable media type.
+    #[error("output_media_type must be 1-128 bytes of printable ASCII")]
+    InvalidMediaType,
 }
 
 /// A compression response: the content to emit plus the decision facts.
@@ -470,6 +484,12 @@ pub struct CompressionResponse {
     /// Exactly what the adapter must emit — compressed on
     /// [`Disposition::Applied`], the original otherwise.
     pub output: String,
+    /// Media type of [`Self::output`].
+    ///
+    /// A missing field in a legacy response decodes as `text/plain`; current
+    /// writers always serialize the factual value explicitly.
+    #[serde(default = "default_output_media_type")]
+    pub output_media_type: String,
     /// The pipeline's verdict.
     pub disposition: Disposition,
     /// Detected content taxonomy value (e.g. `build_log`), once a detector
@@ -519,6 +539,10 @@ impl CompressionResponse {
         Self {
             protocol_version: PROTOCOL_VERSION,
             output: request.content.clone(),
+            output_media_type: request
+                .input_media_type
+                .clone()
+                .unwrap_or_else(default_output_media_type),
             disposition: Disposition::Passthrough,
             content_type: None,
             compressor_chain: Vec::new(),
@@ -545,6 +569,15 @@ impl CompressionResponse {
     /// Returns [`ResponseStateError`] when the disposition, transform chain,
     /// token counts, diagnostic, or stash facts contradict one another.
     pub fn validate(&self) -> Result<(), ResponseStateError> {
+        if self.output_media_type.is_empty()
+            || self.output_media_type.len() > 128
+            || !self
+                .output_media_type
+                .bytes()
+                .all(|byte| byte.is_ascii_graphic())
+        {
+            return Err(ResponseStateError::InvalidMediaType);
+        }
         if self.tokenizer_id.is_empty() {
             return Err(ResponseStateError::EmptyTokenizerId);
         }
@@ -647,6 +680,10 @@ impl CompressionResponse {
         self.validate()?;
         serde_json::to_string(self).map_err(ProtocolError::Serialize)
     }
+}
+
+fn default_output_media_type() -> String {
+    DEFAULT_OUTPUT_MEDIA_TYPE.to_owned()
 }
 
 /// Extracts and checks `protocol_version` without depending on the rest of

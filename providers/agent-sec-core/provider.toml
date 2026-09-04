@@ -56,7 +56,7 @@ capability = "security.content.inspect/v1"
 authority = "observe"
 scopes = ["agent_session", "turn", "tool_call"]
 input_contract = { schema = "security.content.inspect.input/v1", resource = "schemas/security-content-inspect-input-v1.schema.json", sha256 = "836231087cc27186746e4316e92dd842053b71ebc1e9f392d99f521adbdfcec4" }
-output_contract = { schema = "security.content.inspect.output/v1", resource = "schemas/security-content-inspect-output-v1.schema.json", sha256 = "4a7a0771081fba792a889d8a1182b7ade08e4a7864c93dd5badb46f259e83bd5" }
+output_contract = { schema = "security.content.inspect.output/v1", resource = "schemas/security-content-inspect-output-v1.schema.json", sha256 = "ff54d68d234e1e00926341ac499aa771a2697f6a2781617f16cc2e6bd3948449" }
 native_input = { resource = "schemas/agent-sec-aw-provider-request-v1.schema.json", sha256 = "1ae16c55ddbe7c8242d9f44131889fe2937515021d03af36b74f0adb6b4672bd" }
 native_output = { resource = "schemas/agent-sec-aw-provider-response-v1.schema.json", sha256 = "39b5a901f2004b51f76cf914adfcf2e15c184a3ba964b674d9720790d1c356d2" }
 
@@ -142,7 +142,7 @@ capability = "security.code.inspect/v1"
 authority = "observe"
 scopes = ["agent_session", "turn", "tool_call"]
 input_contract = { schema = "security.code.inspect.input/v1", resource = "schemas/security-code-inspect-input-v1.schema.json", sha256 = "c5614f6e464a401621a7d8d1e1c8245edc504919ffde6c7c20d01799bd961c1e" }
-output_contract = { schema = "security.code.inspect.output/v1", resource = "schemas/security-code-inspect-output-v1.schema.json", sha256 = "d41ea55912472845fab80695e5bc78a2cb84996bccaf49264b8b4c99064308f7" }
+output_contract = { schema = "security.code.inspect.output/v1", resource = "schemas/security-code-inspect-output-v1.schema.json", sha256 = "380e5d8ad43012dd607576b261d41e08edf46a85734e0144a3b4104252d7a7f3" }
 native_input = { resource = "schemas/agent-sec-aw-provider-request-v1.schema.json", sha256 = "1ae16c55ddbe7c8242d9f44131889fe2937515021d03af36b74f0adb6b4672bd" }
 native_output = { resource = "schemas/agent-sec-aw-provider-response-v1.schema.json", sha256 = "39b5a901f2004b51f76cf914adfcf2e15c184a3ba964b674d9720790d1c356d2" }
 
@@ -228,7 +228,7 @@ capability = "security.command.inspect/v1"
 authority = "mediate"
 scopes = ["turn", "tool_call"]
 input_contract = { schema = "security.command.inspect.input/v1", resource = "schemas/security-command-inspect-input-v1.schema.json", sha256 = "546e5fc3b98ecc800160a70e0ad8a3e02be6cee02dbe8fa6ff6987be8eb511de" }
-output_contract = { schema = "security.command.inspect.output/v1", resource = "schemas/security-command-inspect-output-v1.schema.json", sha256 = "3618b57a48d32f6d7f1dcbb3ac18594fa48196deaee60131649014345ea9c57b" }
+output_contract = { schema = "security.command.inspect.output/v1", resource = "schemas/security-command-inspect-output-v1.schema.json", sha256 = "3be1f76aec1fb88078e135a1bc93c73c85da0bd68e2a7a9094d53017bc2917a5" }
 native_input = { resource = "schemas/agent-sec-aw-provider-request-v1.schema.json", sha256 = "1ae16c55ddbe7c8242d9f44131889fe2937515021d03af36b74f0adb6b4672bd" }
 native_output = { resource = "schemas/agent-sec-aw-provider-response-v1.schema.json", sha256 = "39b5a901f2004b51f76cf914adfcf2e15c184a3ba964b674d9720790d1c356d2" }
 

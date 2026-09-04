@@ -1,6 +1,7 @@
 //! Bounded values and target references shared by public AW contracts.
 
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
 /// Maximum UTF-8 byte length of user-facing contract text.
@@ -134,6 +135,12 @@ pub struct DigestError;
 pub struct Digest(String);
 
 impl Digest {
+    /// Computes the canonical SHA-256 digest of exact bytes.
+    #[must_use]
+    pub fn sha256(bytes: &[u8]) -> Self {
+        Self(format!("{:x}", Sha256::digest(bytes)))
+    }
+
     /// Parses a lowercase 64-character SHA-256 digest.
     pub fn parse(value: impl Into<String>) -> Result<Self, DigestError> {
         let value = value.into();
@@ -187,8 +194,17 @@ pub struct TargetRef {
 #[cfg(test)]
 mod tests {
     use super::{
-        BoundedName, BoundedOpaque, BoundedStringError, BoundedText, IdempotencyKey, MAX_NAME_BYTES,
+        BoundedName, BoundedOpaque, BoundedStringError, BoundedText, Digest, IdempotencyKey,
+        MAX_NAME_BYTES,
     };
+
+    #[test]
+    fn digest_hashes_exact_bytes_to_canonical_text() {
+        assert_eq!(
+            Digest::sha256(b"abc").as_str(),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
 
     #[test]
     fn bounded_names_use_the_canonical_stable_label_subset() {

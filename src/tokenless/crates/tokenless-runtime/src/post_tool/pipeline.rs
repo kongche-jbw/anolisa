@@ -10,8 +10,8 @@ use tokenless_compressors::{
 };
 use tokenless_protocol::{
     BYTE_ESTIMATOR_ID, CompressionRequest, CompressionResponse, ContentOrigin,
-    DIAGNOSTIC_MAX_BYTES, Disposition, PROTOCOL_VERSION, Reversibility, TOKENIZER_ID,
-    estimate_tokens, estimate_tokens_from_bytes,
+    DEFAULT_OUTPUT_MEDIA_TYPE, DIAGNOSTIC_MAX_BYTES, Disposition, JSON_OUTPUT_MEDIA_TYPE,
+    PROTOCOL_VERSION, Reversibility, TOKENIZER_ID, estimate_tokens, estimate_tokens_from_bytes,
 };
 
 use super::arbitration::{ArbitrationInput, Verdict, decide};
@@ -175,6 +175,12 @@ impl PostToolPipeline {
                 protocol_version: PROTOCOL_VERSION,
                 output,
                 disposition,
+                output_media_type: output_media_type(
+                    request,
+                    content_type,
+                    disposition,
+                    &outcome.operations,
+                ),
                 content_type: Some(ContentType::Json.wire_str().to_owned()),
                 compressor_chain: response_operations,
                 reversibility,
@@ -211,6 +217,8 @@ fn passthrough(
     diagnostic: Option<String>,
 ) -> PostToolRun {
     let mut response = CompressionResponse::passthrough(request, before_tokens);
+    response.output_media_type =
+        output_media_type(request, content_type, response.disposition, &[]);
     response.content_type = Some(content_type.wire_str().to_owned());
     if diagnostic.is_some() {
         response.disposition = Disposition::Error;
@@ -225,6 +233,24 @@ fn passthrough(
         stash_size: None,
         unrecoverable_truncations: None,
     }
+}
+
+fn output_media_type(
+    request: &CompressionRequest,
+    content_type: ContentType,
+    disposition: Disposition,
+    operations: &[JsonOperation],
+) -> String {
+    if disposition == Disposition::Applied && operations.contains(&JsonOperation::Toon) {
+        return DEFAULT_OUTPUT_MEDIA_TYPE.to_owned();
+    }
+    request.input_media_type.clone().unwrap_or_else(|| {
+        if content_type == ContentType::Json {
+            JSON_OUTPUT_MEDIA_TYPE.to_owned()
+        } else {
+            DEFAULT_OUTPUT_MEDIA_TYPE.to_owned()
+        }
+    })
 }
 
 fn legacy_chain(operations: &[JsonOperation]) -> Vec<String> {
@@ -430,5 +456,27 @@ mod tests {
         assert_ne!(run.response.before_tokens, estimate_tokens(&input) as u64);
         assert_eq!(run.response.tokenizer_id, BYTE_ESTIMATOR_ID);
         assert_eq!(run.response.validate(), Ok(()));
+    }
+
+    #[test]
+    fn output_media_type_tracks_the_selected_representation() {
+        let mut structured = request(r#"{"items":[1,2,3]}"#);
+        structured.input_media_type = Some("application/json".to_owned());
+        structured.capabilities.replace_with_text = false;
+        assert_eq!(
+            output_media_type(&structured, ContentType::Json, Disposition::Applied, &[]),
+            "application/json"
+        );
+
+        structured.capabilities.replace_with_text = true;
+        assert_eq!(
+            output_media_type(
+                &structured,
+                ContentType::Json,
+                Disposition::Applied,
+                &[JsonOperation::Toon],
+            ),
+            "text/plain"
+        );
     }
 }

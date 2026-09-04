@@ -6,6 +6,7 @@
   "required": [
     "protocol_version",
     "output",
+    "output_media_type",
     "disposition",
     "compressor_chain",
     "reversibility",
@@ -20,6 +21,12 @@
     },
     "output": {
       "type": "string"
+    },
+    "output_media_type": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[!-~]+$"
     },
     "disposition": {
       "enum": [

@@ -121,9 +121,10 @@ class ProviderManifestTest(unittest.TestCase):
         self.assertEqual(codec["kind"], "json-map/v1")
         request_fields = {field["target"]: field for field in codec["request"]["fields"]}
         self.assertEqual(request_fields["/content"]["source"]["pointer"], "/artifact/content")
-        self.assertEqual(request_fields["/agent_id"]["source"], {
-            "kind": "scope", "field": "environment_id"
-        })
+        self.assertEqual(
+            request_fields["/agent_id"]["source"],
+            {"kind": "const", "value": "aw-provider"},
+        )
         self.assertEqual(request_fields["/session_id"]["source"]["kind"], "scope")
         self.assertEqual(
             request_fields["/capabilities/publish_retrieve_tool"]["source"],

@@ -11,6 +11,12 @@
     "content": {
       "type": "string"
     },
+    "input_media_type": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[!-~]+$"
+    },
     "agent_id": {
       "type": "string",
       "minLength": 1

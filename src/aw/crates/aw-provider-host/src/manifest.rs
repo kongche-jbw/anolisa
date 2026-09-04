@@ -28,6 +28,9 @@ const MAX_INPUT_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_OUTPUT_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_WALL_TIME_MS: u64 = 5 * 60 * 1000;
 const MAX_SCHEMA_RESOURCE_BYTES: u64 = 1024 * 1024;
+const MAX_PROVIDER_CAPABILITIES: usize = 64;
+const MAX_JSON_MAP_FIELDS: usize = 128;
+const MAX_RESPONSE_METERS: usize = 64;
 const PROVIDER_STATE_PLACEHOLDER: &str = "{provider_state_dir}";
 
 #[derive(Debug, Deserialize)]
@@ -479,6 +482,12 @@ fn validate_manifest(
     if manifest.capabilities.is_empty() {
         return invalid(path, "manifest must advertise at least one Capability");
     }
+    if manifest.capabilities.len() > MAX_PROVIDER_CAPABILITIES {
+        return invalid(
+            path,
+            format!("manifest capabilities exceed the {MAX_PROVIDER_CAPABILITIES}-item limit"),
+        );
+    }
 
     let mut seen = BTreeSet::new();
     let mut admitted_capabilities = Vec::with_capacity(manifest.capabilities.len());
@@ -640,6 +649,12 @@ fn validate_capability(
         return invalid(
             path,
             "a produced disposition requires at least one canonical output field",
+        );
+    }
+    if capability.codec.response.meters.len() > MAX_RESPONSE_METERS {
+        return invalid(
+            path,
+            format!("response meters exceed the {MAX_RESPONSE_METERS}-item limit"),
         );
     }
     let meters = capability
@@ -853,6 +868,12 @@ fn validate_request_fields(
     path: &Path,
     fields: Vec<ManifestRequestField>,
 ) -> Result<Vec<RequestFieldMapping>, ProviderHostError> {
+    if fields.len() > MAX_JSON_MAP_FIELDS {
+        return invalid(
+            path,
+            format!("request fields exceed the {MAX_JSON_MAP_FIELDS}-item limit"),
+        );
+    }
     let mut targets = Vec::with_capacity(fields.len());
     let mut mappings = Vec::with_capacity(fields.len());
     for field in fields {
@@ -890,6 +911,12 @@ fn validate_output_fields(
     path: &Path,
     fields: Vec<ManifestOutputField>,
 ) -> Result<Vec<OutputFieldMapping>, ProviderHostError> {
+    if fields.len() > MAX_JSON_MAP_FIELDS {
+        return invalid(
+            path,
+            format!("response output fields exceed the {MAX_JSON_MAP_FIELDS}-item limit"),
+        );
+    }
     let mut targets = Vec::with_capacity(fields.len());
     let mut mappings = Vec::with_capacity(fields.len());
     for field in fields {

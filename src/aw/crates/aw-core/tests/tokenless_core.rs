@@ -95,6 +95,31 @@ fn core_prepares_a_real_tool_result_through_tokenless() {
     let receipt = serde_json::to_string(&outcome.projection.receipt).expect("receipt serializes");
     assert!(!receipt.contains("scheduler trace retained only for operator diagnostics"));
     assert!(!receipt.contains(&candidate.content));
+
+    let structured = core
+        .observe_tool_result(
+            &context,
+            TurnId::new(),
+            ToolUseId::new(),
+            ToolResultSubmission {
+                content: source,
+                media_type: BoundedName::new("application/json").expect("media type is bounded"),
+                origin: ContextArtifactOrigin::ApiResponse,
+                tool_name: Some(
+                    BoundedName::new("list_recent_builds").expect("tool name is bounded"),
+                ),
+                allow_text_reencoding: false,
+            },
+            &CapabilityPreferences::default(),
+        )
+        .expect("Tokenless preserves a structured replacement media type");
+    let structured_candidate = structured
+        .projection
+        .candidate
+        .expect("structured JSON still produces a candidate");
+    assert_eq!(structured_candidate.media_type.as_str(), "application/json");
+    serde_json::from_str::<serde_json::Value>(&structured_candidate.content)
+        .expect("the structured candidate remains JSON");
 }
 
 fn repository_root() -> PathBuf {
