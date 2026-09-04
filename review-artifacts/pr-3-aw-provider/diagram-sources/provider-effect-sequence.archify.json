@@ -2,189 +2,171 @@
   "schema_version": 1,
   "diagram_type": "sequence",
   "meta": {
-    "title": "Tokenless Provider 一次调用如何生效",
+    "title": "Tokenless Provider：一份真实 Tool Result 如何生效",
     "locale": "zh-CN",
     "quality_profile": "showcase",
     "visual_preset": "editorial",
     "column_fit": "spread",
-    "viewBox": [960, 1000],
+    "viewBox": [1320, 1000],
     "views": [
       {
-        "id": "admission",
-        "label": "安装与准入",
-        "focus": ["package", "host", "core"],
-        "note": "文件安装后仍要通过 manifest、Schema digest、executable 和 policy 路由。"
+        "id": "source",
+        "label": "01 原始数据与 canonical input",
+        "focus": ["cosh", "hook", "core"],
+        "note": "跟踪 list_recent_builds 的 llmContent、artifact id 与 SHA-256。"
       },
       {
-        "id": "canonical",
-        "label": "Canonical 输入",
-        "focus": ["cosh", "hook", "core", "host"],
-        "note": "COSH 私有 Hook JSON 被转换成 Provider 无关的 Capability 输入。"
+        "id": "mapping",
+        "label": "02 canonical 到 native",
+        "focus": ["core", "host", "tokenless"],
+        "note": "观察字段复制、重命名和常量注入如何形成 CompressionRequest。"
       },
       {
-        "id": "native",
-        "label": "Tokenless 原生调用",
-        "focus": ["host", "tokenless"],
-        "note": "Host 按 provider.toml 的 json-map/v1 字段映射调用 tokenless compress。"
+        "id": "result",
+        "label": "03 native response 到 candidate",
+        "focus": ["tokenless", "host", "core"],
+        "note": "真实 fixture 从 359 降到 110 tokens，并返回 lossless 声明。"
       },
       {
-        "id": "adoption",
-        "label": "验证与最终采用",
-        "focus": ["tokenless", "host", "core", "ledger", "hook", "cosh"],
-        "note": "Produced 只表示候选已生成；COSH 最终采用后才影响下一次模型输入。"
+        "id": "effective",
+        "label": "04 receipt 与最终生效",
+        "focus": ["core", "ledger", "hook", "cosh"],
+        "note": "receipt 只证明调用；COSH 采用 updatedToolResponse 后 Advise 才生效。"
       }
     ]
   },
   "participants": [
-    {"id": "package", "type": "cloud", "label": "Provider 包", "sublabel": "清单 · Schema · 程序"},
-    {"id": "cosh", "type": "frontend", "label": "COSH", "sublabel": "Agent Environment"},
-    {"id": "hook", "type": "frontend", "label": "AW Hook", "sublabel": "边界适配"},
-    {"id": "core", "type": "backend", "label": "AW Core", "sublabel": "计划与策略"},
-    {"id": "host", "type": "backend", "label": "Provider Host", "sublabel": "映射与执行"},
-    {"id": "tokenless", "type": "backend", "label": "Tokenless", "sublabel": "压缩算法"},
-    {"id": "ledger", "type": "database", "label": "AW Ledger", "sublabel": "调用事实"}
+    {"id": "cosh", "type": "frontend", "label": "COSH"},
+    {"id": "hook", "type": "frontend", "label": "AW Hook"},
+    {"id": "core", "type": "backend", "label": "AW Core"},
+    {"id": "host", "type": "backend", "label": "Provider Host"},
+    {"id": "tokenless", "type": "backend", "label": "Tokenless"},
+    {"id": "ledger", "type": "database", "label": "AW Ledger"}
   ],
   "segments": [
-    {"from": 145, "to": 260, "label": "A · 启动时准入"},
-    {"from": 275, "to": 445, "label": "B · 建立 canonical input"},
-    {"from": 460, "to": 650, "label": "C · 映射并执行 Tokenless"},
-    {"from": 665, "to": 855, "label": "D · 验证、记录与最终采用"}
+    {"from": 145, "to": 350, "label": "A · 同一份 source bytes"},
+    {"from": 365, "to": 555, "label": "B · manifest 字段映射"},
+    {"from": 570, "to": 770, "label": "C · 真实压缩结果"},
+    {"from": 785, "to": 955, "label": "D · 记录与最终采用"}
   ],
   "messages": [
     {
-      "id": "load-package",
-      "from": "package",
-      "to": "host",
-      "y": 175,
-      "label": "读取 provider.toml 与 4 份 Schema",
-      "variant": "security",
-      "note": "校验文件路径、SHA-256、Provider identity 和 executable。只安装文件还没有发生业务调用。"
-    },
-    {
-      "id": "publish-target",
-      "from": "host",
-      "to": "core",
-      "y": 230,
-      "label": "发布 Ready Capability descriptor",
-      "variant": "return",
-      "note": "descriptor 必须精确匹配 context.projection.prepare/v1、Advise、scope 和 canonical Schema digest。"
-    },
-    {
-      "id": "tool-result",
+      "id": "hook-input",
       "from": "cosh",
       "to": "hook",
-      "y": 310,
-      "label": "PostToolUse：工具返回大段 JSON",
+      "y": 185,
+      "label": "tool=list_recent_builds · llmContent={\"builds\":[…]}",
       "variant": "emphasis",
-      "note": "示例正文是 {\"rows\":[...]}。当前实现会在调用 Hook 前先做 redaction，这是已知的字节域问题。"
+      "note": "真实 scope：environment_id=env_33333333-3333-4333-8333-333333333333；execution_context_id=ctx_44444444-4444-4444-8444-444444444444；actor_id=act_55555555-5555-4555-8555-555555555555；agent_session_id=ags_11111111-1111-4111-8111-111111111111；turn_id=trn_22222222-2222-4222-8222-222222222222；tool_use_id=tol_66666666-6666-4666-8666-666666666666。"
     },
     {
       "id": "submission",
       "from": "hook",
       "to": "core",
-      "y": 365,
-      "label": "ToolResultSubmission",
+      "y": 260,
+      "label": "media_type=application/json · origin=api_response",
       "variant": "emphasis",
-      "note": "保留 content、media_type、origin、tool_name，并声明 allow_text_reencoding。"
+      "note": "Hook 只选择 llmContent，生成 ToolResultSubmission，不提交 returnDisplay。"
     },
     {
-      "id": "canonical-input",
+      "id": "canonical",
       "from": "core",
       "to": "host",
-      "y": 420,
-      "label": "Canonical：artifact + boundary + constraints",
+      "y": 330,
+      "label": "art_c8f93696… · sha256=612b377d…6c88f · post_tool",
       "variant": "emphasis",
-      "note": "Core 计算 art_... 和 source_digest；boundary=post_tool；constraints.allow_text_reencoding=true。"
+      "note": "artifact.id=art_c8f93696-03b8-804e-923a-1fcf9a4d7ac7；artifact.digest=612b377d40f7b6d00e03ea08831661702487ecd7f9d21631ea9e8d173da6c88f；boundary=post_tool；allow_text_reencoding=true。"
     },
     {
       "id": "native-request",
       "from": "host",
       "to": "tokenless",
-      "y": 500,
-      "label": "json-map/v1 → CompressionRequest",
+      "y": 435,
+      "label": "content←artifact.content · agent_id←env_3333… · seam=post_tool",
       "variant": "emphasis",
-      "note": "映射 content、environment_id→agent_id、session/tool IDs、seam、origin 和三个 capabilities 开关。"
+      "note": "agent_id=env_33333333-3333-4333-8333-333333333333；session_id=ags_11111111-1111-4111-8111-111111111111；tool_use_id=tol_66666666-6666-4666-8666-666666666666。Host 还注入 protocol_version=1、replace_output=true、publish_retrieve_tool=false、replace_with_text=true。"
     },
     {
       "id": "native-response",
       "from": "tokenless",
       "to": "host",
-      "y": 570,
-      "label": "CompressionResponse：applied + output + meters",
+      "y": 625,
+      "label": "applied · 359→110 · heuristic-v1 · [response-cleanup,toon]",
       "variant": "return",
-      "note": "真实集成 fixture 的估算为 359→110；示例包含 reversibility=lossless 和 compressor_chain=[response-cleanup,toon]。"
+      "note": "output=builds[6]{id,project,status,duration_ms,owner}: …；reversibility=lossless；stash_keys=[]。"
     },
     {
-      "id": "canonical-output",
+      "id": "candidate",
       "from": "host",
       "to": "core",
-      "y": 635,
-      "label": "json-map/v1 → canonical candidate",
+      "y": 715,
+      "label": "source=art_c8f93696… · media=text/plain · lossless",
       "variant": "return",
-      "note": "Host 从输入回填 source id/digest，从 response 取 content、transform_chain、reversibility，并附 content-free receipt。"
+      "note": "source_artifact_id=art_c8f93696-03b8-804e-923a-1fcf9a4d7ac7；source_digest=612b377d40f7b6d00e03ea08831661702487ecd7f9d21631ea9e8d173da6c88f；content 取 native output；transform_chain 取 compressor_chain。"
     },
     {
-      "id": "record-receipt",
+      "id": "receipt",
       "from": "core",
       "to": "ledger",
-      "y": 700,
-      "label": "记录 receipt digest 与 token meters",
+      "y": 825,
+      "label": "tokenless@0.7.14 · produced · source_tokens=359 · prepared_tokens=110",
       "variant": "dashed",
-      "note": "Ledger 不应保存完整正文；当前 content-free admission 和自由文本 metadata 仍有审查问题。"
+      "note": "manifest_digest=6b48b57238189360ba5de7f902d76300261d76d1d68af4ef542b044e18b98a32；capability=context.projection.prepare/v1；两条 meter 的 method 都是 heuristic-v1。receipt 不保存 candidate content。"
     },
     {
-      "id": "validated-outcome",
+      "id": "replacement",
       "from": "core",
       "to": "hook",
-      "y": 755,
-      "label": "ToolResultOutcome：已验证 candidate",
+      "y": 875,
+      "label": "candidate 已验证；Produced 仍不等于 Adopted",
       "variant": "return",
-      "note": "Core 检查 source id、source digest、Schema identity 和 transform_chain 上限。Produced 尚不等于 adopted。"
+      "note": "Core 校验 source id/digest、canonical output identity 与 transform_chain 上限。"
     },
     {
-      "id": "replacement-request",
+      "id": "adopt",
       "from": "hook",
       "to": "cosh",
-      "y": 815,
-      "label": "非空且 lossless → 请求 replacement",
+      "y": 915,
+      "label": "updatedToolResponse=builds[6]{…} · saved 69%",
       "variant": "return",
-      "note": "COSH 还会聚合其他 Hook。只有最终写入下一次模型上下文，Tokenless 的 Advise 才真正生效。"
+      "note": "COSH 聚合 Hook 后最终写入下一次模型上下文，此刻 Tokenless Advise 才真正生效。"
     }
   ],
   "activations": [
-    {"participant": "host", "from": 165, "to": 245, "type": "backend"},
-    {"participant": "hook", "from": 300, "to": 830, "type": "frontend"},
-    {"participant": "core", "from": 355, "to": 770, "type": "backend"},
-    {"participant": "host", "from": 410, "to": 650, "type": "backend"},
-    {"participant": "tokenless", "from": 490, "to": 585, "type": "backend"},
-    {"participant": "ledger", "from": 690, "to": 720, "type": "database"}
+    {"participant": "hook", "from": 175, "to": 940, "type": "frontend"},
+    {"participant": "core", "from": 250, "to": 890, "type": "backend"},
+    {"participant": "host", "from": 320, "to": 730, "type": "backend"},
+    {"participant": "tokenless", "from": 425, "to": 640, "type": "backend"},
+    {"participant": "ledger", "from": 815, "to": 845, "type": "database"}
   ],
   "cards": [
     {
       "dot": "cyan",
-      "title": "两个 Schema 世界",
+      "title": "字段来源",
       "items": [
-        "Canonical input：artifact、boundary、constraints，语义由 AW 团队维护",
-        "Native request：CompressionRequest，语义由 Tokenless 团队维护",
-        "provider.toml 的 json-map/v1 是两者之间可审查的适配层"
+        "复制：content、tool_name、session_id、tool_use_id",
+        "重命名：environment_id→agent_id，boundary→seam",
+        "计算：artifact.id、source digest、output digest",
+        "常量：protocol_version=1 与三个 capabilities 开关"
       ]
     },
     {
       "dot": "emerald",
-      "title": "真正生效的位置",
+      "title": "贯穿不变量",
       "items": [
-        "安装只产生 Installed；Host 准入后才可路由",
-        "Tokenless 返回 applied 只产生 candidate",
-        "COSH 最终采用 replacement 后，模型才看到压缩结果"
+        "source digest 始终是 612b377d40f7b6d00e03ea08831661702487ecd7f9d21631ea9e8d173da6c88f",
+        "candidate 必须回指 art_c8f93696-03b8-804e-923a-1fcf9a4d7ac7",
+        "359→110 始终绑定 tokenizer_id=heuristic-v1",
+        "Ledger 不保存 builds[6]{…} 正文"
       ]
     },
     {
       "dot": "orange",
-      "title": "讨论时优先确认",
+      "title": "例子暴露的问题",
       "items": [
-        "被计算 digest、被扫描和最终入模的是否为同一份字节",
-        "lossless 是字节可恢复，还是 Provider 判断的任务语义保留",
-        "Schema instance validation、安装激活和 final adoption 仍需补齐"
+        "env_3333… 是环境实例，不是 Tokenless frontend 名称",
+        "Tokenless 删除 debug/trace 后仍可能称 lossless",
+        "receipt 证明 produced，不能证明 COSH 已最终采用"
       ]
     }
   ]

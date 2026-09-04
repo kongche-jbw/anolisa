@@ -16,15 +16,21 @@ the AW Provider path is production-ready.
 - [Full architecture review in Chinese](architecture-review_zh.md)
 - [Executive architecture brief in Chinese](executive-brief_zh.md)
 - [Provider principles and integration guide in Chinese](component-integration_zh.md)
+- [Runtime examples and checkpoint boundary in Chinese](runtime-call-examples_zh.md)
 - [Complete schema atlas in Chinese](schema-reference_zh.md)
 - [Agent Host POC comparison in Chinese](poc-comparison_zh.md)
 
 ## Interactive diagrams
 
 - [Provider activation architecture](provider-effect-architecture.html)
-- [Provider activation sequence](provider-effect-sequence.html)
+- [Provider activation sequence](provider-effect-sequence.html), carrying one
+  real-field `list_recent_builds` fixture through every data shape
+- [Agent Sec command inspection sequence](security-command-call.html), carrying
+  one real pipe-to-shell finding back through Host, Core, and the COSH gate
+- [Current checkpoint creation sequence](checkpoint-create-call.html), explicitly
+  separated from the not-yet-implemented AW Provider target
 
-Both HTML files are self-contained Archify artifacts defaulting to the bright editorial
-preset. Each passed the nine showcase validation checks with no errors or
-warnings. The 14 deterministic light-theme schema SVGs are stored under
-`images/schemas/`.
+All four HTML files are self-contained Archify artifacts defaulting to the
+bright editorial preset. Each passed the nine showcase validation checks with
+no errors or warnings. The 14 deterministic light-theme schema SVGs are stored
+under `images/schemas/`.

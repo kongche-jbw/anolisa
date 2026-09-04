@@ -16,6 +16,7 @@
 | --- | --- | --- |
 | 管理层与架构负责人 | [面向管理层的架构说明](executive-brief_zh.md) | 理解方向、边界与决策项 |
 | 第一次接触 Provider 的研发 | [原理与组件接入手册](component-integration_zh.md) | 从术语到 Tokenless 实际链路 |
+| 安全与 Checkpoint 研发 | [运行实例与边界说明](runtime-call-examples_zh.md) | 查看真实字段、结果回流与副作用边界 |
 | Schema 设计与接口评审人员 | [全部 Schema 图册](schema-reference_zh.md) | 查看 22 个文件、14 个逻辑 Schema 及逐份结论 |
 | PR Reviewer | [完整架构审查](architecture-review_zh.md) | 查看 P1、设计债务、证据和验证 |
 | Agent Host POC 负责人 | [与 Agent Host POC 的对照](poc-comparison_zh.md) | 确认现状、目标和连接层 |
@@ -24,10 +25,15 @@
 
 - [Provider 生效架构](provider-effect-architecture.html)：区分当前运行主链、Schema 映射、
   最终权力与产品化缺口。
-- [Tokenless 生效时序](provider-effect-sequence.html)：沿调用顺序展示 canonical input、
-  native request、native response、candidate、receipt 与最终 replacement。
+- [Tokenless 生效时序](provider-effect-sequence.html)：使用同一份 `list_recent_builds`
+  fixture，贯穿展示真实 artifact id、source digest、scope、359→110 meters、candidate、
+  receipt 与最终 replacement。
+- [Agent Sec 命令检查时序](security-command-call.html)：展示 pipe-to-shell 命令从
+  canonical input 到真实 `shell-download-exec` 结果，再回流 Core 和 COSH gate。
+- [Checkpoint 创建时序](checkpoint-create-call.html)：展示当前 COSH、Unix socket、
+  ws-ckpt 与 Btrfs 实线链路，并明确标记尚未接入 AW Provider 的边界。
 
-两份 HTML 均为自包含 Archify 产物，默认采用浅色 editorial 风格，支持引导视图、节点检索、
+四份 HTML 均为自包含 Archify 产物，默认采用浅色 editorial 风格，支持引导视图、节点检索、
 路径跟踪、主题切换和导出。14 张浅色 Schema SVG 位于 `images/schemas/`，其确定性数据源
 与生成脚本位于 `diagram-sources/`。
 

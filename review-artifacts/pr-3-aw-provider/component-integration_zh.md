@@ -12,6 +12,12 @@ Provider Host、Core 路由和 COSH Hook 可以连接，但尚未交付可随系
 - [全部 Schema 图册与语义评审](schema-reference_zh.md)
 - [Provider 总体架构交互图](provider-effect-architecture.html)
 - [Tokenless 实际调用时序图](provider-effect-sequence.html)
+- [Agent Sec 与 Checkpoint 运行实例](runtime-call-examples_zh.md)
+- [Agent Sec 命令检查时序图](security-command-call.html)
+- [当前 Checkpoint 创建时序图](checkpoint-create-call.html)
+
+时序图使用同一份 `list_recent_builds` fixture 贯穿所有阶段。图中的省略号仅缩短正文和
+长标识符的显示，artifact id、source digest、scope 与 token meters 均来自实际样例。
 
 ## 1. 基本术语
 

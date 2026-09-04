@@ -1,5 +1,9 @@
 # PR 3 与 Agent Host POC 对照
 
+配套的[当前 Checkpoint 创建时序图](checkpoint-create-call.html)展示 COSH 到 ws-ckpt 的
+现行实线链路；[运行实例与边界说明](runtime-call-examples_zh.md)进一步区分当前实现与未来
+AW Enforce/Reconcile 目标。
+
 ## 两边各自在解决什么
 
 Agent Host POC 解决主机与交付生命周期。它关心镜像如何构建、RPM 是否签名、服务是否启动、任务是否有稳定状态、workspace 如何 checkpoint、AgentSight 与 Agent Sec 是否健康，以及 `anolisa host verify` 能否给出可信结论。
