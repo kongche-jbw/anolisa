@@ -3,18 +3,20 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Agent Sec Provider 真实命令检查</title>
+    <title>Agent Sec Provider：安全命令检查调用</title>
     <style>
       :root {
-        --c-bg: #f8fafc;
+        --c-bg: #fff8ed;
         --c-canvas: #ffffff;
-        --c-border: #cbd5e1;
-        --c-border-strong: #64748b;
-        --c-text-main: #0f172a;
-        --c-text-sub: #64748b;
-        --c-accent: #0f766e;
-        --c-accent-soft: #f0fdfa;
-        --c-panel: #f8fafc;
+        --c-panel: #fffbf4;
+        --c-border: #e7cfa8;
+        --c-border-strong: #9c6a20;
+        --c-text-main: #2b2116;
+        --c-text-sub: #675646;
+        --c-accent: #b54708;
+        --c-accent-soft: #fff0d5;
+        --c-critical: #a61b1b;
+        --c-critical-soft: #fff0f0;
         --font-ui: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
           sans-serif;
         --font-mono: "SFMono-Regular", "SF Mono", Monaco, Consolas,
@@ -26,839 +28,893 @@
       }
 
       html {
-        scroll-behavior: smooth;
+        background: var(--c-bg);
       }
 
       body {
         margin: 0;
-        padding: 32px;
-        background: var(--c-bg);
+        padding: 24px;
         color: var(--c-text-main);
+        background: var(--c-bg);
         font-family: var(--font-ui);
       }
 
-      a {
-        color: inherit;
+      code,
+      .mono {
+        font-family: var(--font-mono);
       }
 
-      a:focus-visible {
-        outline: 2px solid var(--c-accent);
-        outline-offset: 3px;
+      code {
+        overflow-wrap: anywhere;
       }
 
-      .page {
-        width: min(1480px, 100%);
-        margin: 0 auto;
+      .page-scroll {
+        width: 100%;
+        overflow-x: auto;
+        padding-bottom: 8px;
       }
 
       .diagram-canvas {
         position: relative;
-        padding: 30px;
-        border: 2px solid var(--c-border);
+        width: min(1480px, 100%);
+        min-width: 1040px;
+        margin: 0 auto;
+        padding: 28px;
+        border: 2px solid var(--c-border-strong);
         background: var(--c-canvas);
       }
 
       .diagram-header {
-        display: flex;
-        align-items: flex-start;
-        justify-content: space-between;
-        gap: 24px;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 26px;
+        align-items: start;
         padding-bottom: 20px;
-        border-bottom: 1px solid var(--c-border);
+        border-bottom: 2px solid var(--c-text-main);
       }
 
       .eyebrow {
-        margin: 0 0 8px;
+        margin: 0 0 7px;
         color: var(--c-accent);
-        font-family: var(--font-mono);
-        font-size: 11px;
-        font-weight: 700;
+        font: 800 11px/1.4 var(--font-mono);
         letter-spacing: 0.12em;
         text-transform: uppercase;
       }
 
       h1 {
         margin: 0;
-        font-size: clamp(24px, 3vw, 38px);
-        line-height: 1.16;
-        letter-spacing: -0.025em;
+        font-size: 31px;
+        line-height: 1.2;
+        letter-spacing: -0.02em;
       }
 
       .subtitle {
-        max-width: 850px;
+        max-width: 900px;
         margin: 10px 0 0;
         color: var(--c-text-sub);
         font-size: 14px;
-        line-height: 1.7;
+        line-height: 1.72;
       }
 
       .header-meta {
-        display: flex;
-        flex-wrap: wrap;
-        justify-content: flex-end;
-        gap: 8px;
-        min-width: 260px;
+        display: grid;
+        gap: 7px;
+        justify-items: end;
       }
 
       .badge {
         display: inline-block;
-        padding: 5px 8px;
+        padding: 4px 8px;
         border: 1px solid var(--c-border-strong);
         background: #ffffff;
-        font-family: var(--font-mono);
-        font-size: 10px;
-        font-weight: 650;
-        letter-spacing: 0.04em;
+        color: var(--c-text-main);
+        font: 800 10px/1.3 var(--font-mono);
+        letter-spacing: 0.05em;
         text-transform: uppercase;
       }
 
-      .badge--accent {
-        border-color: var(--c-accent);
-        color: var(--c-accent);
+      .badge--implemented {
+        border-color: #236b45;
+        background: #eaf8ef;
+        color: #185637;
       }
 
-      .fact-strip {
+      .badge--required {
+        border-color: var(--c-critical);
+        background: var(--c-critical-soft);
+        color: var(--c-critical);
+      }
+
+      .truth-table {
         display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        border: 1px solid var(--c-border);
-        border-top: 0;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        margin: 20px 0 22px;
+        border: 1px solid var(--c-border-strong);
       }
 
-      .fact {
+      .truth {
         min-width: 0;
         padding: 14px 16px;
-        border-right: 1px solid var(--c-border);
       }
 
-      .fact:last-child {
-        border-right: 0;
+      .truth + .truth {
+        border-left: 1px solid var(--c-border-strong);
       }
 
-      .fact__label {
+      .truth--implemented {
+        background: #eefaf2;
+      }
+
+      .truth--gap {
+        background: var(--c-critical-soft);
+      }
+
+      .truth__title {
         display: block;
         margin-bottom: 5px;
-        color: var(--c-text-sub);
-        font-size: 10px;
-        font-weight: 700;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
+        font-size: 12px;
+        font-weight: 800;
       }
 
-      .fact__value {
+      .truth__text {
         display: block;
-        font-family: var(--font-mono);
-        font-size: 12px;
-        line-height: 1.45;
-        overflow-wrap: anywhere;
-      }
-
-      .section {
-        margin-top: 28px;
-      }
-
-      .section-head {
-        display: flex;
-        align-items: baseline;
-        justify-content: space-between;
-        gap: 18px;
-        margin-bottom: 12px;
-      }
-
-      .section-title {
-        margin: 0;
-        font-size: 17px;
-      }
-
-      .section-note {
-        margin: 0;
         color: var(--c-text-sub);
         font-size: 12px;
+        line-height: 1.58;
       }
 
-      .route-scroll {
-        overflow-x: auto;
-        border: 1px solid var(--c-border);
-        background: var(--c-panel);
-      }
-
-      .route-canvas {
-        position: relative;
-        width: 1280px;
-        height: 190px;
-        background: #ffffff;
-      }
-
-      .route-node {
-        position: absolute;
-        top: 38px;
-        width: 166px;
-        height: 76px;
-        padding: 11px 12px;
+      .section-label {
+        display: grid;
+        grid-template-columns: 178px minmax(0, 1fr);
         border: 1px solid var(--c-border-strong);
-        background: #ffffff;
-        text-align: center;
-        text-decoration: none;
-      }
-
-      .route-node:hover {
-        border-color: var(--c-accent);
+        border-bottom: 0;
         background: var(--c-accent-soft);
       }
 
-      .route-node__role {
-        display: block;
-        margin-bottom: 6px;
-        color: var(--c-text-sub);
-        font-family: var(--font-mono);
-        font-size: 9px;
-        font-weight: 700;
+      .section-label__index {
+        padding: 10px 14px;
+        border-right: 1px solid var(--c-border-strong);
+        color: var(--c-accent);
+        font: 800 11px/1.4 var(--font-mono);
         letter-spacing: 0.08em;
-        text-transform: uppercase;
       }
 
-      .route-node__name {
-        display: block;
-        font-size: 14px;
-        font-weight: 700;
+      .section-label__text {
+        padding: 10px 16px;
+        font-size: 12px;
+        font-weight: 800;
       }
 
-      .route-node__desc {
+      .step {
+        display: grid;
+        grid-template-columns: 178px minmax(0, 1fr);
+        border: 1px solid var(--c-border-strong);
+        background: #ffffff;
+      }
+
+      .step--required {
+        border-color: var(--c-critical);
+      }
+
+      .step__actor {
+        min-width: 0;
+        padding: 16px 14px;
+        border-right: 1px solid var(--c-border-strong);
+        background: var(--c-panel);
+      }
+
+      .step--required .step__actor {
+        border-right-color: var(--c-critical);
+        background: var(--c-critical-soft);
+      }
+
+      .step__number {
         display: block;
-        margin-top: 4px;
-        color: var(--c-text-sub);
-        font-size: 10px;
+        color: var(--c-accent);
+        font: 800 11px/1.3 var(--font-mono);
+        letter-spacing: 0.08em;
+      }
+
+      .step--required .step__number {
+        color: var(--c-critical);
+      }
+
+      .step__actor-name {
+        display: block;
+        margin-top: 6px;
+        font-size: 15px;
+        font-weight: 800;
         line-height: 1.35;
       }
 
-      .node-cosh { left: 18px; }
-      .node-hook { left: 226px; }
-      .node-core { left: 434px; }
-      .node-host { left: 642px; }
-      .node-provider { left: 850px; }
-      .node-ledger { left: 1096px; }
+      .step__actor-role {
+        display: block;
+        margin-top: 4px;
+        color: var(--c-text-sub);
+        font-size: 11px;
+        line-height: 1.45;
+      }
 
-      .connectors {
-        position: absolute;
-        left: 0;
-        top: 0;
-        width: 1280px;
-        height: 190px;
-        pointer-events: none;
+      .step__body {
+        min-width: 0;
+        padding: 15px 17px 16px;
+      }
+
+      .step__title-row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 8px 18px;
+        margin-bottom: 11px;
+      }
+
+      .step__title {
+        margin: 0;
+        font-size: 16px;
+        line-height: 1.35;
+      }
+
+      .step__schema {
+        color: var(--c-accent);
+        font: 700 11px/1.45 var(--font-mono);
+        overflow-wrap: anywhere;
+      }
+
+      .field-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        border-top: 1px solid var(--c-border);
+        border-left: 1px solid var(--c-border);
+      }
+
+      .field {
+        min-width: 0;
+        padding: 9px 10px 10px;
+        border-right: 1px solid var(--c-border);
+        border-bottom: 1px solid var(--c-border);
+        background: #ffffff;
+      }
+
+      .field--wide {
+        grid-column: span 2;
+      }
+
+      .field--full {
+        grid-column: 1 / -1;
+      }
+
+      .field__name {
+        display: block;
+        margin-bottom: 4px;
+        color: var(--c-accent);
+        font: 750 10px/1.35 var(--font-mono);
+        overflow-wrap: anywhere;
+      }
+
+      .field__value {
+        display: block;
+        font: 650 12px/1.48 var(--font-mono);
+        overflow-wrap: anywhere;
+      }
+
+      .field__meaning {
+        display: block;
+        margin-top: 4px;
+        color: var(--c-text-sub);
+        font-size: 11px;
+        line-height: 1.48;
+      }
+
+      .connector {
+        display: grid;
+        grid-template-columns: 178px minmax(0, 1fr);
+        min-height: 48px;
+      }
+
+      .connector__rail {
+        display: flex;
+        justify-content: center;
+        align-items: stretch;
+      }
+
+      .connector__rail svg {
+        display: block;
+        width: 24px;
+        height: 48px;
         overflow: visible;
       }
 
-      .conn {
-        fill: none;
-      }
-
-      .conn--flow {
-        stroke: #0f172a;
-        stroke-width: 1.5;
-        marker-end: url(#sec-arrow-request);
-      }
-
-      .conn--return {
-        stroke: #0f766e;
-        stroke-width: 1.75;
-        marker-end: url(#sec-arrow-return);
-      }
-
-      .conn--event {
-        stroke: #64748b;
-        stroke-width: 1.5;
-        stroke-dasharray: 3 5;
-        marker-end: url(#sec-arrow-audit);
-      }
-
-      .connector-label {
-        fill: #64748b;
-        font-family: var(--font-mono);
-        font-size: 9px;
-      }
-
-      .connector-label--return {
-        fill: #0f766e;
-      }
-
-      .route-caption {
-        position: absolute;
-        left: 18px;
-        bottom: 9px;
-        margin: 0;
+      .connector__label {
+        align-self: center;
+        margin-left: 18px;
+        padding-left: 12px;
+        border-left: 3px solid var(--c-accent);
         color: var(--c-text-sub);
-        font-family: var(--font-mono);
-        font-size: 10px;
+        font: 600 11px/1.48 var(--font-mono);
+        overflow-wrap: anywhere;
+      }
+
+      .connector--required .connector__label {
+        border-left-color: var(--c-critical);
+        color: var(--c-critical);
+      }
+
+      .result-strip {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        margin-top: 22px;
+        border: 2px solid var(--c-accent);
+        background: var(--c-accent-soft);
+      }
+
+      .result {
+        padding: 13px 14px;
+        border-right: 1px solid var(--c-border-strong);
+      }
+
+      .result:last-child {
+        border-right: 0;
+      }
+
+      .result__label {
+        display: block;
+        margin-bottom: 4px;
+        color: var(--c-accent);
+        font: 800 10px/1.3 var(--font-mono);
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
+      }
+
+      .result__value {
+        font-size: 12px;
+        font-weight: 750;
+        line-height: 1.52;
+      }
+
+      .boundary-note {
+        margin-top: 20px;
+        padding: 14px 16px;
+        border: 1px solid var(--c-critical);
+        border-left: 5px solid var(--c-critical);
+        background: var(--c-critical-soft);
+      }
+
+      .boundary-note h2 {
+        margin: 0 0 6px;
+        color: var(--c-critical);
+        font-size: 13px;
+      }
+
+      .boundary-note p {
+        margin: 0;
+        color: #6f3030;
+        font-size: 12px;
+        line-height: 1.65;
       }
 
       .legend {
         display: flex;
-        align-items: center;
         flex-wrap: wrap;
-        gap: 18px;
-        padding: 12px 14px;
-        border: 1px solid var(--c-border);
-        border-top: 0;
+        gap: 12px 26px;
+        align-items: center;
+        margin-top: 20px;
+        padding-top: 14px;
+        border-top: 1px solid var(--c-border);
+        color: var(--c-text-sub);
+        font-size: 11px;
       }
 
       .legend__title {
-        color: var(--c-text-sub);
-        font-size: 10px;
-        font-weight: 700;
+        color: var(--c-text-main);
+        font: 800 10px/1.3 var(--font-mono);
         letter-spacing: 0.1em;
         text-transform: uppercase;
       }
 
       .legend__item {
         display: inline-flex;
+        gap: 7px;
         align-items: center;
-        gap: 6px;
-        color: var(--c-text-sub);
-        font-size: 11px;
       }
 
-      .legend__item svg {
-        overflow: visible;
-      }
+      @media (max-width: 900px) {
+        body {
+          padding: 12px;
+        }
 
-      .step-nav {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 6px;
-        margin-bottom: 14px;
-      }
-
-      .step-nav a {
-        min-height: 34px;
-        padding: 7px 10px;
-        border: 1px solid var(--c-border-strong);
-        background: #ffffff;
-        font-family: var(--font-mono);
-        font-size: 10px;
-        font-weight: 650;
-        text-decoration: none;
-      }
-
-      .step-nav a:hover {
-        border-color: var(--c-accent);
-        color: var(--c-accent);
-      }
-
-      .step-grid {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 12px;
-      }
-
-      .step-card {
-        min-width: 0;
-        border: 1px solid var(--c-border);
-        background: #ffffff;
-        scroll-margin-top: 16px;
-      }
-
-      .step-card:target {
-        border: 2px solid var(--c-accent);
-      }
-
-      .step-card__head {
-        display: grid;
-        grid-template-columns: 42px minmax(0, 1fr) auto;
-        align-items: center;
-        min-height: 58px;
-        border-bottom: 1px solid var(--c-border);
-      }
-
-      .step-card__index {
-        display: grid;
-        place-items: center;
-        align-self: stretch;
-        border-right: 1px solid var(--c-border);
-        color: var(--c-accent);
-        font-family: var(--font-mono);
-        font-size: 14px;
-        font-weight: 800;
-      }
-
-      .step-card__title {
-        min-width: 0;
-        padding: 9px 12px;
-      }
-
-      .step-card__title h3 {
-        margin: 0;
-        font-size: 14px;
-      }
-
-      .step-card__route {
-        display: block;
-        margin-top: 4px;
-        color: var(--c-text-sub);
-        font-family: var(--font-mono);
-        font-size: 10px;
-      }
-
-      .step-card__kind {
-        margin-right: 10px;
-        padding: 4px 6px;
-        border: 1px solid var(--c-border);
-        color: var(--c-text-sub);
-        font-family: var(--font-mono);
-        font-size: 9px;
-        font-weight: 700;
-        text-transform: uppercase;
-      }
-
-      .field-row {
-        display: grid;
-        grid-template-columns: minmax(125px, 0.75fr) minmax(190px, 1.35fr)
-          minmax(180px, 1.1fr);
-        min-width: 0;
-        border-bottom: 1px solid #e2e8f0;
-      }
-
-      .field-row:last-child {
-        border-bottom: 0;
-      }
-
-      .field-name,
-      .field-value,
-      .field-meaning {
-        min-width: 0;
-        padding: 9px 10px;
-        font-size: 11px;
-        line-height: 1.48;
-      }
-
-      .field-name {
-        border-right: 1px solid #e2e8f0;
-        color: var(--c-text-sub);
-        font-family: var(--font-mono);
-        font-weight: 650;
-        overflow-wrap: anywhere;
-      }
-
-      .field-value {
-        border-right: 1px solid #e2e8f0;
-        background: var(--c-panel);
-        font-family: var(--font-mono);
-        overflow-wrap: anywhere;
-      }
-
-      .field-value strong {
-        color: var(--c-accent);
-      }
-
-      .field-meaning {
-        color: var(--c-text-sub);
-      }
-
-      .card-foot {
-        padding: 10px 12px;
-        border-top: 1px solid var(--c-border);
-        background: var(--c-accent-soft);
-        color: #115e59;
-        font-size: 11px;
-        line-height: 1.5;
-      }
-
-      .reference-grid {
-        display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 12px;
-      }
-
-      .reference-card {
-        padding: 16px;
-        border: 1px solid var(--c-border);
-      }
-
-      .reference-card h3 {
-        margin: 0 0 12px;
-        font-size: 13px;
-      }
-
-      .reference-card dl {
-        display: grid;
-        grid-template-columns: max-content minmax(0, 1fr);
-        gap: 8px 12px;
-        margin: 0;
-      }
-
-      .reference-card dt {
-        font-family: var(--font-mono);
-        font-size: 10px;
-        font-weight: 700;
-      }
-
-      .reference-card dd {
-        margin: 0;
-        color: var(--c-text-sub);
-        font-size: 11px;
-        line-height: 1.45;
-      }
-
-      .review-note {
-        display: grid;
-        grid-template-columns: 180px minmax(0, 1fr);
-        border: 1px solid var(--c-border-strong);
-      }
-
-      .review-note__label {
-        padding: 16px;
-        border-right: 1px solid var(--c-border-strong);
-        background: var(--c-text-main);
-        color: #ffffff;
-        font-family: var(--font-mono);
-        font-size: 11px;
-        font-weight: 700;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-      }
-
-      .review-note__body {
-        padding: 14px 16px;
-        color: var(--c-text-sub);
-        font-size: 12px;
-        line-height: 1.65;
-      }
-
-      .review-note__body strong {
-        color: var(--c-text-main);
-      }
-
-      .footer {
-        display: flex;
-        justify-content: space-between;
-        gap: 18px;
-        margin-top: 28px;
-        padding-top: 16px;
-        border-top: 1px solid var(--c-border);
-        color: var(--c-text-sub);
-        font-size: 10px;
-        line-height: 1.5;
-      }
-
-      .footer code {
-        font-family: var(--font-mono);
-        overflow-wrap: anywhere;
-      }
-
-      @media (max-width: 1080px) {
-        body { padding: 18px; }
-        .diagram-canvas { padding: 20px; }
-        .diagram-header { flex-direction: column; }
-        .header-meta { justify-content: flex-start; }
-        .fact-strip,
-        .step-grid,
-        .reference-grid { grid-template-columns: 1fr; }
-        .fact { border-right: 0; border-bottom: 1px solid var(--c-border); }
-        .fact:last-child { border-bottom: 0; }
-      }
-
-      @media (max-width: 720px) {
-        body { padding: 0; }
-        .diagram-canvas { padding: 16px; border-left: 0; border-right: 0; }
-        .field-row { grid-template-columns: 1fr; }
-        .field-name,
-        .field-value { border-right: 0; border-bottom: 1px solid #e2e8f0; }
-        .review-note { grid-template-columns: 1fr; }
-        .review-note__label { border-right: 0; border-bottom: 1px solid var(--c-border-strong); }
-        .footer { flex-direction: column; }
+        .diagram-canvas {
+          margin: 0;
+        }
       }
 
       @media print {
-        body { padding: 0; background: #ffffff; }
-        .diagram-canvas { border: 0; }
-        .step-nav { display: none; }
+        body {
+          padding: 0;
+          background: #ffffff;
+        }
+
+        .page-scroll {
+          overflow: visible;
+        }
+
+        .diagram-canvas {
+          width: 100%;
+          min-width: 0;
+          border-width: 1px;
+        }
       }
     </style>
   </head>
   <body>
-    <main class="page">
+    <main class="page-scroll">
       <article class="diagram-canvas" aria-labelledby="diagram-title">
         <header class="diagram-header">
           <div>
-            <p class="eyebrow">Agent Sec / Command Inspection / Real fixture</p>
-            <h1 id="diagram-title">一条命令如何经过安全检查</h1>
+            <p class="eyebrow">AW Provider / Security Command Inspect / Safe Call</p>
+            <h1 id="diagram-title">一次安全命令检查：已证明 submitted 38B，executed bytes 仍待绑定</h1>
             <p class="subtitle">
-              同一条 pipe-to-shell 命令依次经过 COSH、AW Core、Provider Host 和
-              Agent Sec。每个阶段只列出判断流程所需的字段。
+              示例命令会下载脚本并直接交给 shell。Agent Sec Provider 的 schema、native
+              operation 与检查结果路径是真实可运行的；要证明“扫描的 38B 就是最终执行的
+              38B”，COSH 仍必须接入可信 PreTool 边界并在执行前复核摘要。
             </p>
           </div>
-          <div class="header-meta" aria-label="图表元数据">
-            <span class="badge badge--accent">Drafter blueprint</span>
-            <span class="badge">PR head 42d07649</span>
-            <span class="badge">Mediate authority</span>
+          <div class="header-meta" aria-label="图示状态">
+            <span class="badge badge--implemented">submitted bytes gate 已实现</span>
+            <span class="badge badge--required">executed bytes proof 未接</span>
+            <span class="badge">authority · mediate</span>
           </div>
         </header>
 
-        <div class="fact-strip" aria-label="调用摘要">
-          <div class="fact">
-            <span class="fact__label">Boundary</span>
-            <span class="fact__value">pre_tool</span>
+        <section class="truth-table" aria-label="实现边界">
+          <div class="truth truth--implemented">
+            <strong class="truth__title">已经可以验证的事实</strong>
+            <span class="truth__text">
+              manifest 选择 <code>security.command.inspect/v1</code>，native request 固定
+              <code>operation=command_inspect</code>，Host 校验 input/output schema、operation
+              关联和 content-free receipt；Core 只接受 <code>scanned_bytes=38</code> 的完整 submitted-input gate。
+            </span>
           </div>
-          <div class="fact">
-            <span class="fact__label">Capability</span>
-            <span class="fact__value">security.command.inspect/v1</span>
+          <div class="truth truth--gap">
+            <strong class="truth__title">仍不能直接宣称的事实</strong>
+            <span class="truth__text">
+              通用 hook 可能只看到脱敏输入。若没有可信 PreTool 捕获与执行前 digest
+              复核，就不能证明 Provider 扫描的正文和执行器收到的正文完全相同。
+            </span>
           </div>
-          <div class="fact">
-            <span class="fact__label">Provider</span>
-            <span class="fact__value">agent-sec-core@0.11.0</span>
-          </div>
-          <div class="fact">
-            <span class="fact__label">Result</span>
-            <span class="fact__value">warn · shell-download-exec</span>
-          </div>
-        </div>
+        </section>
 
-        <section class="section" aria-labelledby="route-title">
-          <div class="section-head">
-            <h2 class="section-title" id="route-title">1. 请求与检查结果回流</h2>
-            <p class="section-note">选择节点可跳到对应字段。</p>
+        <section aria-label="安全命令检查调用时序">
+          <div class="section-label">
+            <span class="section-label__index">TRUST BOUNDARY</span>
+            <span class="section-label__text">先建立执行输入的唯一身份，再调用安全 Provider</span>
           </div>
-          <div class="route-scroll">
-            <div class="route-canvas">
-              <a class="route-node node-cosh" href="#sec-step-1">
-                <span class="route-node__role">Environment</span>
-                <span class="route-node__name">COSH</span>
-                <span class="route-node__desc">准备执行 Tool Call</span>
-              </a>
-              <a class="route-node node-hook" href="#sec-step-1">
-                <span class="route-node__role">Adapter</span>
-                <span class="route-node__name">AW Hook</span>
-                <span class="route-node__desc">提取命令和 scope</span>
-              </a>
-              <a class="route-node node-core" href="#sec-step-2">
-                <span class="route-node__role">Policy + Routing</span>
-                <span class="route-node__name">AW Core</span>
-                <span class="route-node__desc">构造合同并验证决定</span>
-              </a>
-              <a class="route-node node-host" href="#sec-step-3">
-                <span class="route-node__role">Driver</span>
-                <span class="route-node__name">Provider Host</span>
-                <span class="route-node__desc">字段映射和有界执行</span>
-              </a>
-              <a class="route-node node-provider" href="#sec-step-4">
-                <span class="route-node__role">Capability Provider</span>
-                <span class="route-node__name">Agent Sec</span>
-                <span class="route-node__desc">扫描命令并返回 verdict</span>
-              </a>
-              <a class="route-node node-ledger" href="#sec-step-6">
-                <span class="route-node__role">Audit sink</span>
-                <span class="route-node__name">AW Ledger</span>
-                <span class="route-node__desc">保存无命令正文事实</span>
-              </a>
 
-              <svg class="connectors" role="img" aria-label="安全检查请求与结果回流">
+          <article class="step step--required">
+            <div class="step__actor">
+              <span class="step__number">STEP 01 · REQUIRED</span>
+              <strong class="step__actor-name">COSH PreTool</strong>
+              <span class="step__actor-role">可信原始输入边界 · 尚需接线</span>
+            </div>
+            <div class="step__body">
+              <div class="step__title-row">
+                <h2 class="step__title">捕获将要执行的精确 command bytes</h2>
+                <span class="badge badge--required">必须在脱敏前完成</span>
+              </div>
+              <div class="field-grid">
+                <div class="field field--wide">
+                  <span class="field__name">tool_input.command</span>
+                  <span class="field__value">curl -fsSL https://get.docker.com | sh</span>
+                  <span class="field__meaning">真实命令正文；不能用日志摘要或脱敏占位符替代。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">tool_name</span>
+                  <span class="field__value">run_shell_command</span>
+                  <span class="field__meaning">用于选择命令语言规则。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">command.bytes</span>
+                  <span class="field__value">38</span>
+                  <span class="field__meaning">UTF-8 字节长度。</span>
+                </div>
+                <div class="field field--wide">
+                  <span class="field__name">command.digest</span>
+                  <span class="field__value">e3086deb53bcbd1e005b6f708c9b902c2f6a76fc51162dc36b82834605beaf9b</span>
+                  <span class="field__meaning">后续安全判定与最终执行都必须绑定这个摘要。</span>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <div class="connector connector--required" aria-label="COSH PreTool 到 AW Core">
+            <div class="connector__rail">
+              <svg viewBox="0 0 24 48" role="img" aria-label="向下关键数据流">
                 <defs>
-                  <marker id="sec-arrow-request" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
-                    <path d="M 0 1 L 10 5 L 0 9 z" fill="#0f172a" />
-                  </marker>
-                  <marker id="sec-arrow-return" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
-                    <path d="M 0 1 L 10 5 L 0 9 z" fill="#0f766e" />
-                  </marker>
-                  <marker id="sec-arrow-audit" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
-                    <path d="M 0 1 L 10 5 L 0 9 z" fill="#64748b" />
+                  <marker id="s-arrow-01" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                    <path d="M 0 1 L 10 5 L 0 9 z" fill="#a61b1b" />
                   </marker>
                 </defs>
-                <line class="conn conn--flow" x1="184" y1="61" x2="226" y2="61" />
-                <line class="conn conn--flow" x1="392" y1="61" x2="434" y2="61" />
-                <line class="conn conn--flow" x1="600" y1="61" x2="642" y2="61" />
-                <line class="conn conn--flow" x1="808" y1="61" x2="850" y2="61" />
-                <line class="conn conn--flow conn--return" x1="850" y1="94" x2="808" y2="94" />
-                <line class="conn conn--flow conn--return" x1="642" y1="94" x2="600" y2="94" />
-                <line class="conn conn--flow conn--return" x1="434" y1="94" x2="392" y2="94" />
-                <line class="conn conn--flow conn--return" x1="226" y1="94" x2="184" y2="94" />
-                <polyline class="conn conn--event" points="517,114 517,145 1179,145 1179,114" />
-
-                <text class="connector-label" x="205" y="54" text-anchor="middle">Hook</text>
-                <text class="connector-label" x="413" y="54" text-anchor="middle">submit</text>
-                <text class="connector-label" x="621" y="54" text-anchor="middle">invoke</text>
-                <text class="connector-label" x="829" y="54" text-anchor="middle">stdin</text>
-                <text class="connector-label connector-label--return" x="829" y="108" text-anchor="middle">scan</text>
-                <text class="connector-label connector-label--return" x="621" y="108" text-anchor="middle">outcome</text>
-                <text class="connector-label connector-label--return" x="413" y="108" text-anchor="middle">gate</text>
-                <text class="connector-label connector-label--return" x="205" y="108" text-anchor="middle">decision</text>
-                <rect x="754" y="137" width="188" height="16" fill="#ffffff" />
-                <text class="connector-label" x="848" y="148" text-anchor="middle">boundary facts via Hook writer</text>
+                <line class="conn conn--critical" x1="12" y1="0" x2="12" y2="44" stroke="#a61b1b" stroke-width="2" marker-end="url(#s-arrow-01)" />
               </svg>
-              <p class="route-caption">上行携带待执行命令，下行携带 verdict 与 finding，虚线携带审计事实。</p>
             </div>
+            <div class="connector__label">COSH PreTool → AW Core · exact 38B + e3086deb…af9b</div>
           </div>
-          <div class="legend" aria-label="连线图例">
-            <span class="legend__title">Legend</span>
-            <span class="legend__item">
-              <svg width="42" height="12" aria-hidden="true"><defs><marker id="sec-lg-request" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M 0 1 L 10 5 L 0 9 z" fill="#0f172a" /></marker></defs><line x1="0" y1="6" x2="34" y2="6" stroke="#0f172a" stroke-width="1.5" marker-end="url(#sec-lg-request)" /></svg>
-              请求
-            </span>
-            <span class="legend__item">
-              <svg width="42" height="12" aria-hidden="true"><defs><marker id="sec-lg-return" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M 0 1 L 10 5 L 0 9 z" fill="#0f766e" /></marker></defs><line x1="0" y1="6" x2="34" y2="6" stroke="#0f766e" stroke-width="1.75" marker-end="url(#sec-lg-return)" /></svg>
-              业务结果
-            </span>
-            <span class="legend__item">
-              <svg width="42" height="12" aria-hidden="true"><defs><marker id="sec-lg-event" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M 0 1 L 10 5 L 0 9 z" fill="#64748b" /></marker></defs><line x1="0" y1="6" x2="34" y2="6" stroke="#64748b" stroke-width="1.5" stroke-dasharray="3 5" marker-end="url(#sec-lg-event)" /></svg>
-              Ledger 事实
-            </span>
+
+          <article class="step">
+            <div class="step__actor">
+              <span class="step__number">STEP 02</span>
+              <strong class="step__actor-name">AW Core</strong>
+              <span class="step__actor-role">canonical contract</span>
+            </div>
+            <div class="step__body">
+              <div class="step__title-row">
+                <h2 class="step__title">构造 Provider 无关的命令检查输入</h2>
+                <span class="step__schema">security.command.inspect.input/v1</span>
+              </div>
+              <div class="field-grid">
+                <div class="field field--wide">
+                  <span class="field__name">command.content / digest</span>
+                  <span class="field__value">&lt;exact 38B&gt; / e3086deb…af9b</span>
+                  <span class="field__meaning">正文供瞬时扫描；摘要供跨边界同一性校验。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">command.language</span>
+                  <span class="field__value">bash</span>
+                  <span class="field__meaning">COSH 根据 <code>run_shell_command</code> 工具选择 bash。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">command.tool_name</span>
+                  <span class="field__value">run_shell_command</span>
+                  <span class="field__meaning">可选来源标识。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">boundary</span>
+                  <span class="field__value">pre_tool</span>
+                  <span class="field__meaning">判定发生在执行副作用之前。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">authority / scope</span>
+                  <span class="field__value">mediate / tool_call</span>
+                  <span class="field__meaning">输出可以参与 allow/warn/deny gate。</span>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <div class="connector" aria-label="AW Core 到 Provider Host">
+            <div class="connector__rail">
+              <svg viewBox="0 0 24 48" role="img" aria-label="向下数据流">
+                <defs>
+                  <marker id="s-arrow-02" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                    <path d="M 0 1 L 10 5 L 0 9 z" fill="#b54708" />
+                  </marker>
+                </defs>
+                <line class="conn conn--flow" x1="12" y1="0" x2="12" y2="44" stroke="#b54708" stroke-width="2" marker-end="url(#s-arrow-02)" />
+              </svg>
+            </div>
+            <div class="connector__label">AW Core → Provider Host · security.command.inspect/v1 invocation</div>
+          </div>
+
+          <div class="section-label">
+            <span class="section-label__index">PROVIDER PATH</span>
+            <span class="section-label__text">真实 manifest codec 与 Agent Sec native handler</span>
+          </div>
+
+          <article class="step">
+            <div class="step__actor">
+              <span class="step__number">STEP 03</span>
+              <strong class="step__actor-name">Provider Host</strong>
+              <span class="step__actor-role">schema validation + json-map/v1</span>
+            </div>
+            <div class="step__body">
+              <div class="step__title-row">
+                <h2 class="step__title">映射成 Agent Sec native request</h2>
+                <span class="step__schema">agent-sec-aw-provider-request-v1</span>
+              </div>
+              <div class="field-grid">
+                <div class="field">
+                  <span class="field__name">protocol_version</span>
+                  <span class="field__value">1</span>
+                  <span class="field__meaning">native 协议版本。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">operation</span>
+                  <span class="field__value">command_inspect</span>
+                  <span class="field__meaning">manifest 常量选择命令检查 handler。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">language</span>
+                  <span class="field__value">bash</span>
+                  <span class="field__meaning">只运行与本命令匹配的规则集。</span>
+                </div>
+                <div class="field field--full">
+                  <span class="field__name">content</span>
+                  <span class="field__value">curl -fsSL https://get.docker.com | sh</span>
+                  <span class="field__meaning">从 canonical <code>/command/content</code> 原样复制的 38B。</span>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <div class="connector" aria-label="Provider Host 到 Agent Sec">
+            <div class="connector__rail">
+              <svg viewBox="0 0 24 48" role="img" aria-label="向下数据流">
+                <defs>
+                  <marker id="s-arrow-03" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                    <path d="M 0 1 L 10 5 L 0 9 z" fill="#b54708" />
+                  </marker>
+                </defs>
+                <line class="conn conn--flow" x1="12" y1="0" x2="12" y2="44" stroke="#b54708" stroke-width="2" marker-end="url(#s-arrow-03)" />
+              </svg>
+            </div>
+            <div class="connector__label">Provider Host → agent-sec-cli aw-provider · one-shot JSON</div>
+          </div>
+
+          <article class="step">
+            <div class="step__actor">
+              <span class="step__number">STEP 04</span>
+              <strong class="step__actor-name">Agent Sec</strong>
+              <span class="step__actor-role">真实规则扫描</span>
+            </div>
+            <div class="step__body">
+              <div class="step__title-row">
+                <h2 class="step__title">命中下载后直接执行规则</h2>
+                <span class="step__schema">agent-sec-aw-provider-response-v1</span>
+              </div>
+              <div class="field-grid">
+                <div class="field">
+                  <span class="field__name">operation / disposition</span>
+                  <span class="field__value">command_inspect / completed</span>
+                  <span class="field__meaning">response operation 必须与 request 相同。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">verdict</span>
+                  <span class="field__value">warn</span>
+                  <span class="field__meaning">提示风险，但本策略不直接拒绝。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">scanned_bytes / findings_total</span>
+                  <span class="field__value">38 / 1</span>
+                  <span class="field__meaning">描述 Provider 收到并扫描的正文。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">language_detected / engine</span>
+                  <span class="field__value">bash / code-regex</span>
+                  <span class="field__meaning">completed command 分支必须明确报告规则集与引擎。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">reasons[0]</span>
+                  <span class="field__value">shell-download-exec</span>
+                  <span class="field__meaning">稳定规则代码，可安全用于操作员提示。</span>
+                </div>
+                <div class="field field--wide">
+                  <span class="field__name">findings[0]</span>
+                  <span class="field__value">rule_id=shell-download-exec · category=dangerous_pattern · severity=medium · confidence=high · count=1</span>
+                  <span class="field__meaning">结构化证据说明风险类型、严重度、置信度与命中数。</span>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <div class="connector" aria-label="Agent Sec 到 Provider Host">
+            <div class="connector__rail">
+              <svg viewBox="0 0 24 48" role="img" aria-label="向下数据流">
+                <defs>
+                  <marker id="s-arrow-04" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                    <path d="M 0 1 L 10 5 L 0 9 z" fill="#b54708" />
+                  </marker>
+                </defs>
+                <line class="conn conn--flow" x1="12" y1="0" x2="12" y2="44" stroke="#b54708" stroke-width="2" marker-end="url(#s-arrow-04)" />
+              </svg>
+            </div>
+            <div class="connector__label">Agent Sec → Provider Host · completed + correlated command_inspect result</div>
+          </div>
+
+          <article class="step">
+            <div class="step__actor">
+              <span class="step__number">STEP 05</span>
+              <strong class="step__actor-name">Provider Host</strong>
+              <span class="step__actor-role">canonical output + receipt</span>
+            </div>
+            <div class="step__body">
+              <div class="step__title-row">
+                <h2 class="step__title">校验 native output 并归一化安全判定</h2>
+                <span class="step__schema">security.command.inspect.output/v1</span>
+              </div>
+              <div class="field-grid">
+                <div class="field">
+                  <span class="field__name">decision.verdict</span>
+                  <span class="field__value">warn</span>
+                  <span class="field__meaning">canonical gate verdict。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">decision.reasons</span>
+                  <span class="field__value">["shell-download-exec"]</span>
+                  <span class="field__meaning">warn 必须至少有一个 reason。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">decision.scanned_bytes</span>
+                  <span class="field__value">38</span>
+                  <span class="field__meaning">Provider 扫描覆盖量，不是执行器证明。</span>
+                </div>
+                <div class="field field--wide">
+                  <span class="field__name">decision.findings[0]</span>
+                  <span class="field__value">shell-download-exec / dangerous_pattern / medium / high / 1</span>
+                  <span class="field__meaning">warn 与 finding 的跨字段约束由 canonical schema 校验。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">receipt</span>
+                  <span class="field__value">produced · input/output digest · bytes</span>
+                  <span class="field__meaning">只保留事实与摘要，不复制命令正文。</span>
+                </div>
+                <div class="field field--wide">
+                  <span class="field__name">receipt.meters</span>
+                  <span class="field__value">security.scanned_bytes=38 bytes observed · security.findings_total=1 findings observed</span>
+                  <span class="field__meaning">Core 同时核对 meter id、unit、measurement_kind 和实际值。</span>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <div class="connector" aria-label="Provider Host 回到 AW Core">
+            <div class="connector__rail">
+              <svg viewBox="0 0 24 48" role="img" aria-label="向下数据流">
+                <defs>
+                  <marker id="s-arrow-05" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                    <path d="M 0 1 L 10 5 L 0 9 z" fill="#b54708" />
+                  </marker>
+                </defs>
+                <line class="conn conn--flow" x1="12" y1="0" x2="12" y2="44" stroke="#b54708" stroke-width="2" marker-end="url(#s-arrow-05)" />
+              </svg>
+            </div>
+            <div class="connector__label">Provider Host → AW Core · canonical decision + content-free receipt</div>
+          </div>
+
+          <div class="section-label">
+            <span class="section-label__index">ADOPTION</span>
+            <span class="section-label__text">Core 解释判定；COSH 在执行前再次证明输入未被替换</span>
+          </div>
+
+          <article class="step">
+            <div class="step__actor">
+              <span class="step__number">STEP 06</span>
+              <strong class="step__actor-name">AW Core</strong>
+              <span class="step__actor-role">gate interpretation</span>
+            </div>
+            <div class="step__body">
+              <div class="step__title-row">
+                <h2 class="step__title">验证结果并映射到 COSH 决策</h2>
+                <span class="badge badge--implemented">已实现映射</span>
+              </div>
+              <div class="field-grid">
+                <div class="field">
+                  <span class="field__name">schema + receipt</span>
+                  <span class="field__value">valid + invocation-bound</span>
+                  <span class="field__meaning">失败结果不能伪装成 clean/allow。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">canonical gate</span>
+                  <span class="field__value">warn</span>
+                  <span class="field__meaning">Provider 发现风险但未宣称 deny。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">coverage gate</span>
+                  <span class="field__value">scanned_bytes == submitted_bytes == 38</span>
+                  <span class="field__meaning">只覆盖提交给 Core 的命令，不代表 executor 已执行同一份字节。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">COSH hook decision</span>
+                  <span class="field__value">allow</span>
+                  <span class="field__meaning">当前适配语义中 warn 不直接阻断。</span>
+                </div>
+                <div class="field field--full">
+                  <span class="field__name">systemMessage</span>
+                  <span class="field__value">AW · security · warned · shell-download-exec</span>
+                  <span class="field__meaning">只显示稳定规则代码，不回显命令正文。</span>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <div class="connector connector--required" aria-label="AW Core 到执行前校验">
+            <div class="connector__rail">
+              <svg viewBox="0 0 24 48" role="img" aria-label="向下关键数据流">
+                <defs>
+                  <marker id="s-arrow-06" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                    <path d="M 0 1 L 10 5 L 0 9 z" fill="#a61b1b" />
+                  </marker>
+                </defs>
+                <line class="conn conn--critical" x1="12" y1="0" x2="12" y2="44" stroke="#a61b1b" stroke-width="2" marker-end="url(#s-arrow-06)" />
+              </svg>
+            </div>
+            <div class="connector__label">AW Core → trusted executor · decision must remain bound to e3086deb…af9b</div>
+          </div>
+
+          <article class="step step--required">
+            <div class="step__actor">
+              <span class="step__number">STEP 07 · REQUIRED</span>
+              <strong class="step__actor-name">COSH Executor</strong>
+              <span class="step__actor-role">最终执行边界 · 尚需接线</span>
+            </div>
+            <div class="step__body">
+              <div class="step__title-row">
+                <h2 class="step__title">执行前对实际 command bytes 重新计算摘要</h2>
+                <span class="badge badge--required">same bytes or rescan</span>
+              </div>
+              <div class="field-grid">
+                <div class="field field--wide">
+                  <span class="field__name">sha256(actual_command_to_execute)</span>
+                  <span class="field__value">必须等于 e3086deb53bcbd1e005b6f708c9b902c2f6a76fc51162dc36b82834605beaf9b</span>
+                  <span class="field__meaning">一致才可复用 STEP 06 的安全判定。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">on_match</span>
+                  <span class="field__value">execute with warning</span>
+                  <span class="field__meaning">遵守本例 warn→allow 策略。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">on_mismatch</span>
+                  <span class="field__value">abort or rescan</span>
+                  <span class="field__meaning">不得把旧 verdict 套到新命令上。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">future execution proof</span>
+                  <span class="field__value">actual digest + decision reference</span>
+                  <span class="field__meaning">当前 Ledger gate 记录 submitted digest；实际执行绑定尚未接入。</span>
+                </div>
+              </div>
+            </div>
+          </article>
+        </section>
+
+        <section class="result-strip" aria-label="结果解释">
+          <div class="result">
+            <span class="result__label">Provider result</span>
+            <span class="result__value"><code>warn</code>、规则 <code>shell-download-exec</code>、严重度 medium、置信度 high。</span>
+          </div>
+          <div class="result">
+            <span class="result__label">Current adapter policy</span>
+            <span class="result__value">warn 映射为 allow + systemMessage；它是提醒，不是拒绝。</span>
+          </div>
+          <div class="result">
+            <span class="result__label">Safety proof</span>
+            <span class="result__value">当前只证明 submitted 38B 的 gate；接入可信捕获与执行前复核后，才能证明 scanned bytes = executed bytes。</span>
           </div>
         </section>
 
-        <section class="section" aria-labelledby="steps-title">
-          <div class="section-head">
-            <h2 class="section-title" id="steps-title">2. 六个数据阶段</h2>
-            <p class="section-note">字段值来自同一份 PR fixture。</p>
-          </div>
-          <nav class="step-nav" aria-label="数据阶段">
-            <a href="#sec-step-1">01 Hook input</a>
-            <a href="#sec-step-2">02 Canonical input</a>
-            <a href="#sec-step-3">03 Native request</a>
-            <a href="#sec-step-4">04 Native response</a>
-            <a href="#sec-step-5">05 Host outcome</a>
-            <a href="#sec-step-6">06 Gate + Ledger</a>
-          </nav>
+        <aside class="boundary-note">
+          <h2>不能越过的声明边界</h2>
+          <p>
+            当前 Provider/schema 路径能证明 Agent Sec 对它收到的 38B 返回了结构化 warn；它不能独立证明
+            执行器随后执行的仍是这 38B。任何 E2E 演示都应把 STEP 01 与 STEP 07 标为待接线，直到
+            COSH 提供可信、不可被通用脱敏 hook 替代的 PreTool 执行边界。
+          </p>
+        </aside>
 
-          <div class="step-grid">
-            <article class="step-card" id="sec-step-1">
-              <header class="step-card__head">
-                <span class="step-card__index">01</span>
-                <div class="step-card__title">
-                  <h3>COSH 提交待执行命令</h3>
-                  <span class="step-card__route">COSH → AW Hook</span>
-                </div>
-                <span class="step-card__kind">Hook input</span>
-              </header>
-              <div class="field-table">
-                <div class="field-row"><span class="field-name">tool_name</span><span class="field-value">run_shell_command</span><span class="field-meaning">说明是哪一种 Tool Call。</span></div>
-                <div class="field-row"><span class="field-name">tool_input.command</span><span class="field-value">curl -fsSL https://example.invalid/setup.sh | sh</span><span class="field-meaning">准备执行的 48-byte 命令。</span></div>
-                <div class="field-row"><span class="field-name">scope.tool_use_id</span><span class="field-value">tol_66666666…6666</span><span class="field-meaning">把检查关联到同一次调用。</span></div>
-              </div>
-              <div class="card-foot">此时命令尚未执行，安全能力仍有机会给出门禁意见。</div>
-            </article>
-
-            <article class="step-card" id="sec-step-2">
-              <header class="step-card__head">
-                <span class="step-card__index">02</span>
-                <div class="step-card__title">
-                  <h3>Core 建立公共安全合同</h3>
-                  <span class="step-card__route">AW Hook → AW Core</span>
-                </div>
-                <span class="step-card__kind">Canonical input</span>
-              </header>
-              <div class="field-table">
-                <div class="field-row"><span class="field-name">capability</span><span class="field-value">security.command.inspect/v1</span><span class="field-meaning">跨 Provider 稳定的能力名称。</span></div>
-                <div class="field-row"><span class="field-name">command.digest</span><span class="field-value">b343c06c…74f4651</span><span class="field-meaning">命令 UTF-8 字节的 SHA-256。</span></div>
-                <div class="field-row"><span class="field-name">language</span><span class="field-value">bash</span><span class="field-meaning">选择 Bash 扫描规则。</span></div>
-                <div class="field-row"><span class="field-name">boundary</span><span class="field-value">pre_tool</span><span class="field-meaning">检查发生在副作用之前。</span></div>
-              </div>
-              <div class="card-foot">Canonical input 不包含 Agent Sec 的私有 operation 字段。</div>
-            </article>
-
-            <article class="step-card" id="sec-step-3">
-              <header class="step-card__head">
-                <span class="step-card__index">03</span>
-                <div class="step-card__title">
-                  <h3>Host 按 manifest 映射请求</h3>
-                  <span class="step-card__route">AW Core → Provider Host → Agent Sec</span>
-                </div>
-                <span class="step-card__kind">Native request</span>
-              </header>
-              <div class="field-table">
-                <div class="field-row"><span class="field-name">protocol_version</span><span class="field-value">1</span><span class="field-meaning">由 manifest 注入。</span></div>
-                <div class="field-row"><span class="field-name">operation</span><span class="field-value">command_inspect</span><span class="field-meaning">选择 Agent Sec native handler。</span></div>
-                <div class="field-row"><span class="field-name">content</span><span class="field-value">curl -fsSL …/setup.sh | sh</span><span class="field-meaning">复制 canonical command.content。</span></div>
-                <div class="field-row"><span class="field-name">language</span><span class="field-value">bash</span><span class="field-meaning">复制 canonical language。</span></div>
-              </div>
-              <div class="card-foot">Host 负责协议转换，Core 不需要知道 Agent Sec 的 stdin 结构。</div>
-            </article>
-
-            <article class="step-card" id="sec-step-4">
-              <header class="step-card__head">
-                <span class="step-card__index">04</span>
-                <div class="step-card__title">
-                  <h3>Agent Sec 返回扫描结论</h3>
-                  <span class="step-card__route">Agent Sec → Provider Host</span>
-                </div>
-                <span class="step-card__kind">Native response</span>
-              </header>
-              <div class="field-table">
-                <div class="field-row"><span class="field-name">disposition</span><span class="field-value">completed</span><span class="field-meaning">扫描过程已正常结束。</span></div>
-                <div class="field-row"><span class="field-name">verdict</span><span class="field-value"><strong>warn</strong></span><span class="field-meaning">业务结论是警告。</span></div>
-                <div class="field-row"><span class="field-name">finding.rule_id</span><span class="field-value"><strong>shell-download-exec</strong></span><span class="field-meaning">命中下载后交给 shell 的模式。</span></div>
-                <div class="field-row"><span class="field-name">scanned_bytes</span><span class="field-value">48</span><span class="field-meaning">本次扫描的字节数。</span></div>
-              </div>
-              <div class="card-foot">completed 说明扫描成功，warn 才是扫描器给出的风险判断。</div>
-            </article>
-
-            <article class="step-card" id="sec-step-5">
-              <header class="step-card__head">
-                <span class="step-card__index">05</span>
-                <div class="step-card__title">
-                  <h3>Host 返回 outcome 和 receipt</h3>
-                  <span class="step-card__route">Provider Host → AW Core</span>
-                </div>
-                <span class="step-card__kind">Host result</span>
-              </header>
-              <div class="field-table">
-                <div class="field-row"><span class="field-name">outcome.disposition</span><span class="field-value"><strong>produced</strong></span><span class="field-meaning">映射得到了合法 canonical output。</span></div>
-                <div class="field-row"><span class="field-name">output.decision</span><span class="field-value">warn · shell-download-exec</span><span class="field-meaning">业务结果回到 Core。</span></div>
-                <div class="field-row"><span class="field-name">output_digest</span><span class="field-value">31b0b36d…0498bd2</span><span class="field-meaning">绑定 canonical output。</span></div>
-                <div class="field-row"><span class="field-name">receipt.meters</span><span class="field-value">findings=1 · scanned=48</span><span class="field-meaning">记录计量事实。</span></div>
-              </div>
-              <div class="card-foot">Receipt 不复制命令正文。当前 Receipt 也没有 input digest。</div>
-            </article>
-
-            <article class="step-card" id="sec-step-6">
-              <header class="step-card__head">
-                <span class="step-card__index">06</span>
-                <div class="step-card__title">
-                  <h3>Core 形成门禁，COSH 作最终决定</h3>
-                  <span class="step-card__route">AW Core → AW Hook → COSH / AW Ledger</span>
-                </div>
-                <span class="step-card__kind">Gate + Audit</span>
-              </header>
-              <div class="field-table">
-                <div class="field-row"><span class="field-name">Core gate</span><span class="field-value">ToolCallGate::Warn</span><span class="field-meaning">Core 接受并解释 Provider 结论。</span></div>
-                <div class="field-row"><span class="field-name">Hook decision</span><span class="field-value"><strong>allow</strong></span><span class="field-meaning">当前 warn 映射为允许并提示。</span></div>
-                <div class="field-row"><span class="field-name">systemMessage</span><span class="field-value">AW · security · warned · shell-download-exec</span><span class="field-meaning">向用户说明风险原因。</span></div>
-                <div class="field-row"><span class="field-name">Ledger body</span><span class="field-value">gate=warn · invocation ref</span><span class="field-meaning">Hook writer 写入无命令正文事实。</span></div>
-              </div>
-              <div class="card-foot">COSH 聚合全部 Hook 后决定是否执行。Provider 自己不拥有执行权。</div>
-            </article>
-          </div>
-        </section>
-
-        <section class="section" aria-labelledby="state-title">
-          <div class="section-head">
-            <h2 class="section-title" id="state-title">3. 三个状态不能混用</h2>
-          </div>
-          <div class="reference-grid">
-            <div class="reference-card">
-              <h3>Provider 进程状态</h3>
-              <dl><dt>completed</dt><dd>扫描器正常完成。</dd><dt>produced</dt><dd>Host 成功生成 canonical output。</dd></dl>
-            </div>
-            <div class="reference-card">
-              <h3>安全业务结论</h3>
-              <dl><dt>warn</dt><dd>命令存在风险，需要提示。</dd><dt>rule_id</dt><dd>说明命中了哪条规则。</dd></dl>
-            </div>
-            <div class="reference-card">
-              <h3>环境最终动作</h3>
-              <dl><dt>allow</dt><dd>当前 Hook 不阻断。</dd><dt>COSH</dt><dd>聚合其他 Hook 后作最终决定。</dd></dl>
-            </div>
-          </div>
-        </section>
-
-        <section class="section review-note" aria-label="当前需要讨论的安全边界">
-          <div class="review-note__label">Review boundary</div>
-          <div class="review-note__body">
-            <strong>被扫描字节与最终执行字节尚未建立强绑定。</strong>
-            COSH 当前会先对 HookInput 做脱敏，其他 Hook 也可能继续修改 Tool Call。
-            接口冻结前需要保证 <code>digest(scanned_command) == digest(executed_command)</code>，
-            并让 Receipt 或最终 gate evidence 保留受限的 input digest。
-          </div>
-        </section>
-
-        <footer class="footer">
-          <span>Data source <code>PR head 42d07649409ecd5bb023056b28545efbd9325ef2</code></span>
-          <span>Command digest <code>b343c06cffd521fa299f2572af0b4d3fafd495ca5b437189890d328ea74f4651</code></span>
+        <footer class="legend" aria-label="图例">
+          <span class="legend__title">Legend</span>
+          <span class="legend__item">
+            <svg width="40" height="12" aria-hidden="true">
+              <defs>
+                <marker id="s-legend-flow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                  <path d="M 0 1 L 10 5 L 0 9 z" fill="#b54708" />
+                </marker>
+              </defs>
+              <line x1="0" y1="6" x2="36" y2="6" stroke="#b54708" stroke-width="2" marker-end="url(#s-legend-flow)" />
+            </svg>
+            已实现 Provider 数据流
+          </span>
+          <span class="legend__item">
+            <svg width="40" height="12" aria-hidden="true">
+              <defs>
+                <marker id="s-legend-critical" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                  <path d="M 0 1 L 10 5 L 0 9 z" fill="#a61b1b" />
+                </marker>
+              </defs>
+              <line x1="0" y1="6" x2="36" y2="6" stroke="#a61b1b" stroke-width="2" marker-end="url(#s-legend-critical)" />
+            </svg>
+            安全闭环所需的待接线边界
+          </span>
         </footer>
       </article>
     </main>

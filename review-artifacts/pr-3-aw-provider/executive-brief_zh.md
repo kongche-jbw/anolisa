@@ -1,190 +1,113 @@
 # AW Provider 架构说明
 
-本文档面向管理层、架构负责人、组件负责人和第一次接触 AW 的研发人员。文档从一个真实
-Tokenless 例子出发，解释 Provider 为什么存在、由哪些层组成、Schema 如何连接不同组件，
-以及安装后的代码在什么条件下才真正生效。
+本文面向管理层、架构负责人、组件负责人和第一次接触 AW 的研发人员。阅读者只需要了解
+JSON、进程和摘要值的基本概念。文档说明 Provider 为什么存在、Provider 的处理结果如何
+回到 AW Core，以及什么时候可以说一项能力已经生效。
 
-配套交互图如下。
+原 PR 审查对象是
+[casparant/anolisa PR 3](https://github.com/casparant/anolisa/pull/3)，头提交为
+`42d07649409ecd5bb023056b28545efbd9325ef2`。修正实现位于
+[`feat/aw/provider-e2e-poc`](https://github.com/kongche-jbw/anolisa/tree/feat/aw/provider-e2e-poc)。
 
-- [AW Capability Provider 总体架构](provider-effect-architecture.html)
-- [带真实字段值的 Tokenless 调用时序](provider-effect-sequence.html)
-- [Agent Sec 命令检查时序](security-command-call.html)
-- [当前 Checkpoint 创建时序](checkpoint-create-call.html)
-- [安全与 Checkpoint 运行实例说明](runtime-call-examples_zh.md)
-- [全部 Schema 图册](schema-reference_zh.md)
-- [组件开发与接入手册](component-integration_zh.md)
+配套材料如下。
 
-## 1. 结论
+- [Provider 生效架构图](provider-effect-architecture.html)
+- [带真实字段的 Tokenless 时序图](provider-effect-sequence.html)
+- [Agent Sec 命令检查图](security-command-call.html)
+- [Checkpoint State Provider 图](checkpoint-create-call.html)
+- [Schema 参考与语义讨论](schema-reference_zh.md)
+- [组件接入手册](component-integration_zh.md)
 
-PR 3 的架构方向正确，值得作为后续改造的基础。它把 Agent Environment、AW Core、
-Provider Host、Capability Provider 和 Ledger 的职责分开，并通过 canonical Schema、
-native Schema 与声明式 mapping 连接。新增组件不需要在 Core 或 Host 中增加组件名称分支。
+## 结论
 
-当前实现仍是 source POC。源码已经形成可运行主链，但系统安装不会自动启用 AW，真实
-跨组件测试默认不运行，部分安全与语义不变量也尚未闭合。因此当前可以确认“架构骨架成立”，
-不能确认“Provider 已在产品中稳定生效”。
+PR 3 的总体分层可以确认。AW Core 负责计划和解释，Provider Host 负责通用执行，组件
+Provider 负责算法，COSH 负责最终环境动作，Ledger 负责长期事实。这条主线与 Agent Host
+PoC 的权威边界一致。
 
-总体图中的返回方向必须与请求方向同等明确。Provider 的 native response 先回到 Host，
-Host 生成 `ProviderInvocationOutcome + ProviderReceipt` 并返回 Core。Core 才能验证
-Tokenless 压缩正文或 Agent Sec verdict，将 candidate 或 gate 送往 Final Adoption，并把
-无正文的调用事实送往 AW Ledger。缺少 `Provider -> Host -> Core` 的结果回流，就不存在
-可验证的最终采纳和审计链路。
+原 PR 最大的逻辑问题位于结果返回之后。Provider 生成 candidate 不能直接证明模型历史
+已经改变，Host 生成 receipt 也不能代替 Core 的结果解释。fork PoC 将返回链补全为
+`Provider -> Provider Host -> AW Core -> Ledger plan -> COSH -> Ledger adoption`。
 
-Schema 可以作为下一阶段改造中心。本 PR 涉及 22 个物理 JSON Schema 文件，去除 Provider
-包内逐字副本后为 14 个逻辑 Schema。冻结 Schema 时必须同步冻结 Rust/Python 类型、
-manifest mapping、真实 Provider 行为和 conformance tests，不能只修改 JSON 文件。
+PoC 已经让 PostToolUse 的最终本地历史采用可验证。安全 PreTool 仍缺少最终执行字节绑定。
+Checkpoint 采用 Gateway State Provider 与 Guarded V2，暂不进入 AW manifest Provider；
+Runtime tool 与 Gateway 私有控制协议已经形成真实路径。固定提交 `5ebfc0b3` 已通过 Ubuntu
+VM + Herdr 正常链路，故障注入与进程重启后的 evidence-only 恢复仍需继续验收。
 
-## 2. Provider 解决的问题
+## Provider 解决什么问题
 
-假设 COSH 调用 `list_recent_builds`，工具返回一段很长的 JSON。系统希望同时完成两件事。
+假设 COSH 获得 `list_recent_builds` 的长 JSON。系统希望 Agent Sec 扫描风险，同时让
+Tokenless 准备更短的模型表示。
 
-1. Agent Sec 检查返回内容中是否包含凭据、敏感信息或危险代码。
-2. Tokenless 删除不影响任务的信息并压缩上下文，减少下一次模型请求的 token 数。
+如果 COSH 直接理解每个组件，它需要知道各自的字段、版本、超时、权限和错误码。新增或
+替换组件会不断修改 COSH。Provider 架构把稳定能力与具体实现分开。
 
-如果 COSH 直接调用每个组件，就需要理解 Agent Sec 和 Tokenless 的私有协议、错误码、
-版本、权限、超时与升级方式。每增加一个组件，COSH 都要增加新的专用逻辑。
-
-AW Provider 把问题拆成稳定能力和可替换实现。
-
-| 稳定 Capability | 当前 Provider | Authority | 作用 |
+| 稳定 Capability | 当前实现 | Authority | 结果 |
 | --- | --- | --- | --- |
-| `security.content.inspect/v1` | Agent Sec | Observe | 报告敏感内容事实 |
-| `security.code.inspect/v1` | Agent Sec | Observe | 报告代码风险事实 |
-| `security.command.inspect/v1` | Agent Sec | Mediate | 影响 Tool Call 是否执行 |
-| `context.projection.prepare/v1` | Tokenless | Advise | 提供可进入模型的候选表示 |
+| `security.content.inspect/v1` | Agent Sec | Observe | 内容风险事实 |
+| `security.code.inspect/v1` | Agent Sec | Observe | 代码风险事实 |
+| `security.command.inspect/v1` | Agent Sec | Mediate | Tool Call 门禁意见 |
+| `context.projection.prepare/v1` | Tokenless | Advise | 可供选择的上下文 candidate |
 
-COSH 只需要知道需要哪项 Capability。AW 负责选择一个满足版本、Scope、Authority、Policy
-和健康状态的 Provider。Provider 仍保留自己的 native protocol 和算法实现。
+COSH 只提交稳定的 canonical input。组件继续使用自己的 native request 与 response。
+`provider.toml` 说明两套字段如何转换，Provider Host 执行这份声明。
 
-## 3. 五层架构
+## 五层职责
 
-| 层次 | 当前实现 | 核心职责 | 不拥有的权力 |
-| --- | --- | --- | --- |
-| Agent Environment | COSH | 提供真实 Tool 边界，聚合 Hook，决定最终执行或入模内容 | 不决定 Provider 内部算法 |
-| AW Core | `aw-core` | 建立 Plan、应用 Policy、按 Contract 精确路由、验证业务结果 | 不解析 Tokenless 私有协议 |
-| Provider Host | `aw-provider-host` | 发现、准入、字段映射、预算、进程执行、Receipt | 不决定 Allow、Block 或最终采用 |
-| Capability Provider | Tokenless、Agent Sec | 执行压缩或扫描并返回 native 结果 | 不得扩大 manifest 声明的 Authority |
-| Ledger | `aw-ledger` | 记录边界事实、摘要和调用 Receipt | 不应保存 Tool 正文或候选正文 |
-
-这五层的核心原则是权威事实不混用。
-
-- COSH 知道系统最后执行了什么、模型最后看到了什么。
-- Core 知道为什么选择某个 Capability Provider。
-- Host 知道实际执行了哪个 manifest 和进程。
-- Provider 知道自己的算法产生了什么结果。
-- Ledger 只记录被允许持久化的事实。
-
-## 4. 两个 Schema 世界
-
-AW 与组件使用两套不同层次的 Schema。
-
-### 4.1 Canonical Schema
-
-Canonical Schema 由 AW 团队维护，表达跨 Provider 稳定的能力语义。例如 Context
-Projection 输入包含：
-
-```text
-artifact { id, digest, content, media_type, origin, tool_name }
-boundary
-constraints { allow_text_reencoding }
-```
-
-同一 canonical input 可以交给 Tokenless，也可以交给未来另一个压缩 Provider。
-
-### 4.2 Native Schema
-
-Native Schema 由组件团队维护，表达组件自己的 stdin/stdout 协议。例如 Tokenless
-`CompressionRequest` 包含：
-
-```text
-protocol_version
-content
-agent_id
-session_id
-tool_use_id
-tool_name
-seam
-content_origin
-capabilities
-```
-
-### 4.3 Manifest mapping
-
-`provider.toml` 声明 canonical 字段如何变成 native 字段。Provider Host 只执行通用
-`json-map/v1`，不包含 Tokenless 专用代码。
-
-| 变化类型 | Tokenless 例子 | 含义 |
+| 层次 | 主要职责 | 能证明的事实 |
 | --- | --- | --- |
-| 复制 | `artifact.content → content` | 值保持不变 |
-| 重命名 | `boundary → seam` | 同一语义使用组件字段名 |
-| 跨层映射 | `environment_id → agent_id` | 当前存在语义错配，需要修复 |
-| 常量注入 | `protocol_version=1` | 值由 manifest 固定 |
-| 新计算 | `artifact.id`、digest | 值由 Core 或 Host 计算 |
+| Agent Environment | 提供真实边界，选择并完成最终动作 | 最终执行什么，最终写入哪段本地历史 |
+| AW Core | 建立 Plan，应用 Policy，校验并解释 Provider 结果 | 为什么调用某项能力，结果是否满足合同 |
+| Provider Host | 准入、Schema 校验、mapping、有界执行 | 调用了哪个 manifest 与进程，输入输出身份是什么 |
+| Capability Provider | 扫描、压缩或其他算法 | native 算法产生了什么结果 |
+| AW Ledger | 保存类型封闭、无正文的长期记录 | 哪次计划和最终动作发生过，哈希链是否完整 |
 
-这种设计的价值是组件接入信息位于可审查的 Provider package 中，而不是散落在 Core、Host
-和 COSH 的条件分支里。
+Provider Host 必须把处理结果送回 AW Core。返回值包含两部分。
 
-## 5. 一个真实 Tokenless 数据样例
+| 返回对象 | 是否包含正文 | 生命周期 | 用途 |
+| --- | --- | --- | --- |
+| transient output 或 candidate | 可以包含 | 只在当前调用链存在 | 供 Core 验证并交给 Environment |
+| `ProviderReceipt` | 不包含 | 可进入后续审计引用 | 绑定输入、输出、manifest、scope 与终态 |
 
-本节的数据来自 PR 中的 PostToolUse fixture 和真实 Tokenless 集成测试。长数组仅缩写为
-`…`，稳定字段值保持真实。
+Core 收不到 transient output 就无法校验并向 COSH 交付 Tokenless 的压缩结果。Core 收不到
+receipt 就无法
+证明结果来自哪份输入和哪次 Provider 调用。二者都不能替代 COSH 的最终采用事实。
 
-### 5.1 COSH Tool Result
+## 一次 Tokenless 调用的真实数据
 
-工具名是 `list_recent_builds`，模型可见正文来自 `tool_response.llmContent`。
+PoC 使用固定的 `list_recent_builds` Tool Result。`llmContent` 包含六条构建记录，共 693 个
+UTF-8 字节。下面的 artifact 与 scope ID 固定用于文档 trace；实际运行会为每次调用生成
+新 ID，因此 source 和 candidate 正文摘要稳定，包含动态 ID 的 envelope 摘要只对该次
+trace 有效。
 
-```json
-{
-  "tool_name": "list_recent_builds",
-  "tool_response": {
-    "llmContent": "{\"builds\":[...]}"
-  },
-  "execution_scope": {
-    "environment_id": "env_33333333-3333-4333-8333-333333333333",
-    "execution_context_id": "ctx_44444444-4444-4444-8444-444444444444",
-    "actor_id": "act_55555555-5555-4555-8555-555555555555",
-    "agent_session_id": "ags_11111111-1111-4111-8111-111111111111",
-    "turn_id": "trn_22222222-2222-4222-8222-222222222222",
-    "tool_use_id": "tol_66666666-6666-4666-8666-666666666666"
-  }
-}
+```text
+source bytes       693
+source SHA-256      01202f4b809e4ffee777b3b7a62ca0d5007b99738c0abbc537fd1cc29d7422e1
+artifact id         art_9b44b763-ec58-c787-95f5-363ec02f80cb
+tool name           list_recent_builds
+turn id             trn_22222222-2222-4222-8222-222222222222
+tool use id         tol_66666666-6666-4666-8666-666666666666
 ```
 
-### 5.2 AW canonical input
+AW Core 把 source bytes、artifact metadata、boundary 与约束封装为 canonical input。完整
+canonical input 为 1115 bytes，
+SHA-256 为
+`9287a0290c71198b722b5820c9266610ec86ec7fd573999c385a67866c6c4510`。这个摘要还覆盖正文之外的
+artifact identity、boundary 与约束，所以它与 source digest 不同。Invocation scope 由
+Receipt 中的独立 typed 字段绑定。
 
-Core 计算 source digest 和 artifact id，再建立 Provider 无关的能力输入。
-
-```json
-{
-  "artifact": {
-    "id": "art_c8f93696-03b8-804e-923a-1fcf9a4d7ac7",
-    "digest": "612b377d40f7b6d00e03ea08831661702487ecd7f9d21631ea9e8d173da6c88f",
-    "content": "{\"builds\":[...]}",
-    "media_type": "application/json",
-    "origin": "api_response",
-    "tool_name": "list_recent_builds"
-  },
-  "boundary": "post_tool",
-  "constraints": {
-    "allow_text_reencoding": true
-  }
-}
-```
-
-### 5.3 Tokenless native request
-
-Host 按 manifest 复制、重命名并注入字段，形成发送给 `tokenless compress` 的 stdin。
+Provider Host 按 manifest 生成 Tokenless native request。
 
 ```json
 {
   "protocol_version": 1,
-  "content": "{\"builds\":[...]}",
-  "agent_id": "env_33333333-3333-4333-8333-333333333333",
+  "input_media_type": "application/json",
+  "agent_id": "aw-provider",
   "session_id": "ags_11111111-1111-4111-8111-111111111111",
   "tool_use_id": "tol_66666666-6666-4666-8666-666666666666",
   "tool_name": "list_recent_builds",
   "seam": "post_tool",
   "content_origin": "api_response",
+  "content": "{\"builds\":[...]}",
   "capabilities": {
     "replace_output": true,
     "publish_retrieve_tool": false,
@@ -193,227 +116,205 @@ Host 按 manifest 复制、重命名并注入字段，形成发送给 `tokenless
 }
 ```
 
-### 5.4 Tokenless native response
+Tokenless 返回 `applied`，token 估算从 174 降到 110，转换链为 `toon`，source fidelity 为
+`lossless`，没有 stash key。native response 明确报告 `output_media_type=text/plain`，
+压缩后的文本为 438 bytes。
 
-真实集成 fixture 的 token 估算从 359 降为 110。
+```text
+builds[6]{id,project,status,duration_ms,owner}:
+  "build-101","checkout-service",passed,48231,"example-team"
+  "build-102","catalog-service",passed,39502,"example-team"
+  "build-103","inventory-service",failed,61402,"example-team"
+  "build-104","payment-service",passed,52710,"example-team"
+  "build-105","notification-service",passed,44617,"example-team"
+  "build-106","reporting-service",passed,37331,"example-team"
+page: 1
+page_size: 6
+```
+
+这段 bare candidate object 的 canonical digest 为
+`32b602230eaa68778419f4b3598b6402abd4365b62a0056ed8121bb23f4999a1`。Provider output envelope
+是 `{"candidate": ...}`，其 digest 为
+`586a7bdfbef6b99c4d132cefa3c83b131716ac81e7f21a3204d4e80a93b1d890`。候选正文 SHA-256 为
+`6c847696df69b21a2997cf599d6caf2bb5af76f418869c16cf07c0dc7e2d3003`。
+
+Host 校验 native response 和 canonical output，再把 candidate 与 receipt 返回 Core。Receipt
+保存 input schema、input digest、manifest digest、output identity、长度与 meters，不保存
+上面的正文。
+
+Core 检查以下条件。
+
+- candidate 指向相同的 source artifact 与 source digest。
+- candidate 不为空。
+- `reversibility` 满足 AW 对全部源信息的严格 `lossless` 定义。
+- 允许文本重编码时可以采用 `text/plain`；禁止时 candidate 必须保持 source media type。
+- schema、manifest 与 receipt 的 invocation identity 相互一致。
+
+COSH 当前处理的是已完成 Hook 聚合的模型历史文本槽，因此该调用方政策固定选择
+`allow_text_reencoding=true`。`false` 分支属于公共 canonical 合同，已经由真实 Tokenless
+与 Core 测试覆盖；未来只有当 COSH 需要可配置的结构化槽位政策时，才需要把该字段加入
+`EffectiveBytesRequest`。
+
+Core 先把两项 Observe 结果或 gap、Projection 结果与全部 invocation references 收敛为
+`post_tool_use_plan/v1` 并交给 Ledger。Plan 成功或按明确的 best-effort 策略降级后，Core
+才把候选交给 COSH。COSH 写入本地模型历史后才记录采用结果。
 
 ```json
 {
-  "protocol_version": 1,
-  "output": "builds[6]{id,project,status,duration_ms,owner}: ...",
-  "disposition": "applied",
-  "content_type": "json",
-  "compressor_chain": ["response-cleanup", "toon"],
-  "reversibility": "lossless",
-  "before_tokens": 359,
-  "after_tokens": 110,
-  "stash_keys": [],
-  "tokenizer_id": "heuristic-v1"
+  "decision": "adopted",
+  "reason": "lossless_candidate",
+  "source_digest": "01202f4b809e4ffee777b3b7a62ca0d5007b99738c0abbc537fd1cc29d7422e1",
+  "candidate_envelope_digest": "586a7bdfbef6b99c4d132cefa3c83b131716ac81e7f21a3204d4e80a93b1d890",
+  "effective_digest": "6c847696df69b21a2997cf599d6caf2bb5af76f418869c16cf07c0dc7e2d3003",
+  "effective_byte_count": 438
 }
 ```
 
-### 5.5 AW canonical candidate
+这个 `context_adoption/v1` 对象只展示稳定业务字段。真实 Ledger 还绑定前一条
+`post_tool_use_plan` 和 content-free invocation references。Plan 要求每个 Observe step 都有
+事实或明确 gap；invocation reference 的 attempt、tool use、Provider、input/output identity
+必须与 Ledger header 和 receipt 一致。
 
-Host 回填原始 source identity，将 native output 映射成 AW candidate。
+Ledger 的 assurance 由系统配置。`required` 模式在 adoption 追加失败时撤销刚写入的历史
+内容，并用不含正文的固定错误结束本轮。`best_effort` 模式保留历史内容，同时记录明确的
+运行降级。两种模式都不能伪造一条不存在的 adoption record。
+
+## 不满足 lossless 时发生什么
+
+Tokenless 过去把“保留任务相关信息”称为 `lossless`。AW 的语义更强，它要求保留全部源
+信息。fork PoC 单独计算 source fidelity。删除字段、清理空值或无法恢复的规范化都会得到
+`unrecoverable`。
+
+Core 仍可以看见这份 candidate，用于诊断或未来策略，但 COSH 不会采用它。COSH 保留原始
+693 bytes，并写入下列类型事实。
 
 ```json
 {
-  "candidate": {
-    "source_artifact_id": "art_c8f93696-03b8-804e-923a-1fcf9a4d7ac7",
-    "source_digest": "612b377d40f7b6d00e03ea08831661702487ecd7f9d21631ea9e8d173da6c88f",
-    "content": "builds[6]{id,project,status,duration_ms,owner}: ...",
-    "media_type": "text/plain",
-    "transform_chain": ["response-cleanup", "toon"],
-    "reversibility": "lossless"
-  }
+  "decision": "preserved",
+  "reason": "candidate_not_lossless",
+  "source_digest": "01202f4b809e4ffee777b3b7a62ca0d5007b99738c0abbc537fd1cc29d7422e1",
+  "effective_digest": "01202f4b809e4ffee777b3b7a62ca0d5007b99738c0abbc537fd1cc29d7422e1",
+  "effective_byte_count": 693
 }
 ```
 
-### 5.6 Receipt 与 replacement
+因此，Provider 的 `applied` 表示算法产生了结果。Host 的 `produced` 表示形成了 canonical
+candidate。COSH 的 `adopted` 才表示本地模型历史已经使用候选。
 
-下面是 `ProviderReceipt` 中稳定字段的真实节选。`invocation_id`、`output_digest`、
-`output_bytes` 和时间戳由每次运行产生，因此不伪造固定值。Receipt 不保存 candidate
-content。
-
-```json
-{
-  "provider_id": "tokenless",
-  "provider_version": "0.7.14",
-  "manifest_digest": "6b48b57238189360ba5de7f902d76300261d76d1d68af4ef542b044e18b98a32",
-  "binding_id": null,
-  "provider_generation": null,
-  "capability": {
-    "id": "context.projection.prepare",
-    "version": 1
-  },
-  "scope": {
-    "target": {
-      "kind": "host",
-      "authority": "local",
-      "identifier": "test-host"
-    },
-    "environment_id": "env_33333333-3333-4333-8333-333333333333",
-    "execution_context_id": "ctx_44444444-4444-4444-8444-444444444444",
-    "actor_id": "act_55555555-5555-4555-8555-555555555555",
-    "agent_session_id": "ags_11111111-1111-4111-8111-111111111111",
-    "work_id": null,
-    "attempt_id": null,
-    "turn_id": "trn_22222222-2222-4222-8222-222222222222",
-    "tool_use_id": "tol_66666666-6666-4666-8666-666666666666"
-  },
-  "disposition": "produced",
-  "output_schema": {
-    "id": "context.projection.prepare.output",
-    "version": 1
-  },
-  "meters": [
-    {
-      "meter_id": "context.source_tokens",
-      "unit": "tokens",
-      "measurement_kind": "estimate",
-      "method": "heuristic-v1",
-      "value": 359
-    },
-    {
-      "meter_id": "context.prepared_tokens",
-      "unit": "tokens",
-      "measurement_kind": "estimate",
-      "method": "heuristic-v1",
-      "value": 110
-    }
-  ],
-  "error": null,
-  "evidence": []
-}
-```
-
-AW Hook 进一步向 COSH 返回：
-
-```json
-{
-  "suppressOutput": true,
-  "systemMessage": "AW · tokenless · estimated context 359→110 tokens · saved 69%",
-  "hookSpecificOutput": {
-    "hookEventName": "PostToolUse",
-    "updatedToolResponse": "builds[6]{id,project,status,duration_ms,owner}: ..."
-  }
-}
-```
-
-Provider 返回 `applied` 只说明 Tokenless 生成了输出。Host 的 `produced` 只说明形成了
-candidate。只有 COSH 聚合全部 Hook 后采用 `updatedToolResponse`，压缩内容才真正进入
-下一次模型上下文，Tokenless 的 Advise 才算生效。
-
-## 6. Provider 从安装到生效的状态链
+## Provider 从安装到生效
 
 ```text
 Packaged
-  → Installed
-  → Discovered
-  → Admitted
-  → Ready / Routable
-  → Selected by Policy
-  → Invoked
-  → Settled
-  → Effective
+  -> Installed
+  -> Discovered
+  -> Admitted
+  -> Bound
+  -> Ready
+  -> Planned
+  -> Invoked
+  -> Settled
+  -> Adopted or Enforced
 ```
 
-| 状态 | 成立条件 | 尚不能证明什么 |
+| 状态 | 成立条件 | 还不能证明的事实 |
 | --- | --- | --- |
-| Installed | binary、manifest、schemas 已放入目录 | Host 已发现或会调用 |
-| Admitted | identity、路径、Schema digest、executable 通过准入 | Policy 会选中 |
-| Ready | Capability descriptor 可路由 | Provider 已成功处理真实请求 |
-| Invoked | Host 已启动 Provider 并发送 native request | 结果满足合同 |
-| Settled | 返回 produced、bypassed、denied 或 failed | Environment 已执行或采用 |
-| Effective | 结果已在 Authority 对应边界生效 | 无 |
+| Installed | binary、manifest、Schema 已落盘 | Host 已读取它 |
+| Admitted | identity、路径、digest 与 contract 通过检查 | Policy 会选择它 |
+| Bound | 明确环境与 Capability 绑定到 Provider | 当前实例健康 |
+| Ready | 依赖与运行身份可用 | 真实请求已经成功 |
+| Invoked | Host 已发送 native request | 输出满足合同 |
+| Settled | 调用得到 produced、bypassed、denied 或 failed | Environment 已执行或采用 |
+| Adopted | COSH 已写入候选字节 | 远端模型已经消费 |
+| Enforced | Environment 已执行、询问或阻断 | 无 |
 
-当前 Tokenless RPM 或 raw 包可以安装 Provider 资产，但 AW runtime 与 Hook 没有形成统一
-产品安装路径。当前运行仍需要手工配置 `aw-cosh-hook` 的 manifest root、executable root
-和 declared-not-enforced opt-in。安装 Provider 不等于 Provider 生效。
+`installed`、`admitted`、`bound` 与 `ready` 是不同事实。运维界面需要分别展示，不能用一个
+绿色状态代替完整链路。
 
-## 7. 三种 Authority 的生效条件
+## 安全 Provider 的当前边界
 
-| Authority | Provider 输出 | 真正生效时刻 | 最终权力 |
-| --- | --- | --- | --- |
-| Observe | finding、统计或分类事实 | 事实被 Core 接受，并对策略、用户或审计面可见 | Core / Environment |
-| Advise | candidate | Environment 最终采用 candidate | Environment |
-| Mediate | allow、warn、deny 素材 | Environment 实际执行、询问或阻断 Tool Call | Environment |
+PoC 已修复 Agent Sec 的 `language=auto` 和自相矛盾终态，也让 Receipt 绑定被扫描输入。
+一条 `curl -fsSL https://get.docker.com | sh` 命令会得到 `warn`、一个
+`shell-download-exec` finding 和 `scanned_bytes=38`。
 
-Authority 的分离是该架构最重要的治理价值。统计 Provider 不会自动获得阻断权，安全
-Provider 也不能因为返回一个 verdict 就绕过 Environment 的最终聚合与执行逻辑。
+`scanned_bytes` 表示实际完成扫描的 UTF-8 字节数。未截断结果必须等于输入字节数。部分
+扫描如果已经发现风险，可以返回 `suspicious` 或 `sensitive` 与 `truncated=true`；它只能
+证明已扫描前缀存在风险，不能证明剩余内容安全。`clean + truncated=true` 一律无效。若
+截断点落在多字节字符中间，计数只包含成功解码的完整前缀。
 
-## 8. 当前实现与目标产品
+当前仍需把扫描摘要绑定到 COSH 最终执行摘要。
 
-| 能力 | 当前 PR | 产品目标 |
-| --- | --- | --- |
-| Provider package | Tokenless 已进入 Make/raw/RPM；Agent Sec 未完整打包 | binary、manifest、schemas 原子安装 |
-| Discovery | 显式 manifest root，每次 Hook 临时发现 | 统一根目录、逐包健康、reload |
-| Capability Graph | 可生成 exact descriptor，成功项统一 Ready | 持久图，表达 Degraded/Unavailable 与原因 |
-| Routing | 按 Capability、Authority、Scope、Schema digest 精确匹配 | Policy binding 可观测、可回滚 |
-| Execution | one-shot、env clear、deadline 和 output cap | OS sandbox、完整进程后代监督、总预算 |
-| Schema enforcement | 校验 Schema 文件和 digest | 对 request/response 做 instance validation |
-| Ledger | Hook 进程内 SQLite writer | 常驻可靠 writer 与外部锚定 |
-| Adoption | Hook 返回 replacement request | COSH 回报最终 adopted digest |
-| Host status | Agent Host POC 尚不展示 AW | `anolisa top` / `host verify` 展示完整状态 |
+```text
+digest(scanned_command) == digest(executed_command)
+```
 
-PR 的能力执行面与现有 Agent Host POC 的状态和交付面方向互补。下一阶段需要增加连接层，
-不应让 CLI 重新实现 Provider 调度，而应由 AW service 提供 graph、policy、writer 和健康事实。
+这项检查要放在全部允许修改命令的 Hook 与 policy patch 之后，并位于工具进程启动之前。
+完成前，系统可以证明 Agent Sec 扫描了指定输入，不能证明该输入与最终执行字节完全相同。
 
-## 9. Schema 冻结前的主要问题
+## Checkpoint 为什么走另一条路
 
-### 9.1 Tokenless 与 AW 的 lossless 语义不同
+Tokenless 与 Agent Sec 的调用可以在一次请求内结束。Checkpoint 会写入持久状态。连接在
+写入后中断时，调用方无法仅凭超时判断快照是否已经创建。
 
-AW 的 `lossless` 表示保留全部 source information。Tokenless 的定义是未移除
-task-relevant information。Tokenless 会删除 `debug`、`trace` 和空字段后仍可能返回
-lossless，manifest 又把该值直接映射给 AW。当前 Hook 因此可能采用不可逆结果。
+PoC 让 Gateway 充当 State Provider。COSH 只在 `workspace-checkpoint-v1` profile 下注册
+`workspace_checkpoint_create` tool，并通过私有控制请求把动作交给 Gateway。Gateway 保存
+批准、binding、durable claim、start 与 terminal receipt。ws-ckpt 使用 Guarded Checkpoint
+V2 创建快照，并以相同 `operation_digest` 保存 evidence。恢复过程只查询 evidence，不
+再次发送 create。
 
-修复原则是保留 AW 的强定义。Tokenless AW 模式只应在能够恢复全部源信息时返回
-lossless；发生字段删除时应返回 `unrecoverable` 或提供完整 retrievable 合同。
+```text
+Gateway
+  <- COSH workspace_checkpoint_create control request
+  -> workspace binding
+  -> approval and durable claim
+  -> GuardedCheckpointV2
+  -> ws-ckpt snapshot and exact evidence
+  -> terminal receipt or uncertain
+```
 
-### 9.2 被扫描字节与最终执行或入模字节不一致
+Binding 从 Runtime 已 pin 的 workspace directory descriptor 读取 inode、Btrfs FSID 与
+subvolume UUID，避免按路径重新打开后把另一个目录当成原 workspace。Approval binding v4
+在 plan 阶段预分配并持久化 `permit_id` 与 `execution_id`；permit、claim、start、terminal、
+source 和 delivery 都复用这组身份。Gateway 协议 v2 先完成 Admission discovery，再要求
+Submit 回显完整 admission。既有 v1 Submit JSON 形状保持不变，但服务端只在
+exact `task-only-v1` profile 下接受它；`workspace-checkpoint-v1` 必须使用 v2
+admission echo，v1 Submit 会被明确拒绝。
 
-COSH 当前先对 HookInput 做 redaction。AW 可能扫描或压缩脱敏副本，随后系统仍执行或入模
-原始值。source digest、安全结论和最终行为因此可能绑定不同字节。Environment 必须固定
-一份 governed bytes，并让扫描、替换、执行和 Ledger correlation 使用同一 digest。
+恢复时，Gateway 核对历史 binding、request、effect 与 digest，并认证当前 socket 的受信任
+祖先、owner 和 `SO_PEERCRED` UID。服务重启可以合法改变 socket inode，因此恢复过程不要求
+当前 socket inode 等于历史值。它只查询 `CheckpointEvidenceV2`，绝不重放 create。
 
-### 9.3 Agent Sec 的 language=auto 会漏检 Python
+该实现不新增 `providers/ws-ckpt/provider.toml`。当前 AW Host 只承载 one-shot 能力，缺少
+State Provider 的 service driver、binding lifecycle、reconcile 与 readiness 合同。PoC
+已有 Runtime tool、Gateway codec 与 State Provider 代码，并在固定提交 `5ebfc0b3` 的干净
+构建产物上完成 Ubuntu VM + Herdr 正常链路。VM 使用真实 Btrfs subvolume，核对 FSID 与
+subvolume UUID，产生 snapshot、durable evidence 和 11 个连续 Task 事件。该结果仍不等于
+生产可用，也没有覆盖 response-loss、crash/restart 与 evidence-only reconcile 的故障演练。
 
-Canonical Schema 允许 `auto`，Core 固定发送 `auto`，Agent Sec 当前却把除显式 Python
-外的输入都按 Bash 扫描。普通 Python 风险可能得到错误 clean。v1 应移除 auto，或定义
-可靠检测、双扫描和 unknown 降级规则。
+## Schema 作为架构基线
 
-### 9.4 Schema 声明不等于运行时验证
+Schema 可以成为团队协作中心。每个能力都需要同时冻结四类材料。
 
-Host 当前确认 Schema 文件是合法 JSON 并核对 SHA-256，但不会使用这些 Schema 验证实际
-native request 和 response。当前主要依靠字段映射和 Core 的 Rust typed decode 兜底。
-若对外声明 Schema enforcement，应在 admission 后缓存 validator，并验证四个数据边界。
+1. AW canonical input 与 output Schema。
+2. 组件 native request 与 response Schema。
+3. manifest mapping 与权限预算。
+4. typed validator、正反 fixture 和真实组件测试。
 
-### 9.5 Schema 与 Rust 类型不完全等价
+JSON Schema 负责形状。跨字段不变量由 typed validator 负责。最终执行或采用由 Runtime
+evidence 负责。三个层次缺一项，字段设计仍可能在真实链路上失真。
 
-JSON Schema `maxLength` 按 Unicode 字符计数，Rust `BoundedName` 按 UTF-8 bytes 计数；
-部分 tool name 上限是 256 字符，而 Rust 只接受 128 bytes；artifact id pattern 也没有与
-Rust canonical ID 对齐。需要共享 conformance vectors，而不是分别测试后假设一致。
+当前还需要讨论 `media_type` 与 transform identifier 的注册表，以及 `retrievable` 的
+resolver 与 TTL。PoC 已把 Tokenless `agent_id` 固定为已准入的 `aw-provider` 集成身份，
+避免再把 AW environment instance 当成 frontend；如果未来需要真实前端归因，应新增
+明确的 typed 字段，不能复用 instance ID。
 
-## 10. 团队责任
+## 管理层需要确认的四项决定
 
-| 团队 | 交付责任 |
+| 决定 | 建议 |
 | --- | --- |
-| AW Contract/Core | canonical Schema、Authority、Plan、Policy、typed invariant |
-| AW Host | 准入、mapping、预算、sandbox、进程监督、receipt |
-| Tokenless/Agent Sec | native Schema、算法语义、真实 binary tests、资源和副作用声明 |
-| COSH Environment | 真实边界字节、Hook 聚合、最终执行与 adoption 回报 |
-| 发布与 Agent Host | 原子包、统一 root、激活、健康、升级、回滚和 KVM 验收 |
-| Ledger/审计 | typed event、content-free 保证、hash commitment 和可靠 writer |
+| 总体架构 | 保留 Capability、Core、Host、Provider、Environment、Ledger 分层 |
+| 原 PR 合并 | 保持 Request changes，以 fork PoC 作为修正基线 |
+| 安全门禁 | 将 exact executed-bytes binding 设为进入真实执行链的前置条件 |
+| Checkpoint | 继续使用 Gateway State Provider；以已通过的 VM 正常链路为基线，再验证故障恢复与通用 AW 状态合同 |
 
-组件接入的完整步骤和测试清单见[组件开发与接入手册](component-integration_zh.md)。
-
-## 11. 建议的管理决策
-
-1. 将 PR 3 定位为 source POC，修复 P1 后再合并；PR 描述明确安装不会自动生效。
-2. 以 canonical Schema 与 capability invariant 为中心冻结 v1，同时更新代码类型和测试。
-3. 单独立项完成统一 Provider root、AW service、Hook 激活、状态投影和最终 adoption 回执。
-4. 将真实 Tokenless 与 Agent Sec binary 链路改为默认 CI，不依赖 ignored test 或 shell shim。
-5. 产品验收采用签名原子包、installed graph、Host 状态、Ledger 健康和 KVM 启动证明。
-
-完成这些工作后，现有 Contracts、Core、Host、Environment Adapter 和 Ledger 分层无需推倒
-重来，可以从 source POC 平滑演进为 Agent Host 的系统能力面。
+构建、CI、签名安装和服务健康属于下一道验收。已通过的 Ubuntu VM 正常链路证明各组件
+可以组合运行，但不能代替故障恢复与生产交付验收。

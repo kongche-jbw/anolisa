@@ -1,195 +1,247 @@
 # PR 3 架构审查总报告
 
-审查对象为 casparant/anolisa 的 PR 3。固定基线为 `8574ecb022ec9ffc68e1a71e30f2186b6ec81674`，固定头提交为 `42d07649409ecd5bb023056b28545efbd9325ef2`。审查采用 merge-base 到 head 的完整差异，共 158 个文件，新增 22257 行，删除 620 行。
-
-## 一句话结论
-
-架构方向值得保留。Contracts、Provider Host、Core、Environment Adapter、Ledger 的职责划分清楚，也与现有 Agent Host POC 的权威边界相容。
-
-当前版本仍不适合合并，更不能对外表述为 Provider 已经在产品里生效。这里同时存在运行语义错误、Ledger 可信度缺口、进程与资源边界缺口、测试门禁失真，以及安装激活链路未完成的问题。
-
-建议结论为 Request changes。先修完下列 P1 项，再讨论 source POC 合并。产品化工作应另列里程碑，不能混在一句已经接入里带过。
-
-## 做对了什么
-
-这套设计最有价值的地方，是把能力名称与具体实现拆开。Environment 只提交规范化 Tool Call 或 Tool Result，Core 只根据 Capability、Authority、Scope、Contract digest 和运行状态做计划，Host 负责 manifest 准入、codec 和进程执行。具体组件保留自己的 native protocol。
-
-这会带来三项长期收益。
-
-- 新 Provider 可以在不改 Core 分支逻辑的情况下替换同一 Capability。
-- Observe、Advise、Mediate 三种权力分开，安全扫描不会因为顺手做了摘要就得到阻断权。
-- 候选内容与 Receipt 分开，后续可以保留操作证据，同时避免重复保存完整 Tool 内容。
-
-显式 manifest root、不查找环境 PATH、精确 schema digest 路由、未强制的 Provider 必须显式 opt-in，这些选择也很稳健。PR 对缺少 OS sandbox、缺少常驻 writer、缺少最终采纳回执等限制写得比较诚实。
-
-## 合并阻断项
-
-### P1 Hook 处理的字节与实际执行和入模的字节不一致
-
-COSH 在调用所有 Hook 前，会对整个 HookInput 做 secret redaction。AW 的 PreToolUse 安全检查和 PostToolUse 摘要因此拿到脱敏副本。随后工具仍可能执行原始参数，模型在没有替代项时仍会收到原始 Tool Result。
-
-影响很直接。安全 Provider 可能对脱敏后的命令判定安全，但 COSH 执行的是另一串原文。Tokenless 也可能对脱敏副本做所谓 lossless 变换，而 lossless 只相对脱敏副本成立。Ledger 中的 digest 和安全结论也会指向错误的字节集合。
-
-证据见 `src/cosh-ng/crates/cosh-core/src/hook.rs` 的 `run_hooks`，`src/cosh-ng/crates/cosh-core/src/redaction.rs` 的递归字符串改写，`src/cosh-ng/crates/cosh-core/src/core.rs` 的原始结果回填，以及 `src/aw/crates/aw-cosh-hook/src/lib.rs` 的内容提取。
-
-最小修正需要定义一条明确契约。用于 Mediate 的数据必须与将要执行的输入一致。用于 Context Projection 的 source artifact 必须与最终候选要替代的模型可见内容一致。若模型可见面本来就要求脱敏，应在 Environment 内先完成受信任的内容变换，并让后续原始分支也使用同一份值。
-
-### P1 Agent Sec 的 auto 语言会漏掉普通 Python 风险
-
-公共 schema 允许 `language=auto`。manifest 原样把它传给 Agent Sec。实现仅在语言显式为 Python 时选 Python scanner，其他值都走 Bash scanner。
-
-普通 Python 文件里的 `pickle.loads` 一类风险因此可能得到假 clean。现有 auto 测试只覆盖 Bash 文本，没有覆盖只会命中 Python 规则的输入。
-
-最小修正有两个可选方向。V1 Contract 移除 auto 并要求 adapter 明确语言，或者实现可靠检测并增加 Python-only、Bash-only 与模糊输入回归。安全边界里不宜保留含糊的默认猜测。
-
-### P1 Tokenless 与 AW 对 lossless 的定义不一致
-
-AW canonical contract 把 `lossless` 定义为保留全部 source information。Tokenless native
-contract 的定义是没有移除 task-relevant information。Tokenless 的 JSON compressor 会
-删除 `debug`、`trace`、空值等字段，只要没有发生 truncation 仍可返回 lossless。manifest
-随后把该值原样映射到 AW candidate。
-
-AW Hook 当前又把非空且 `lossless` 作为采用候选的条件。结果是已经不可逆删除字段的内容
-可以满足 AW 的强保证并进入下一次模型上下文，Ledger 中的 reversibility 也会失真。
-
-最小修正应保留 AW 的强定义，由 Tokenless 的 AW Provider 模式把任何删字段、drop-null、
-drop-empty 或 cleanup change 标为 `unrecoverable`。只有能恢复全部 source information 的
-转换才能标为 `lossless`。需要新增跨组件测试，证明所有 lossless candidate 均可恢复原文。
-
-### P1 Ledger 的哈希验证没有覆盖读路径使用的全部事实
-
-`verify_chain` 会重算 body digest、record digest 和 parent 链，但不会把 SQLite 的 `kind`、`schema`、`timestamp_ms` 等列与 `record_canonical` 内的 header 逐项比对。`ledger_scope` 也完全不在哈希承诺里。
-
-攻击者可以修改 kind、schema、时间或 attempt、tool_use、invocation 关联，查询接口会展示修改后的值，verify 仍可能通过。这与 tamper-evident record 的表述不一致。
-
-最小修正应从 `record_canonical` 解出严格 envelope，重新规范化编码，并与每一个持久化 header 列比对。审计归属所需的 scope 也应进入被承诺字节，或者明确降级为可重建、可丢弃的索引缓存。损坏数据库是预期威胁面，查询 API 不应使用 `expect` 直接 panic。
-
-### P1 content-free 目前靠黑名单，无法形成安全证明
-
-Ledger admission 只禁止六个 key，`LedgerSink::record` 仍接受任意 kind、任意非空 schema 和任意 `serde_json::Value`。使用 `note`、`details`、`text` 等字段即可写入正文或 secret。
-
-Provider 自由文本还有更隐蔽的通道。meter method、media type、transform chain 等字段可从 native response 进入 Receipt 或 Ledger。`BoundedName` 只限制非空、NUL 和字节数，无法约束语义。
-
-最小修正应把可入账事件改为封闭的 typed enum，建立 kind、schema 与严格 body 类型的一一对应。body 类型启用未知字段拒绝。meter method、media type 和 transform identifier 使用专用类型或准入注册表。可持久化 metadata 尽量来自 admitted manifest。
-
-### P1 one-shot 进程仍可留下后台后代
-
-Provider 主进程输出合法 JSON 并正常退出后，Host 不会在成功路径清理进程组。关闭标准流后继续运行的后台进程可以留下。`setsid` 后代在超时路径也能逃出原进程组。
-
-最小修正应覆盖每一个 terminal path 的清理，并新增成功响应后后台化与 `setsid` 逃逸测试。生产级监督需要 cgroup、PID namespace 或 subreaper。单靠 process group 只能提供较弱保证。
-
-### P1 codec 在限额检查前存在可控内存放大
-
-请求和响应 mapping 都会 clone JSON value。manifest 没有字段数量上限，input、output 和 deadline 检查又发生在完整映射和编码之后。一个大字段被大量 mapping 重复引用时，可以在限额报错之前消耗巨量内存。
-
-最小修正应先检查绝对 deadline，对 manifest complexity 设上限，并在增量 mapping 过程中按实际分配或编码预算即时终止。
-
-### P1 CI 只看最后一个提交，新增门禁在本 PR 中几乎没有运行
-
-主 CI 使用 `fetch-depth=2`，再比较 `HEAD~1..HEAD`。当前最后一笔提交只改一个 Agent Sec schema 文件，前面十六个提交里的 AW、COSH、Tokenless 和 Provider 变化不会进入组件检测。
-
-同时，`providers/agent-sec-core/**` 既不会触发 Agent Sec，也不会触发 AW。AW job 本身写得完整，但变化检测可以绕开它。
-
-最小修正应在 pull_request 上获取 declared base，比较 `base...head`。Agent Sec Provider 路径要同时触发 Agent Sec 与 AW，并为多提交 PR、provider-only 变化增加检测回归。
-
-### P1 默认 AW 测试存在并行竞态
-
-`cargo test --workspace --locked` 在默认并行模式下不稳定。一次运行出现 deny 被降为 Ask，另一次出现三个失败。单测串行和单个测试重复运行可以通过。
-
-根因是 shell fixture 不读取 stdin 就退出。Host 的并发 stdin writer 因 BrokenPipe 把本来已产出合法响应的 Provider 标为失败。测试结果随调度变化。
-
-这里应修 fixture，让它完整消费 stdin，再输出响应。另加一个专门覆盖早退 Provider 的 Host 回归。不能通过放宽 Host 错误处理来掩盖协议不完整。
-
-### P1 PostToolUse 的外层 Hook 失败被静默吞掉
-
-COSH 会把 spawn、timeout、非零退出和非法 JSON 记进 `HookExecution.failure`。PreToolUse 聚合器会读取它，并按 fail policy 阻断或通知。PostToolUse 聚合器没有读取这个字段，只拿默认空 output 继续。
-
-AW Core、Provider Host 或 required Ledger 失败时，`aw-cosh-hook` 会非零退出。COSH 随后把原始 Tool Result 送给模型，既没有用户或运维通知，也没有 ObservationGap 或 Ledger 记录。观察系统不可用和观察系统没有发现因此变成同一种外观。
-
-最小修正应让 PostToolUse result 与 PreToolUse 对称地携带 hook failures。Context transformation 可以继续 fail-open，但必须输出稳定的 operator notification 和 content-free audit gap。required profile 还要约束 COSH 外层 `fail_open`，避免两层策略互相抵消。
-
-## 明显疏漏与设计债务
-
-### Source POC 没有可安装的激活闭环
-
-`scripts/build-all.sh --dry-run --component aw` 会直接报 Unknown component。AW 没有 `.anolisa/component.toml`、RPM、raw package、systemd 或默认 Hook 配置。Tokenless 包会带 `/usr/share/aw/providers/tokenless`，但 Agent Sec 文档却写 `/usr/share/agent-workload/providers/agent-sec-core`，而正式 Agent Sec 包根本没有携带这份 manifest 和 schemas。
-
-所以安装 Tokenless 或 Agent Sec 不会让 AW Provider 自动生效。当前唯一可运行方式是源码构建二进制，再手工传绝对 manifest、executable root 和 opt-in 参数。
-
-如果这次只想合入 source POC，PR 标题、描述和组件文档应明确说明不可安装、不会自动生效。若目标是进入 Agent Host POC，则需要统一 Provider root，并补齐 AW package、服务、Hook 注册、policy binding、健康检查、回滚和镜像验收。
-
-### Capability Graph 的健康状态大多不可达
-
-目录 discovery 对整个集合 fail-fast。任一 Provider package 损坏就没有 catalog。成功入图的条目又总是 Ready。Installed、Admitted、Degraded、Unavailable 和 reason 无法真实表达逐 Provider 状态。
-
-更合理的做法是逐 package admission，保留失败条目与原因，Core 只路由 Ready。若团队希望坚持 catalog 原子准入，也应把这个故障域写进 contract，避免运维误以为可选 Observe Provider 的损坏不会影响 Mediate。
-
-### Observe 失败丢失归因与顺序
-
-Core 把 observations 和 gaps 放在两个数组里，最后再拼 receipts。多 Provider 交错调用时，原始 invocation order 无法重建。invoke error 转成 gap 时还会丢失 provider、invocation 和具体 settled failure。
-
-建议用一个有序的 step result enum 保存每个计划步骤的 produced 或 gap，再从中派生 observations、candidate 和展示视图。
-
-### Observe 被强制依赖 Advise
-
-PostToolUse Plan 要求 projection `ExactlyOne`，Core 又在执行任何步骤前解析完整计划。只安装 Agent Sec Observe 而没有 Tokenless Advise 时，整个计划会在采集观察前失败。projection 执行或校验错误也会通过 `?` 丢掉已经完成的 Observe 事实。
-
-这是一项可以接受但必须明说的取舍。当前实现选择全计划路由快照，代价是能力无法独立部署和部分成功事实被丢弃。若产品希望安全观察在摘要 Provider 缺失时仍工作，Core 应返回 partial plan outcome，并把 projection 失败表达为 gap。
-
-### Schema 与 Rust 类型并不等价
-
-JSON Schema 的 `maxLength` 按 Unicode code point，Rust `BoundedName` 按 UTF-8 bytes。tool_name 的 schema 允许 256 个字符，Rust 公共类型只接受 128 bytes。source artifact id 的 schema 也没有表达 Rust canonical ID pattern。
-
-这会产生 schema-valid 但 Rust-contract-invalid 的跨语言结果。需要共享 conformance vectors，并统一字符集、长度单位和 ID pattern。
-
-### 声称源码解耦，实际仍直接 path dependency
-
-提交说明称 COSH Contracts 通过 vendoring 与 AW workspace 解耦。当前源码态 `cosh-gateway-contracts` 和 `cosh-core` 都直接 path-depend `aw-contracts`，只有 source-package 阶段临时复制并改写路径。
-
-应先修正文档中的架构表述。若组件独立是硬约束，应发布版本化 contract crate，或真正维护 generated snapshot。`cosh-core` 也应只经过自己的 contract facade。
-
-### 实际二进制没有绑定 manifest identity
-
-Receipt 的 provider_version 来自 manifest。Host 没有 executable digest，也没有版本握手。手工 root 或部分升级场景中，可以执行一份二进制，却记录另一份版本。
-
-POC 的 signed exact RPM closure 能降低风险，但 source 路径仍没有证据。产品化时应采用原子包加 doctor version check，或把 build identity 和 artifact digest 纳入 admission。
-
-### 外层和内层容量上限不一致
-
-AW 默认允许 64 MiB Provider output，COSH Hook pipe 只允许 32 MiB。32 到 64 MiB 之间的 AW 合法结果会被外层丢弃。Observe fan-out 目前还是逐个同步执行，每个 Provider 都拿到新的完整 deadline，没有 plan 总预算，Provider 数量增长时尾延迟线性增加。
-
-Ledger 所谓 bounded query 只保证走索引，没有 SQL LIMIT 或分页。便利命令还会加载所有 kind 后在内存排序。应把 bounded 明确成索引边界、返回行数边界和内存边界三件事，不能只满足第一件。
-
-### ArtifactId 的重试稳定性只在单个 Core 生命周期内成立
-
-ArtifactId 包含随机 execution context。COSH 每次构造 Core 都会生成新的 context。进程重启后，相同 session、turn 和 tool call 的 ArtifactId 会变化，但文档当前把它描述为稳定重试身份。
-
-要么持久化 execution context，要么把稳定性承诺收窄到同一 Core 生命周期。idempotency key 与 ArtifactId 的输入集合也应保持可解释的一致关系。
-
-### 新组件登记仍不完整
-
-根 README 没有 AW 组件行。PR 标题仍是分支名风格，PR body 还是空模板，没有 issue、风险、验证和回滚说明。对一份跨 158 个文件的安全敏感架构 PR，这会显著增加误读成本。
-
-## 与现有 POC 的关系
-
-现有 POC 主要解决主机与交付面，包括签名 RPM 闭包、镜像构建、KVM 启动、systemd、Gateway Task 和 Run、workspace checkpoint、AgentSight、Agent Sec 健康与 `anolisa host verify`。
-
-PR 3 主要解决一次 Tool Call 内的能力面，包括规范化 Contracts、Capability Plan、Provider discovery、codec、单次调用、候选结果、Receipt 与过渡 Ledger。
-
-两者处在不同层次，方向可以拼接。当前缺少的是连接层。AW 的服务状态、Provider Graph、Hook 生效状态和 Ledger 健康还没有进入 `anolisa top` 与 `host verify`。Agent Sec daemon 可以显示 healthy，而 AW mediation 其实完全没加载。现有 POC 的 mock provider 指离线模型 Provider，PR 中的 Provider 指 Capability 实现，文档必须持续区分。
-
-## 建议的收敛顺序
-
-1. 修复 Hook 字节一致性、Agent Sec auto、Tokenless lossless、Ledger 承诺范围、content-free 类型封闭、one-shot 清理和 codec 预算。
-2. 修复默认 AW 测试与 CI diff 范围，加入两个真实 Provider 的非 ignored Host/Core 链路。
-3. 明确本 PR 定位。若是 source POC，删去安装已完成的暗示。若是产品集成，统一 FHS root 并补齐 AW 安装激活闭环。
-4. 把 Graph 的失败隔离、Observe 有序结果、schema conformance 与 executable identity 作为下一阶段架构任务。
-5. 在 Agent Host POC 中增加 AW service、Hook、Provider Graph、Ledger 和 final adoption 的状态投影，再做 signed image 与 KVM 验收。
-
-## 验证记录
-
-已通过的检查包括 AW format、clippy、doc，Agent Sec AW Provider 单元与 E2E 共 27 项，COSH scope 相关测试，版本一致性、manifest digest、schema fixture 和 `git diff --check`。
-
-未通过的检查为 AW workspace 默认并行测试。真实 Tokenless Host、Core 与 COSH 测试目前均被 ignore。GitHub 上除 Pages build 外，相关检查自 2026 年 9 月 3 日起一直处于 queued，不能视为 CI 通过。
-
-PR 对自己的 fork main 显示 mergeable，但 declared base 比当前 `up/main` 落后 83 个提交。对当前 `up/main` 做 merge-tree 已在 Tokenless CLI 的 `main.rs` 与 `cli_integration.rs` 产生冲突。
+本报告审查
+[casparant/anolisa PR 3](https://github.com/casparant/anolisa/pull/3)。固定基线为
+`8574ecb022ec9ffc68e1a71e30f2186b6ec81674`，固定头提交为
+`42d07649409ecd5bb023056b28545efbd9325ef2`。修正实现位于
+[`kongche-jbw/anolisa:feat/aw/provider-e2e-poc`](https://github.com/kongche-jbw/anolisa/tree/feat/aw/provider-e2e-poc)。
+
+报告始终分开评价原 PR 与 fork PoC。PoC 的后续改动不会改变对原 PR 头提交的 Review
+结论。
+
+## 审查结论
+
+PR 3 的架构方向正确。它把稳定能力合同、策略决策、组件执行、最终环境权力和长期审计
+分开，能够承接 Agent Host 设计中的权威边界。这套分层可以作为后续实现基线。
+
+原 PR 头提交仍应得到 Request changes。主要问题集中在前后逻辑和 Schema 语义，包含
+输入与真实使用字节不一致、跨字段状态可互相矛盾、Tokenless 对 `lossless` 的定义偏弱、
+Receipt 无法证明输入来源、Ledger 承诺范围不足，以及 candidate 被误当成最终采用事实。
+
+fork PoC 已经修复其中大部分合同和 PostToolUse 主链。安全 PreTool 仍缺少
+`command_digest == executed_command_digest` 的最终接线。Checkpoint 已形成 Gateway State
+Provider、Guarded V2、Runtime tool 与私有控制协议主链。固定提交 `5ebfc0b3` 已在 Btrfs
+Ubuntu VM 中通过 Herdr 正常链路 E2E；响应丢失和进程重启后的 evidence-only 恢复仍需
+故障注入验证。
+
+构建、打包与 CI 仍然重要，本轮先收敛运行语义和 Schema。它们不影响对架构方向的判断，
+也不能在生产交付前省略。
+
+## 架构中值得保留的部分
+
+PR 3 将一次能力调用拆成五个职责清楚的角色。
+
+| 角色 | 持有的事实 | 不应持有的权力 |
+| --- | --- | --- |
+| COSH 等 Environment | 即将执行的参数与最终写入本地模型历史的字节 | 不解释组件 native protocol |
+| AW Core | Plan、Policy、Authority、Scope 与结果解释 | 不启动组件进程，不直接写模型历史 |
+| Provider Host | manifest 准入、Schema 校验、mapping、进程预算与 receipt | 不决定 candidate 是否最终采用 |
+| Capability Provider | 扫描、压缩等组件算法及 native response | 不扩大 manifest 声明的 Authority |
+| AW Ledger | 类型封闭的摘要、关联与哈希链 | 不保存 Tool 正文或 candidate 正文 |
+
+这种设计允许 Core 使用稳定 Capability，不需要按 `tokenless` 或 `agent-sec-core` 写条件
+分支。组件继续维护自己的 native Schema，Provider package 通过声明式 mapping 连接两侧。
+
+三种 Authority 也应保留。
+
+| Authority | Provider 产物 | 真正生效的位置 |
+| --- | --- | --- |
+| Observe | finding、计量或分类事实 | Core 接纳事实并交给策略、Environment 或审计面 |
+| Advise | candidate | Environment 把选定字节写入本地模型历史 |
+| Mediate | allow、warn 或 deny 意见 | Environment 最终执行、询问或阻断 Tool Call |
+
+文件存在、manifest 通过准入、Provider 被调用、Provider 返回结果都属于中间状态。最终
+生效事实只能由拥有真实边界的 Environment 产生。
+
+## PoC 收敛后的 PostToolUse 主链
+
+PoC 将 Tokenless 生效过程整理为下列顺序。
+
+```text
+COSH 聚合普通 PostToolUse Hook
+  -> 得到即将写入本地模型历史的 provisional bytes
+  -> AW Core 建立 canonical input 与 Plan
+  -> Provider Host 校验 canonical input
+  -> Provider Host 按 manifest 生成并校验 native request
+  -> Tokenless 返回 native response
+  -> Provider Host 校验 native response 与 canonical output
+  -> Provider Host 返回 transient candidate + ProviderReceipt
+  -> AW Core 校验 source identity、digest 与 reversibility
+  -> AW Ledger 追加完整 post_tool_use_plan/v1
+  -> COSH 选择 candidate 或 source bytes
+  -> COSH 写入本地模型历史槽位
+  -> AW Ledger 追加引用同一 plan 的 context_adoption/v1
+```
+
+请求方向与返回方向同样重要。Host 返回的 `ProviderInvocationOutcome.output` 可以短暂携带
+candidate 正文。`ProviderReceipt` 只携带输入输出身份、digest、长度、计量与终态。Core
+必须同时收到二者，才能验证业务结果并保留可审计的调用关联。
+
+COSH 的采用规则保持封闭。
+
+| candidate 状态 | COSH 写入内容 | Ledger 决策与原因 |
+| --- | --- | --- |
+| 非空并满足严格 `lossless` | candidate bytes | `adopted / lossless_candidate` |
+| 没有 candidate | source bytes | `preserved / no_candidate` |
+| candidate 为空 | source bytes | `preserved / empty_candidate` |
+| candidate 不能恢复全部源信息 | source bytes | `preserved / candidate_not_lossless` |
+
+`context_adoption/v1` 记录 `plan_event_id`、source artifact、source digest、可选 candidate
+envelope digest、effective digest、字节数、封闭决策、封闭原因和受限 invocation references。
+它证明 COSH 已修改一个本地历史槽位，不声称远端模型已经接收或消费这些字节。
+
+系统配置决定 Ledger assurance。`required` 模式在 adoption 追加失败时撤销刚写入的历史
+内容，并结束当前轮次。`best_effort` 模式保留历史内容并报告降级。两个模式都不会把一次
+失败的追加描述成已经存在的 adoption evidence。
+
+## 原 PR 关键问题与 PoC 结果
+
+| 主题 | 原 PR 头提交 | fork PoC 基线 | 当前判断 |
+| --- | --- | --- | --- |
+| Canonical ID 与名称 | JSON Schema 和 Rust 长度、字符集、ID pattern 不一致 | 收敛 printable ASCII 与 canonical typed ID | 已建立一致基线 |
+| 四阶段 Schema | 只校验 Schema 文件和 digest，不校验运行实例 | 校验 canonical input、native request、native response、canonical output | 已建立一致基线 |
+| Agent Sec 终态 | `clean` 可与 findings、truncated 同时出现 | typed validator 拒绝矛盾状态 | 已建立一致基线 |
+| `language=auto` | 普通 Python 会落入 Bash scanner | 双路径扫描并报告实际语言 | 已修复 |
+| Tokenless `lossless` | 任务相关信息保留被映射为全部源信息保留 | 单独计算 source fidelity，删除或清理会降级 | 已修复 |
+| Tokenless 媒体类型 | native 协议不传 source/output media type，candidate 固定为文本 | 双向传递 media type，Core 执行 `allow_text_reencoding` | 已修复基线 |
+| Receipt 输入来源 | 只有输出摘要，无法证明处理了哪份输入 | 加入 input schema、input digest 与 manifest 绑定 | 已修复 |
+| Ledger 哈希范围 | scope 与查询列可被修改而不触发 verify | canonical record 承诺 scope 和查询字段 | 已修复基线 |
+| Ledger 正文通道 | 通用 JSON body 与自由文本可绕过黑名单 | typed taxonomy、严格 body、受限 projection metadata | 已修复基线 |
+| Ledger plan 完整性 | 计划步骤、gap、receipt 和 Tool scope 可以互相脱节 | 每个 Observe step 互斥记账，fan-out 去重并核对 scope、终态与 error | 已修复基线 |
+| Provider 结果回流 | 文档容易停在 Host 调用 Provider | Host 显式返回 candidate 与 receipt 给 Core | 已明确 |
+| 最终采用 | replacement request 被当成最终生效 | COSH 写历史后追加 `context_adoption` | PoC 已接线 |
+| PostTool source bytes | 通用 Hook 看到脱敏副本，最终历史可能使用另一份原文 | 在普通 Hook 聚合后处理 effective bytes | PoC 已接线 |
+| PostTool 边界失败 | 外层 Hook 失败可能静默保留原文 | 启用的一等边界返回固定错误并结束本轮 | PoC 已接线 |
+| PreTool executed bytes | 扫描字节可能在后续 patch 或执行前发生变化 | Receipt 已能绑定扫描输入 | 最终执行摘要仍待绑定 |
+
+COSH effective-bytes 当前处理模型历史文本槽，调用方政策固定选择
+`allow_text_reencoding=true`。公共 canonical 合同的 false 分支仍由 Core 与真实 Tokenless
+测试覆盖；如果未来要让 COSH 保留可配置的结构化槽位，再扩展其 request 类型。这是调用方
+政策，不是媒体类型合同的缺口。
+
+PoC 保留 canonical verdict 的封闭枚举。完整扫描没有 finding 才能产生 `clean`。部分扫描
+已经发现风险时可以产生 `suspicious/sensitive + truncated=true`，其中 `scanned_bytes` 必须
+是实际扫描的非空 UTF-8 前缀。没有可用风险事实的截断、扫描器失败和无实现进入 Provider
+failure、Observation gap 或 gate degradation，不能伪装成安全 verdict。
+
+## Schema 是否适合作为改造中心
+
+Schema 适合作为改造中心，但 JSON Schema 只覆盖字段形状。完整合同分为三层。
+
+| 合同层 | 适合表达的内容 | 需要额外机制的内容 |
+| --- | --- | --- |
+| JSON Schema | 必填字段、枚举、格式、长度、对象形状 | 跨对象来源与运行时采用事实 |
+| Typed validation | verdict 与 findings、truncated、reversibility 等跨字段不变量 | 某段字节是否真的被执行或写入历史 |
+| Runtime evidence | scanned、source、candidate、effective 与 executed digest 的关联 | 产品发布与运维健康 |
+
+因此，团队可以围绕 14 份逻辑 Schema 收敛字段语义，同时为每份 Schema 配套 typed model、
+正反 fixture、manifest mapping 和真实 Provider conformance test。只改 JSON 文件会留下相同
+的运行语义缺口。
+
+接口冻结前仍需决定以下事项。
+
+- 为 `media_type`、`content_type` 与 transform identifier 建立专用类型或准入注册表。
+- 为 `retrievable` 定义 resolver、reference、授权、TTL 与失效行为。
+- 若需要真实 Tokenless frontend 归因，新增 typed 字段；当前 PoC 使用 `aw-provider` 常量。
+- 明确 Provider package 中 canonical Schema 副本的生成和漂移检查方式。
+- 冻结安全门禁的最终 executed-bytes credential。
+
+逐份字段、图示和讨论见 [Schema 参考与语义讨论](schema-reference_zh.md)。
+
+## 安全 PreTool 仍待闭合的边界
+
+PoC 已让 Agent Sec 的 Receipt 绑定 canonical input。它可以回答 Provider 扫描了哪一段命令。
+当前还不能证明 COSH 后来执行的命令保持相同。
+
+目标不变量如下。
+
+```text
+digest(agent_sec_scanned_command) == digest(cosh_executed_command)
+```
+
+这条不变量必须位于所有允许修改参数的 Hook 和 policy patch 之后，并在实际 spawn 之前
+校验。任何后续改写都需要重新检查或使旧 gate credential 失效。Ledger 只能保存 digest、
+gate decision 和受限关联，不能保存命令正文。
+
+在这条接线完成前，Agent Sec 示例只能证明扫描与 Core 解释链路，不能作为实际执行安全
+闭环的证据。
+
+## Checkpoint 的正确位置
+
+Checkpoint 会产生持久副作用，也可能出现请求已写入、响应却丢失的情况。当前 one-shot
+`exec-json/v1` Provider Host 不适合承担这一语义。
+
+PoC 把 Checkpoint 放在 Gateway State Provider 中。Gateway 持有批准、Task、Attempt、
+workspace binding 与 durable operation state。它通过 Guarded Checkpoint V2 调用 ws-ckpt，
+并在恢复时只查询相同 `operation_digest` 的精确 evidence。
+
+```text
+Gateway Task
+  -> admitted workspace-checkpoint-v1 profile
+  -> persisted provider binding
+  -> approval + durable claim/start
+  -> GuardedCheckpointV2
+  -> ws-ckpt durable evidence
+  -> Gateway terminal receipt
+```
+
+socket device、inode 和 ws-ckpt daemon UID 标识服务端。Gateway UID 标识调用方。它们是两组
+不同身份，不能合并。证据缺失或不匹配时结果保持 `uncertain`，恢复过程不得重放 create。
+
+Runtime 已 pin 的 workspace directory 是 workspace 身份来源。Binding 会提交 pinned inode、
+Btrfs FSID/subvolume UUID generation、注册路径、profile、target、两端 UID、`permit_id` 与
+`execution_id`。批准、claim、start、terminal、source 和 delivery 使用同一个 execution
+identity。恢复时仍需认证当前 socket 的受信任祖先、owner 与 `SO_PEERCRED` UID，但服务
+重启后 socket inode 可以改变；历史 effect identity 不能因此被重新执行。
+
+Gateway 旧 `cosh.gateway.v1` Submit JSON 形状保持冻结，但只在服务端当前准入的 exact
+`task-only-v1` profile 下接受。`workspace-checkpoint-v1` 必须使用 v2。client 先做
+Admission discovery，再在 Submit 中回显完整 admission。Checkpoint 使用 v1，或 v2
+的版本与 echo 不匹配时，都会 fail closed。
+
+当前基线没有 `providers/ws-ckpt/provider.toml`，也没有伪造 Checkpoint AW canonical Schema。
+PoC 只在 `workspace-checkpoint-v1` profile 下注册 `workspace_checkpoint_create`，并通过
+Gateway 私有 control request 进入 State Provider。固定提交 `5ebfc0b3` 已在 Btrfs
+subvolume 上完成 Ubuntu VM + Herdr 正常链路。11 个连续事件从 `task_submitted` 到
+`task_succeeded`，并留下 approval、permit、execution、snapshot 与 durable evidence。
+这次演示没有注入响应丢失或进程重启，因此不能用它替代 evidence-only 恢复验收。
+
+## 仍需保留在 Review 中的问题
+
+下列事项没有被 schema 与主链 PoC 完全覆盖。
+
+- one-shot Provider 的生产级后代进程监督仍需要 cgroup、PID namespace 或 subreaper。
+- mapping 的内存放大与整个 Plan 的总时间预算仍需系统性上限。
+- Capability Graph 需要逐 Provider 表达 installed、admitted、bound、ready 与失败原因。
+- 当前 Plan 仍要求 Advise Projection 路由；是否允许只有 Observe 的 partial plan 需要明确决定。
+- OS sandbox、executable identity、签名包、升级与回滚属于产品交付条件。
+- AW 常驻 writer、外部锚定、retention 与增量 verify 仍需产品设计。
+- build-all、RPM、镜像与 CI declared-base diff 需要后续里程碑处理。
+
+这些事项不会推翻 Provider 分层，也不应被 PoC 成功掩盖。
+
+## PoC 提交证据
+
+| 提交 | 主要作用 |
+| --- | --- |
+| [`4d47593b`](https://github.com/kongche-jbw/anolisa/commit/4d47593b) | 收紧 Capability 与公共类型合同 |
+| [`6238842a`](https://github.com/kongche-jbw/anolisa/commit/6238842a) | 加入四阶段运行实例 Schema 校验 |
+| [`d1d813d5`](https://github.com/kongche-jbw/anolisa/commit/d1d813d5) | 修正 Agent Sec 扫描终态与 `auto` |
+| [`414998b2`](https://github.com/kongche-jbw/anolisa/commit/414998b2) | 计算 Tokenless 精确 source fidelity |
+| [`76b03b01`](https://github.com/kongche-jbw/anolisa/commit/76b03b01) | 用真实 Agent Sec 与 Tokenless 证明组合链路 |
+| [`1328cf30`](https://github.com/kongche-jbw/anolisa/commit/1328cf30) | 将 Provider Receipt 绑定到输入 |
+| [`e43484e7`](https://github.com/kongche-jbw/anolisa/commit/e43484e7) | 收敛 brokered effect 的恢复语义 |
+| [`5d7f6b62`](https://github.com/kongche-jbw/anolisa/commit/5d7f6b62) | 收紧 Ledger 来源、scope 与 content-free 约束 |
+| [`8ecb1412`](https://github.com/kongche-jbw/anolisa/commit/8ecb1412) | 绑定扫描覆盖、媒体保真和 Provider 输入输出 |
+| [`601b5558`](https://github.com/kongche-jbw/anolisa/commit/601b5558) | 连接 COSH 最终采用与 Checkpoint State Provider |
+| [`5ebfc0b3`](https://github.com/kongche-jbw/anolisa/commit/5ebfc0b3) | 固化 VM + Herdr 演示与最终可复核证据 |
+
+## 合并建议
+
+原 PR 头提交继续保持 Request changes。建议以 fork PoC 的 Schema、Receipt、Ledger 与
+PostToolUse 主链作为新的实现基线。Checkpoint 正常链路已有 VM 证据，下一步完成安全
+executed-bytes binding 与 response-loss/restart 故障恢复验收。随后再进入构建、CI、签名
+交付和长期运维验收。
+
+这一路径保留老板整理的总体方向，也让每个“已生效”声明都能落到拥有最终权力的组件和
+可验证 digest 上。

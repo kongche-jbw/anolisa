@@ -1,88 +1,165 @@
-# PR 3 与 Agent Host POC 对照
+# PR 3 与 Agent Host PoC 对照
 
-配套的[当前 Checkpoint 创建时序图](checkpoint-create-call.html)展示 COSH 到 ws-ckpt 的
-现行实线链路；[运行实例与边界说明](runtime-call-examples_zh.md)进一步区分当前实现与未来
-AW Enforce/Reconcile 目标。
+本文对照三份实现材料。
 
-## 两边各自在解决什么
+- 原 PR 为 [casparant/anolisa PR 3](https://github.com/casparant/anolisa/pull/3)，固定头提交
+  `42d07649409ecd5bb023056b28545efbd9325ef2`。
+- 修正分支为
+  [`kongche-jbw/anolisa:feat/aw/provider-e2e-poc`](https://github.com/kongche-jbw/anolisa/tree/feat/aw/provider-e2e-poc)。
+- Agent Host 思考位于
+  [`ANOLISA-design/dev/kongche/global/2026-09-01_aweftos-agent-host`](https://code.alibaba-inc.com/Agentic-OS/ANOLISA-design/tree/dev/kongche/global/2026-09-01_aweftos-agent-host)。
 
-Agent Host POC 解决主机与交付生命周期。它关心镜像如何构建、RPM 是否签名、服务是否启动、任务是否有稳定状态、workspace 如何 checkpoint、AgentSight 与 Agent Sec 是否健康，以及 `anolisa host verify` 能否给出可信结论。
+三者关注的层次不同。Agent Host 负责主机、Task 和交付生命周期。AW Provider 负责一次
+Agent 边界内的能力协作。fork PoC 负责把两层的权威边界接起来。
 
-PR 3 解决一次 Tool Call 内的能力协作。它关心 Environment 如何表达上下文，Core 如何制订 Capability Plan，Host 如何找到并执行实现，Provider 如何返回观察或候选，Ledger 如何记录边界事实。
+## 三层分别解决什么
 
-两者没有方向冲突。前者是主机控制面和交付面，后者是 Tool Call 能力面。现在欠缺的是把能力面变成主机里可安装、可激活、可观察的一等服务。
+| 层次 | 主要对象 | 持有的权威事实 |
+| --- | --- | --- |
+| Agent Host | 镜像、服务、Gateway Task、Run、workspace、健康 | 主机上安装和运行了什么 |
+| AW capability plane | Capability、Plan、Provider、candidate、receipt | 为什么选择某项能力，Provider 产生了什么 |
+| Agent Environment | Tool 参数、本地模型历史、最终 gate | 最终执行了什么，最终写入了什么 |
 
-## 对照表
+AW Core 不应宣称 candidate 已经进入模型历史。Provider Host 不应宣称命令已经被阻断。
+这些事实属于 COSH。Gateway 也不应把 Checkpoint 的写后超时自动当作失败并重试，它需要
+查询 ws-ckpt 的 durable evidence。
 
-| 维度 | PR 3 | 当前 Agent Host POC | 判断 |
+## 原 PR、修正 PoC 与产品目标
+
+| 维度 | 原 PR 头提交 | fork PoC 基线 | 产品目标 |
 | --- | --- | --- | --- |
-| 入口 | COSH built-in PreToolUse 与 PostToolUse | COSH 登录、Gateway Task 和 Run、主机命令 | COSH 作为默认 Environment 的方向一致 |
-| 运行单元 | 每个 Hook 进程内创建 Core 与 Host，Provider one-shot | systemd 服务、KVM、签名 RPM 闭包 | PR 仍是临时形态，未来应进入 system-scope AW service |
-| 状态权威 | Core 持有 Plan 和 policy，Host 持有 admission 和 invocation | Gateway 持有 Task 和 Run，各组件持有自己的真实状态 | 权威分层一致，但 POC 尚未登记 AW 的新事实 |
-| 安全 | Mediate 支持 Ask、Block、Allow，Provider 声明尚未由 sandbox 强制 | Host verify 缺项即失败，Agent Sec 只表述 V1 health | 原则相容，PR 还不能宣称生产安全隔离 |
-| 审计 | Hook 侧过渡 Ledger，保存 Receipt 与边界摘要 | 主机状态、组件日志、Task 和 Run 投影 | 需要 system writer、完整哈希承诺和最终 adoption |
-| 发布 | 手工源码构建与绝对路径参数 | reviewed signed exact RPM、镜像、KVM | 当前最大断层 |
-| 可观测性 | Graph 和 Receipt 只在开发命令中可见 | `anolisa top` 与 `host verify` 有统一入口 | 必须新增 AW service、graph、hook、ledger 状态 |
-| 故障语义 | Provider failure、gap、gate degradation | unknown、degraded、not ready 不伪装 healthy | 设计语言一致，Graph 实现还要补逐包失败隔离 |
-| Provider 术语 | Capability 实现 | POC mock provider 是离线模型实现 | 必须改成 Capability Provider 与 Model Provider |
-| Agent Sec V2 | Python one-shot bridge | POC 明确只验证 V1 health | 应标成 interim bridge，不能替代 V2 daemon 计划 |
+| Capability Contract | 已有 canonical Schema | 收紧 ID、枚举和跨字段不变量 | 版本化发布与 conformance vectors |
+| Host 校验 | 主要校验 Schema 文件与 digest | 四阶段校验运行实例 | 持续准入与逐 Provider 健康 |
+| Agent Sec | one-shot bridge，`auto` 与终态有歧义 | 双扫描、判别联合、Receipt 输入绑定 | exact executed-bytes gate |
+| Tokenless | 任务相关保留被当作 AW `lossless` | 计算精确 source fidelity | identity、policy 与产品升级闭环 |
+| Tokenless 表示类型 | native 协议没有输入和输出媒体类型 | `application/json -> text/plain` 显式贯穿 request、response 与 candidate | MIME 类型注册表 |
+| Host 返回 | output 与 receipt 边界不够醒目 | 显式返回 transient candidate 与 receipt 给 Core | 稳定服务协议 |
+| Final adoption | Hook replacement 被当作接近最终结果 | COSH 写本地历史后记录 `context_adoption` | 主机状态与 trace 可查询 |
+| Ledger | scope、header 和正文通道存在缺口 | typed body、完整 plan 覆盖、哈希承诺与受限引用 | 常驻 writer、锚定、retention |
+| Checkpoint | 没有 AW 或 Gateway 新架构接线 | Runtime tool、Gateway State Provider、Guarded V2 与 Btrfs VM + Herdr 正常链路 | response-loss/crash-restart 恢复验收、通用状态合同 |
+| 安装与健康 | source PoC | 分支级实现与演示脚本 | 签名包、systemd、`host verify` |
 
-## 需要补上的连接层
+## 与 Agent Host 权威模型的对应关系
 
-### 发布连接
+Agent Host 设计强调 `installed`、`admitted`、`bound`、`ready` 和 `effective` 是不同事实。
+AW Provider 应沿用这套区分。
 
-统一 Provider FHS root 为 `/usr/share/aw/providers`。每个组件的 binary、manifest、schemas 和版本证明进入同一原子包。AW 自身增加 component manifest、raw/RPM 产物与安装回滚。
+```text
+主机交付事实
+package -> installed service and provider assets
 
-镜像构建继续使用现有 signed exact RPM closure。Host admission 的 manifest digest 只能证明 contract 文件，不能证明实际 executable。包事务、版本握手或 executable digest 需要补一层。
+能力控制事实
+discovered -> admitted -> policy bound -> ready -> planned -> invoked
+
+最终环境事实
+candidate -> COSH adopted
+gate -> COSH executed, asked or blocked
+
+长期审计事实
+receipt + plan + context_adoption -> Ledger chain
+```
+
+`host verify` 将来应同时检查以下状态。
+
+- AW service 和 Ledger writer 是否可用。
+- Provider catalog 中每个 package 的准入结果。
+- Capability 与环境的 policy binding。
+- COSH effective-bytes boundary 是否启用。
+- 最近一次 plan、receipt 与 final adoption 是否能关联。
+- Checkpoint State Provider 的 profile、binding、ws-ckpt identity 与 reconcile 状态。
+
+一个 Agent Sec daemon 显示 healthy，只能证明组件进程健康。AW mediation 还需要 Provider
+准入、policy binding、COSH gate 和 executed-bytes credential。
+
+## Tokenless 如何连接两层
+
+Tokenless package 提供 binary、manifest 和 Schema。Agent Host 负责把这些资产以可验证方式
+安装到主机，并让 AW service 发现它们。AW Core 与 Provider Host 负责一次调用。COSH 负责
+最终采用。
+
+```text
+Agent Host installs Tokenless package
+  -> AW Host admits tokenless manifest
+  -> Policy binds context.projection.prepare/v1
+  -> COSH submits settled provisional bytes
+  -> Host returns candidate + receipt to Core
+  -> Core validates source identity, media and contract state
+  -> Ledger records complete post_tool_use_plan
+  -> COSH selects a non-empty lossless candidate or preserves source
+  -> Ledger records context_adoption referencing the plan
+  -> Agent Host projects health and recent evidence
+```
+
+fork PoC 已证明中间的源码调用链和 COSH 本地采用。签名包、常驻服务、升级、回滚和统一
+健康投影仍属于 Agent Host 产品化阶段。
+
+COSH 当前提交的是模型历史文本槽，因此调用方政策固定允许文本重编码。公共合同仍支持
+`allow_text_reencoding=false`，真实 Tokenless 与 Core 测试已覆盖
+`application/json -> application/json`；其他 adapter 可以使用该分支。
+
+## Checkpoint 为什么由 Gateway 承接
+
+Checkpoint 与 Tokenless 的运行性质不同。
+
+| 属性 | Tokenless | Checkpoint |
+| --- | --- | --- |
+| 结果性质 | 瞬时 candidate | 持久副作用 |
+| 响应丢失 | 可以保留 source bytes | 可能已经创建快照 |
+| 重试风险 | 再次计算候选 | 可能重复执行副作用 |
+| 所需状态 | 一次调用上下文 | binding、approval、claim、start、evidence、terminal |
+| 当前承载 | AW Provider Host | Gateway State Provider |
+
+Gateway 已拥有 Task、Run、Attempt、Approval 与 durable ledger，也能持久化 provider binding。
+PoC 因此让 Gateway 调用 Guarded Checkpoint V2。ws-ckpt 用 `operation_digest` 保存 durable
+evidence。Gateway 在恢复时只查询 exact evidence，缺失或不匹配时保持 `uncertain`。
+
+当前没有 `providers/ws-ckpt/provider.toml`。这项选择避免把有状态副作用强行塞进 one-shot
+AW Host。PoC 已在 `workspace-checkpoint-v1` profile 下注册 Runtime tool，并让它通过
+brokered scheduler 与私有 control request 进入 Gateway。Driver 使用 Runtime 已 pin 的
+workspace directory；binding 提交 workspace inode、Btrfs FSID/subvolume UUID、调用方与
+服务端身份、`permit_id` 和 `execution_id`。固定提交 `5ebfc0b3` 已完成 Ubuntu VM + Herdr
+正常链路，故障恢复和生产交付仍未验收，因此一次 happy path 成功不能等同于生产可用。
+
+Gateway wire v2 先执行 Admission discovery，再要求 Submit 回显完整 admission。旧版
+`cosh.gateway.v1` Submit JSON 形状保持冻结，但只允许 exact `task-only-v1`；
+`workspace-checkpoint-v1` 必须使用 v2 admission echo，服务端明确拒绝 v1。恢复只
+认证当前 socket 的受信任目录、owner
+与 peer UID，并查询 `CheckpointEvidenceV2`；它不会因服务重启后 inode 改变而重放 create。
+
+## 仍需增加的连接层
 
 ### 运行连接
 
-增加 system-scope AW service。它持有 Provider catalog、policy binding、state root、Ledger writer 和服务级资源治理。COSH Hook 通过稳定 client contract 调用，不再由每个短命 Hook 进程各自持有 SQLite 和 catalog。
-
-Provider 的 OS sandbox、cgroup 或等价 containment 在这一层落实。当前 `--allow-unenforced-provider` 只用于 source POC 和诊断。
+系统需要常驻 AW service 或等价 runtime，持有 catalog、policy binding、Ledger writer 与
+服务级资源治理。COSH 使用稳定 client contract 调用。Provider 的 OS sandbox、cgroup 和
+executable identity 也在这一层落实。
 
 ### 状态连接
 
-主机状态模型至少增加以下事实。
-
-- `aw_service_state`
-- `provider_catalog_revision`
-- `capability_graph_health`
-- `cosh_aw_hook_loaded`
-- `ledger_writer_state`
-- `last_verified_chain_tip`
-- `final_adoption_observed`
-
-Graph 必须保留每个 package 的准入失败，不应因为一个可选 Provider 损坏就让整个 catalog 消失。`host verify` 要检查 Capability 是否可路由，不能只检查 manifest 文件存在。
+Agent Host 状态模型应加入 AW service、catalog revision、capability graph、COSH boundary、
+Ledger chain tip、final adoption 和 Checkpoint State Provider readiness。每个状态都要保留
+失败原因。
 
 ### 关联连接
 
-COSH 已经为 session、turn、tool use 和 attempt 建立稳定关联。下一步要让 Gateway 的 Task 和 Run、AW invocation、Provider Receipt、Ledger event、AgentSight trace 和 ws-ckpt snapshot 可以用受信任映射关联。
+Gateway Task 和 Run、COSH session 和 turn、AW invocation、Provider Receipt、Ledger event、
+AgentSight trace 与 ws-ckpt evidence 需要受信任映射。ID 用于归因，授权继续由 peer identity
+和 system policy 产生。
 
-这些 ID 只承担归因，不能承担授权。授权仍由 system service 的 peer identity 和 policy 生成。
+### 安全连接
 
-### 最终结果连接
+PreTool gate 需要在全部参数 patch 完成后绑定最终执行摘要。当前 Receipt 只证明 Agent Sec
+扫描了指定 canonical input。真正的执行闭环还需要 COSH 验证
+`digest(scanned_command) == digest(executed_command)`。
 
-PostToolUse 的 `replacement_requested` 只说明 AW adapter 提出了候选。后续 Hook 可能覆盖，Block 也可能阻止结果进入 history。Environment 需要在聚合完成后写一条 final adoption fact。
+## 建议演进顺序
 
-只有拿到这条事实，Gateway 和 Ledger 才能区分候选已生成、候选已请求、候选最终进入模型三种状态。
+1. 以 fork PoC 的 Schema、Receipt、Ledger 与 PostToolUse final adoption 为实现基线。
+2. 完成 PreTool exact executed-bytes binding。
+3. 保留已通过的 Ubuntu VM 正常链路作为真实 Agent Sec、Tokenless、COSH、Ledger、
+   Gateway、Herdr 与 ws-ckpt 组合基线。
+4. 注入 response loss 与 crash/restart，验证 Checkpoint query-only reconcile 不重放 create。
+5. 再加入签名包、systemd、健康投影、升级、回滚与 CI 门禁。
 
-## 分阶段演进建议
-
-### 阶段一 修好 source POC
-
-修复 Hook 字节一致性、Agent Sec auto、Ledger 承诺范围、content-free 类型、one-shot 清理、codec 预算、默认测试竞态和 CI diff 范围。补两个真实 Provider 的非 ignored smoke。
-
-### 阶段二 进入可安装镜像
-
-统一 Provider root，交付 AW package 和 system service，注册 COSH Hook，接入 policy binding、`anolisa top` 与 `host verify`。在现有 KVM POC 中验证 cold boot、升级、回滚和部分 Provider 损坏。
-
-### 阶段三 完成生产安全边界
-
-加入 OS containment、executable identity、受信任 principal、Ledger 外部锚定、retention、增量 verify、final adoption 和跨组件 trace。Agent Sec 能力逐步迁入 V2 Rust daemon contract。
-
-## 最终判断
-
-老板整理的主线可以确认。稳定 Capability Contract、通用 Host、策略 Core、Environment Adapter 和无正文 Ledger 这五个方向都值得继续。
-
-需要修正的地方主要是成熟度判断。PR 3 已经证明架构骨架和源码调用链，尚未证明产品安装链、生产安全边界和审计可信闭环。把这三层分别立项，能保留架构优势，也能防止 POC 的成功被误读成生产能力已经上线。
+这个顺序先固定语义，再固定运行接线，最后完成交付。原 PR 的架构骨架得到保留，Agent
+Host 的权威事实也不会被 Provider 中间状态覆盖。

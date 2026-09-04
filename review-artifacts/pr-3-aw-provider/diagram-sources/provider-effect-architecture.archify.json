@@ -2,218 +2,300 @@
   "schema_version": 1,
   "diagram_type": "architecture",
   "meta": {
-    "title": "AW Capability Provider 如何生效",
+    "title": "AW Provider 从安装到最终采用",
     "locale": "zh-CN",
     "quality_profile": "showcase",
-    "visual_preset": "editorial",
-    "viewBox": [1360, 920],
-    "repository": {
-      "url": "https://github.com/casparant/anolisa",
-      "revision": "42d07649409ecd5bb023056b28545efbd9325ef2"
-    },
+    "viewBox": [1360, 650],
     "views": [
       {
-        "id": "runtime",
-        "label": "当前运行主链",
-        "focus": ["environment", "hook", "core", "host", "tokenless", "ledger"],
-        "note": "请求向右流向 Provider，处理结果必须再由 Host 返回 Core，然后进入 Hook 决策与 Ledger。"
+        "id": "lifecycle",
+        "label": "完整生效状态",
+        "focus": ["package", "catalog", "corePlan", "host", "tokenless", "transient", "coreSelect", "cosh", "ledger"],
+        "note": "Installed 只是文件存在；只有走完 Admitted、Ready、Planned、Bound、Invoked、Settled、Selected 与最终采用，结果才真正生效。"
       },
       {
-        "id": "contracts",
-        "label": "Schema 与映射",
-        "focus": ["package", "catalog", "core", "host", "tokenless", "agentsec"],
-        "note": "Canonical Schema 定义能力语义，native Schema 描述组件自己的协议。"
+        "id": "tokenlessTrace",
+        "label": "Tokenless 真实数据",
+        "focus": ["corePlan", "host", "tokenless", "transient", "coreSelect", "cosh", "ledger"],
+        "note": "693B 工具结果的 token 估算从 174 降至 110；ProviderHost 返回 438B lossless candidate 与无正文 receipt。"
       },
       {
-        "id": "decision",
-        "label": "结果与最终权力",
-        "focus": ["tokenless", "agentsec", "host", "core", "hook", "environment", "ledger"],
-        "note": "Tokenless 返回压缩后的 candidate，Agent Sec 返回 verdict/findings；Core 验证后，Environment 才决定是否执行或入模。"
+        "id": "baseline",
+        "label": "原 PR 与 Fork PoC",
+        "focus": ["original", "fork", "package", "catalog", "corePlan", "host", "coreSelect", "cosh", "ledger"],
+        "note": "原 PR 提供 Schema 与 Host 骨架；Fork PoC 补齐严格 Schema、Core 校验/规划、COSH 选择/采用与可核验 Ledger。"
       },
       {
-        "id": "product",
-        "label": "产品化缺口",
-        "focus": ["package", "service", "hoststate", "adoption"],
-        "note": "橙色虚线关系表示当前 PR 尚未交付的激活、状态和最终采纳闭环。"
+        "id": "checkpoint",
+        "label": "Checkpoint 独立边界",
+        "focus": ["fork", "checkpoint"],
+        "note": "Checkpoint 属于 Gateway State Provider，以 workspace-checkpoint-v1 和 Guarded V2 运行，不伪装成 AW capability manifest。"
       }
     ]
   },
   "components": [
     {
-      "id": "environment",
-      "type": "frontend",
-      "label": "Agent 运行环境",
-      "sublabel": "COSH · Tool 边界与最终执行权",
-      "tag": "当前实现",
-      "pos": [45, 360],
-      "size": [180, 82],
-      "sources": [{"path": "src/cosh-ng/crates/cosh-core/src/core.rs", "line": 1515, "label": "Tool Result 边界"}]
+      "id": "original",
+      "type": "external",
+      "label": "Original PR · 42d07649",
+      "sublabel": "Schema / Host 骨架",
+      "tag": "final adoption 未闭环",
+      "pos": [40, 35],
+      "size": [235, 76]
     },
     {
-      "id": "hook",
-      "type": "frontend",
-      "label": "AW COSH Hook",
-      "sublabel": "Hook JSON ↔ AW Contract",
-      "tag": "当前实现",
-      "pos": [285, 360],
-      "size": [180, 82],
-      "sources": [{"path": "src/aw/crates/aw-cosh-hook/src/lib.rs", "line": 160, "label": "Hook adapter"}]
-    },
-    {
-      "id": "core",
-      "type": "backend",
-      "label": "AW Core",
-      "sublabel": "Plan · Policy · Route · Validate",
-      "tag": "能力与权力编排",
-      "pos": [525, 360],
-      "size": [190, 82],
-      "sources": [{"path": "src/aw/crates/aw-core/src/lib.rs", "line": 271, "label": "PostTool plan"}]
-    },
-    {
-      "id": "host",
-      "type": "backend",
-      "label": "Provider Host",
-      "sublabel": "Admission · json-map · Budget · Exec",
-      "tag": "通用托管",
-      "pos": [785, 360],
-      "size": [205, 82],
-      "sources": [{"path": "src/aw/crates/aw-provider-host/src/driver.rs", "line": 37, "label": "有界调用"}]
-    },
-    {
-      "id": "tokenless",
-      "type": "backend",
-      "label": "Tokenless Provider",
-      "sublabel": "context.projection.prepare · Advise",
-      "tag": "候选内容",
-      "pos": [1075, 245],
-      "size": [230, 86],
-      "sources": [{"path": "providers/tokenless/provider.toml", "line": 38, "label": "Capability mapping"}]
-    },
-    {
-      "id": "agentsec",
-      "type": "security",
-      "label": "Agent Sec Provider",
-      "sublabel": "security.*.inspect · Observe / Mediate",
-      "tag": "风险事实与门禁",
-      "pos": [1075, 475],
-      "size": [230, 86],
-      "sources": [{"path": "providers/agent-sec-core/provider.toml", "line": 50, "label": "Capabilities"}]
+      "id": "fork",
+      "type": "cloud",
+      "label": "Fork PoC 基线",
+      "sublabel": "feat/aw/provider-e2e-poc",
+      "tag": "补齐闭环并保持分层",
+      "pos": [330, 35],
+      "size": [245, 76]
     },
     {
       "id": "package",
       "type": "cloud",
       "label": "Provider Package",
-      "sublabel": "binary + provider.toml + schemas",
-      "tag": "Installed 仍未调用",
-      "pos": [785, 95],
-      "size": [205, 82],
-      "sources": [{"path": "providers/tokenless/provider.toml", "line": 5, "label": "Package identity"}]
+      "sublabel": "binary + manifest + schemas",
+      "tag": "Installed",
+      "pos": [40, 170],
+      "size": [195, 80]
     },
     {
       "id": "catalog",
       "type": "database",
-      "label": "Capability Catalog",
-      "sublabel": "Contract digest + Ready target",
-      "tag": "Host admission 结果",
-      "pos": [525, 95],
-      "size": [190, 82],
-      "sources": [{"path": "src/aw/crates/aw-provider-host/src/graph.rs", "line": 107, "label": "Graph projection"}]
+      "label": "Host Catalog",
+      "sublabel": "identity · digest · probe",
+      "tag": "Admitted → Ready",
+      "pos": [285, 170],
+      "size": [195, 80]
+    },
+    {
+      "id": "corePlan",
+      "type": "backend",
+      "label": "AW Core · Plan",
+      "sublabel": "policy · target · exact input",
+      "tag": "Planned → Bound",
+      "pos": [530, 170],
+      "size": [195, 80]
+    },
+    {
+      "id": "host",
+      "type": "backend",
+      "label": "ProviderHost",
+      "sublabel": "4-stage validate · budget",
+      "tag": "Invoked → Settled",
+      "pos": [802.5, 170],
+      "size": [205, 80]
+    },
+    {
+      "id": "tokenless",
+      "type": "backend",
+      "label": "Tokenless Provider",
+      "sublabel": "174→110 tokens · candidate 438B · lossless",
+      "tag": "context.projection.prepare",
+      "pos": [1045, 170],
+      "size": [275, 80]
+    },
+    {
+      "id": "transient",
+      "type": "messagebus",
+      "label": "Host Transient Return",
+      "sublabel": "canonical output: 438B candidate",
+      "tag": "output + content-free receipt",
+      "pos": [775, 350],
+      "size": [260, 84]
+    },
+    {
+      "id": "coreSelect",
+      "type": "backend",
+      "label": "AW Core · Validate",
+      "sublabel": "校验身份 · 摘要 · 生成计划",
+      "tag": "Validated → Planned",
+      "pos": [530, 350],
+      "size": [195, 84]
+    },
+    {
+      "id": "cosh",
+      "type": "frontend",
+      "label": "COSH Select + Adoption",
+      "sublabel": "non-empty · lossless · history",
+      "tag": "selected → adopted / preserved",
+      "pos": [285, 350],
+      "size": [195, 84]
     },
     {
       "id": "ledger",
       "type": "database",
       "label": "AW Ledger",
-      "sublabel": "无正文 Receipt 与边界事实",
-      "tag": "当前为 Hook writer",
-      "pos": [525, 610],
-      "size": [190, 82],
-      "sources": [{"path": "src/aw/crates/aw-cosh-hook/src/ledger.rs", "line": 43, "label": "Ledger write"}]
+      "sublabel": "plan + context_adoption/v1",
+      "tag": "Durable proof",
+      "pos": [40, 350],
+      "size": [195, 84]
     },
     {
-      "id": "adoption",
-      "type": "external",
-      "label": "Final Adoption 回执",
-      "sublabel": "最终进入模型的 candidate digest",
-      "tag": "当前缺失",
-      "pos": [285, 610],
-      "size": [180, 82],
-      "sources": [{"path": "src/aw/docs/design/context-projection.md", "line": 101, "label": "当前采纳规则"}]
-    },
-    {
-      "id": "service",
-      "type": "cloud",
-      "label": "AW System Service",
-      "sublabel": "Catalog · Policy · Writer",
-      "tag": "下一阶段",
-      "pos": [785, 680],
-      "size": [205, 82],
-      "sources": [{"path": "src/aw/README.md", "line": 156, "label": "长期 workspace"}]
-    },
-    {
-      "id": "hoststate",
-      "type": "external",
-      "label": "Agent Host 状态面",
-      "sublabel": "top · host verify · rollback",
-      "tag": "尚未接线",
-      "pos": [1075, 680],
-      "size": [230, 82],
-      "sources": [{"path": "scripts/build-all.sh", "line": 521, "label": "当前构建清单"}]
+      "id": "checkpoint",
+      "type": "security",
+      "label": "Checkpoint · Gateway State Provider",
+      "sublabel": "workspace-checkpoint-v1 · Guarded V2 evidence",
+      "tag": "Not an AW manifest",
+      "pos": [775, 520],
+      "size": [530, 82]
     }
   ],
   "boundaries": [
     {
       "kind": "region",
-      "label": "当前 PR 的 Tool Call 能力面",
-      "wraps": ["environment", "hook", "core", "host", "tokenless", "agentsec", "ledger"]
+      "label": "AW capability path · Fork PoC",
+      "wraps": ["package", "catalog", "corePlan", "host", "tokenless", "transient", "coreSelect", "cosh", "ledger"],
+      "pad": 24
     },
     {
-      "kind": "region",
-      "label": "Agent Host 产品连接层",
-      "wraps": ["service", "hoststate", "adoption"]
+      "kind": "security-group",
+      "label": "Gateway State Provider · 独立状态能力",
+      "wraps": ["checkpoint"],
+      "pad": 18
     }
   ],
   "connections": [
-    {"id": "event", "from": "environment", "to": "hook", "label": "1 · Tool 边界事件", "variant": "emphasis", "labelAt": [255, 456]},
-    {"id": "submission", "from": "hook", "to": "core", "label": "2 · 标准化请求", "variant": "emphasis", "labelAt": [495, 356]},
-    {"id": "invoke", "from": "core", "to": "host", "label": "3 · 精确 Contract + 预算", "variant": "emphasis", "labelAt": [750, 456]},
-    {"id": "tokenless-native", "from": "host", "to": "tokenless", "label": "4a · 压缩 request", "variant": "emphasis", "fromSide": "right", "toSide": "left", "route": "orthogonal-h", "labelAt": [990, 295]},
-    {"id": "tokenless-result", "from": "tokenless", "to": "host", "label": "4aR · output=builds[6]{…} · 359→110", "variant": "default", "fromSide": "bottom", "toSide": "top", "route": "orthogonal-v", "labelAt": [1180, 349]},
-    {"id": "agentsec-native", "from": "host", "to": "agentsec", "label": "4b · 安全 request", "variant": "security", "fromSide": "right", "toSide": "left", "route": "orthogonal-h", "labelAt": [1050, 440]},
-    {"id": "agentsec-result", "from": "agentsec", "to": "host", "label": "4bR · verdict + findings + meters", "variant": "default", "fromSide": "top", "toSide": "bottom", "route": "orthogonal-v", "labelAt": [1210, 458]},
-    {"id": "host-result", "from": "host", "to": "core", "label": "5 · ProviderInvocationOutcome + Receipt", "variant": "default", "fromSide": "bottom", "toSide": "bottom", "route": "orthogonal-h", "via": [[887.5, 500], [620, 500]], "labelAt": [752, 491]},
-    {"id": "package-admit", "from": "package", "to": "catalog", "label": "校验 manifest / schema digest", "variant": "security", "labelAt": [750, 191]},
-    {"id": "catalog-route", "from": "catalog", "to": "core", "label": "Ready targets", "variant": "default", "labelAt": [620, 191]},
-    {"id": "record", "from": "core", "to": "ledger", "label": "6a · 无正文 receipt + 结果摘要", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "route": "straight", "labelAt": [686, 560]},
-    {"id": "candidate", "from": "core", "to": "adoption", "label": "6b · candidate identity 供最终采纳", "variant": "dashed", "fromSide": "left", "toSide": "right", "route": "orthogonal-v", "via": [[495, 401], [495, 651]], "labelAt": [480, 585]},
-    {"id": "service-catalog", "from": "service", "to": "host", "label": "目标 · 常驻 catalog / policy", "variant": "dashed"},
-    {"id": "service-state", "from": "service", "to": "hoststate", "label": "目标 · health / activation / rollback", "variant": "dashed", "labelAt": [1033, 776]}
+    {
+      "id": "baselineToPoc",
+      "from": "original",
+      "to": "fork",
+      "label": "补严格语义与生效闭环",
+      "variant": "emphasis",
+      "labelAt": [303, 124]
+    },
+    {
+      "id": "installed",
+      "from": "package",
+      "to": "catalog",
+      "label": "1 · admit + probe",
+      "variant": "emphasis",
+      "labelAt": [260, 264]
+    },
+    {
+      "id": "planned",
+      "from": "catalog",
+      "to": "corePlan",
+      "label": "2 · ready target",
+      "variant": "emphasis",
+      "labelAt": [505, 264]
+    },
+    {
+      "id": "bound",
+      "from": "corePlan",
+      "to": "host",
+      "label": "3 · bound invocation",
+      "variant": "emphasis",
+      "labelAt": [764, 264]
+    },
+    {
+      "id": "nativeRequest",
+      "from": "host",
+      "to": "tokenless",
+      "label": "4 · native request",
+      "variant": "emphasis",
+      "labelAt": [1039, 155]
+    },
+    {
+      "id": "nativeResponse",
+      "from": "tokenless",
+      "to": "host",
+      "label": "5 · native response",
+      "fromSide": "bottom",
+      "toSide": "right",
+      "route": "orthogonal-h",
+      "via": [[1182.5, 295], [1035, 295], [1035, 210]],
+      "variant": "default",
+      "labelAt": [1115, 285]
+    },
+    {
+      "id": "settled",
+      "from": "host",
+      "to": "transient",
+      "label": "6 · canonical output + receipt",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "straight",
+      "variant": "emphasis",
+      "labelAt": [905, 305]
+    },
+    {
+      "id": "returnedToCore",
+      "from": "transient",
+      "to": "coreSelect",
+      "label": "7 · Host result → Core validate",
+      "variant": "emphasis",
+      "labelAt": [750, 448]
+    },
+    {
+      "id": "selected",
+      "from": "coreSelect",
+      "to": "cosh",
+      "label": "8 · bounded plan → select/adopt",
+      "variant": "emphasis",
+      "labelAt": [505, 448]
+    },
+    {
+      "id": "adoption",
+      "from": "cosh",
+      "to": "ledger",
+      "label": "9 · adopted / preserved",
+      "variant": "emphasis",
+      "labelAt": [260, 448]
+    },
+    {
+      "id": "planProof",
+      "from": "coreSelect",
+      "to": "ledger",
+      "label": "post_tool_use_plan",
+      "fromSide": "top",
+      "toSide": "top",
+      "route": "orthogonal-v",
+      "via": [[627.5, 315], [137.5, 315]],
+      "variant": "dashed",
+      "labelAt": [385, 305]
+    },
+    {
+      "id": "checkpointBoundary",
+      "from": "fork",
+      "to": "checkpoint",
+      "label": "独立 profile / target binding",
+      "fromSide": "right",
+      "toSide": "top",
+      "route": "orthogonal-h",
+      "via": [[1335, 73], [1335, 495], [1040, 495]],
+      "variant": "security",
+      "labelAt": [1200, 63]
+    }
   ],
   "cards": [
     {
       "dot": "cyan",
-      "title": "读图顺序",
+      "title": "生效判定",
       "items": [
-        "先沿 1 → 4 阅读请求链，再沿 4R → 5 → 6 阅读结果返回链",
-        "Canonical Schema 由 AW 定义，native Schema 由组件定义",
-        "Host 用 manifest 中的 json-map/v1 双向连接两种 Schema"
+        "Installed ≠ Ready；每个状态都必须由前一步的可验证证据推进",
+        "ProviderHost 只返回暂态结果，不能直接改写模型上下文",
+        "AW Core 只校验结果并生成计划；COSH 在 local-history 边界选择并决定 adopted 或 preserved"
       ]
     },
     {
       "dot": "emerald",
-      "title": "什么时候算生效",
+      "title": "Tokenless 真实例子",
       "items": [
-        "Observe：Provider findings 经 Host 返回并被 Core 接受",
-        "Advise：压缩 candidate 经 Host/Core 返回后由 Environment 采用",
-        "Mediate：Environment 按聚合结果实际执行、询问或阻断"
+        "source=693B；token estimate=174→110",
+        "canonical candidate=438B 且 reversibility=lossless",
+        "candidate envelope digest 同时约束 plan 与 adoption"
       ]
     },
     {
       "dot": "orange",
-      "title": "当前 PR 的边界",
+      "title": "独立边界与剩余缺口",
       "items": [
-        "源码链路已存在，但安装 Provider 文件不等于自动激活",
-        "Core 形成 Ledger body，当前实际由 Hook writer 持久化",
-        "AW service、主机状态投影和 final adoption 回执尚未交付"
+        "Checkpoint 是 Gateway State Provider + Guarded V2，不是 AW manifest",
+        "PreTool 可扫描 canonical command，但尚未证明扫描字节等于执行字节",
+        "后续应在可信执行边界提供 exact executed-bytes binding"
       ]
     }
   ]

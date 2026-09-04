@@ -113,7 +113,7 @@ for (const schema of catalog.schemas) {
   const svg = `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-labelledby="title desc">
   <title id="title">${escapeXml(schema.title)}</title>
-  <desc id="desc">字段、语义、合理点和讨论点。审查固定到 ${catalog.review.head}。</desc>
+  <desc id="desc">字段、语义、已修正的合理点和仍需讨论的边界。对照原 PR ${catalog.review.head} 与 fork PoC ${catalog.review.poc_head}。</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fbfdff"/><stop offset="1" stop-color="#eaf2f9"/></linearGradient>
     <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#6d8498" flood-opacity="0.14"/></filter>
@@ -127,7 +127,7 @@ for (const schema of catalog.schemas) {
   <g filter="url(#shadow)">${groups.join("")}${strength.svg}${discussion.svg}</g>
   ${textBlock(sourceLines, 70, height - 100 - (copyLines.length * 21), { size: 14, gap: 21, fill: "#61758a" })}
   ${textBlock(copyLines, 70, height - 58, { size: 14, gap: 21, fill: "#61758a" })}
-  ${textBlock([`PR head ${catalog.review.head.slice(0, 8)} · 绿色表示可保留，橙色表示冻结前需讨论`], 1530, height - 58, { size: 14, fill: "#61758a", anchor: "end" })}
+  ${textBlock([`PR ${catalog.review.head.slice(0, 8)} + PoC ${catalog.review.poc_head.slice(0, 8)} · 绿色=当前合理，橙色=仍需讨论`], 1530, height - 58, { size: 14, fill: "#61758a", anchor: "end" })}
 </svg>\n`;
 
   fs.writeFileSync(path.join(outputDirectory, `${schema.id}.svg`), svg);

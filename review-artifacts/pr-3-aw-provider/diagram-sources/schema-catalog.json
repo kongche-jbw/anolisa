@@ -3,214 +3,219 @@
     "pull_request": "https://github.com/casparant/anolisa/pull/3",
     "base": "8574ecb022ec9ffc68e1a71e30f2186b6ec81674",
     "head": "42d07649409ecd5bb023056b28545efbd9325ef2",
+    "poc_branch": "feat/aw/provider-e2e-poc",
+    "poc_head": "5ebfc0b3905fa2f5f74aff2da4aec2b3be639647",
+    "snapshot": "original PR 42d07649 + fork PoC 5ebfc0b3 · 2026-09-04",
     "physical_schema_files": 22,
-    "logical_schemas": 14
+    "logical_schemas": 14,
+    "ledger_note": "AW Ledger records are typed Rust contracts plus validators; they are not a fifteenth physical JSON Schema in this catalog."
   },
   "schemas": [
     {
       "id": "context-projection-prepare-input-v1",
       "title": "context.projection.prepare/v1 输入",
       "kind": "AW canonical · Advise",
-      "purpose": "把一份不可变、即将进入模型的 Tool Result 交给 Context Projection Provider。",
+      "purpose": "把即将写入模型历史的不可变 Tool Result 作为 Provider 无关输入提交给 Context Projection。",
       "source": "src/aw/crates/aw-contracts/schemas/context-projection-prepare-input-v1.schema.json",
       "copies": ["providers/tokenless/schemas/context-projection-prepare-input-v1.schema.json"],
       "groups": [
-        {"title": "artifact · 必填", "items": ["id：AW 分配的 artifact 身份", "digest：content 的 SHA-256", "content：Provider 实际处理的字符串", "media_type：输入内容类型", "origin：command_output / file_content / api_response / unspecified", "tool_name：可选工具名"]},
-        {"title": "boundary · 必填", "items": ["before_model / pre_tool / post_tool / proxy", "描述能力在哪个 Agent 边界被调用"]},
-        {"title": "constraints · 必填", "items": ["allow_text_reencoding：是否允许改成文本表示"]}
+        {"title": "artifact · 必填", "items": ["id：40 字符 art_ UUID 身份", "digest：content UTF-8 字节的 SHA-256", "content：瞬时 Provider 输入正文", "media_type：1–128 字节可打印 ASCII", "origin：command_output / file_content / api_response / unspecified", "tool_name：可选，1–128 字节可打印 ASCII"]},
+        {"title": "boundary · 必填", "items": ["before_model / pre_tool / post_tool / proxy", "当前 PoC 的 Tool Result 路径使用 post_tool"]},
+        {"title": "constraints · 必填", "items": ["allow_text_reencoding：能否改变源媒体表示"]}
       ],
-      "strengths": ["source identity、摘要和正文放在同一对象中", "Provider 收到的是能力语义，不是 COSH Hook 私有结构", "未知字段默认拒绝"],
-      "discussions": ["当前 Core 只产生 post_tool，其他 boundary 是未实现未来态", "content 已经是 JSON string，text re-encoding 的源表示不清楚", "tool_name 允许 256 字符，Rust 只允许 128 UTF-8 bytes", "Schema 未表达 digest 必须等于 content 的 UTF-8 摘要"]
+      "strengths": ["artifact 身份、摘要、媒体类型和正文处于同一 canonical 对象", "Schema 与 Rust 的 ArtifactId、BoundedName 长度现已对齐", "Core 从提交正文计算 digest，并在 false 时拒绝媒体类型变化", "所有对象拒绝未知字段"],
+      "discussions": ["JSON Schema 不能独自证明 digest 等于 content；可信保证来自 Core 构造", "除 post_tool 外的 boundary 仍是协议预留，并非当前运行能力", "media_type 与 origin 由 Environment 声明，仍需明确可信来源与纠错责任", "content 的全局尺寸上限由 Host budget 承担，未写进能力 Schema"]
     },
     {
       "id": "context-projection-prepare-output-v1",
       "title": "context.projection.prepare/v1 输出",
       "kind": "AW canonical · Advise",
-      "purpose": "返回 Core 可以采用、修改或忽略的模型可见候选内容。",
+      "purpose": "返回一个仍需由 Core 校验、再由 COSH 决定是否写入 history 的候选表示。",
       "source": "src/aw/crates/aw-contracts/schemas/context-projection-prepare-output-v1.schema.json",
       "copies": ["providers/tokenless/schemas/context-projection-prepare-output-v1.schema.json"],
       "groups": [
-        {"title": "candidate source · 必填", "items": ["source_artifact_id：候选对应的输入 artifact", "source_digest：候选实际使用的源内容摘要"]},
-        {"title": "candidate payload · 必填", "items": ["content：候选模型可见文本", "media_type：候选媒体类型", "transform_chain：按顺序记录转换名称"]},
-        {"title": "candidate policy", "items": ["content_type：可选的更细内容分类", "reversibility：lossless / retrievable / unrecoverable"]}
+        {"title": "candidate source · 必填", "items": ["source_artifact_id：必须匹配本次输入 artifact", "source_digest：必须匹配本次源正文摘要"]},
+        {"title": "candidate payload · 必填", "items": ["content：候选模型可见正文", "media_type：候选表示的媒体类型", "transform_chain：有序转换名，最多 64 项"]},
+        {"title": "candidate policy", "items": ["content_type：可选细分类", "reversibility：lossless / retrievable / unrecoverable"]}
       ],
-      "strengths": ["候选显式绑定 source id 和 digest，可防止错配旧结果", "Advise 只返回 candidate，最终采纳权仍在 Core 和 Environment", "转换链有顺序并限制为最多 64 项"],
-      "discussions": ["AW 的 lossless 是保留全部源信息，Tokenless 会删字段后仍称 lossless", "retrievable 没有 recovery reference、TTL 或 resolver", "transform_chain 是 Provider 自由文本，不能稳定重放且可能泄露内容", "media_type 与 content_type 的区别没有规范化", "source_artifact_id 的 Schema 比 Rust ArtifactId 宽松"]
+      "strengths": ["候选显式绑定源 artifact 与 digest，Core 会逐项比对", "media_type 与 allow_text_reencoding 形成可执行约束", "transform_chain 与名称均有统一上限", "Advise 只提供候选；Core 只验证，最终采用权仅属于 COSH"],
+      "discussions": ["retrievable 没有 canonical resolver、TTL 或 recovery reference", "PoC 只采用非空 lossless 候选，retrievable 与 unrecoverable 会保留源正文", "content_type 是 Provider 自由分类，尚无跨 Provider 词表", "Schema 不携带节省量；前后 token 估计位于 content-free receipt meter"]
     },
     {
       "id": "security-content-inspect-input-v1",
       "title": "security.content.inspect/v1 输入",
       "kind": "AW canonical · Observe",
-      "purpose": "把模型可见内容交给敏感信息和凭据扫描能力。",
+      "purpose": "把同一份最终候选源正文提交给敏感信息与凭据观察能力。",
       "source": "src/aw/crates/aw-contracts/schemas/security-content-inspect-input-v1.schema.json",
       "copies": ["providers/agent-sec-core/schemas/security-content-inspect-input-v1.schema.json"],
       "groups": [
-        {"title": "artifact · 必填", "items": ["id / digest / content：身份、摘要和被扫描正文", "media_type：内容类型", "origin：内容来源", "tool_name：可选工具名"]},
-        {"title": "boundary · 必填", "items": ["pre_tool / post_tool", "当前 Core 的 Tool Result 路径固定使用 post_tool"]},
+        {"title": "artifact · 必填", "items": ["id / digest / content：与 projection 共用源身份", "media_type / origin：表示与来源", "tool_name：可选工具名"]},
+        {"title": "boundary · 必填", "items": ["pre_tool / post_tool", "当前 Core Tool Result 路径固定为 post_tool"]},
         {"title": "constraints · 必填", "items": ["include_low_confidence：是否保留低置信度 finding"]}
       ],
-      "strengths": ["Observe 能力与阻断决策分离", "和 Context Projection 复用同一 artifact 语义", "是否保留低置信度结果由调用方明确给出"],
-      "discussions": ["Schema 允许 pre_tool，但当前 Tool Result 调用只实现 post_tool", "缺少正文的规范字节域，COSH 当前先脱敏后扫描", "artifact、tool_name 的 Schema 与 Rust 类型限制不一致"]
+      "strengths": ["Observe 只产生事实，不拥有 Tool Call 阻断权", "与 Context Projection 共用 artifact 与 exact source digest", "所有字段边界与 Rust 类型一致，未知字段被拒绝", "当前可信 effective-bytes 边界把同一 source 交给安全观察与投影"],
+      "discussions": ["当前 PoC 固定 include_low_confidence=false，策略还未成为配置面", "pre_tool 是协议预留，当前 Tool Result 路径只实现 post_tool", "media_type 与 origin 的可信度仍取决于 Environment 输入", "安全事实的保留期限与跨轮次聚合策略不属于此 Schema"]
     },
     {
       "id": "security-content-inspect-output-v1",
       "title": "security.content.inspect/v1 输出",
       "kind": "AW canonical · Observe",
-      "purpose": "返回不包含命中原文的敏感信息扫描摘要。",
+      "purpose": "返回不包含命中原文的完整扫描结论，或只声明已扫描前缀中发现的风险事实。",
       "source": "src/aw/crates/aw-contracts/schemas/security-content-inspect-output-v1.schema.json",
       "copies": ["providers/agent-sec-core/schemas/security-content-inspect-output-v1.schema.json"],
       "groups": [
-        {"title": "inspection summary", "items": ["verdict：clean / suspicious / sensitive", "scanned_bytes：Provider 声明的扫描字节数", "truncated：扫描是否提前停止"]},
-        {"title": "findings[] · 最多 64", "items": ["rule_id：触发规则名", "category：secret / personal_data / credential / dangerous_pattern / obfuscation / other", "severity：info 到 critical", "confidence：low / medium / high", "count：同类命中次数"]}
+        {"title": "inspection summary", "items": ["verdict：clean / suspicious / sensitive", "scanned_bytes：实际检查的 UTF-8 字节数", "truncated：是否只检查严格非空前缀"]},
+        {"title": "findings[] · 最多 64", "items": ["rule_id / category：规则与分类", "severity / confidence：严重度与可信度", "count：命中数，范围 1..u32::MAX"]}
       ],
-      "strengths": ["finding 不返回匹配原文和偏移，降低泄露风险", "分类、严重性和置信度使用封闭枚举", "结果数量有显式上限"],
-      "discussions": ["Schema 允许 clean 与 critical finding 同时存在", "truncated=true 仍可返回 clean，缺少 indeterminate 状态", "count 允许 0，与“命中次数”矛盾", "scanned_bytes 未与输入长度建立关系", "rule_id 虽限制字符，仍是 Provider 控制的文本通道"]
+      "strengths": ["clean 必须无 finding 且 truncated=false", "suspicious / sensitive 必须至少有一个 finding", "Core 要求完整结果扫描字节数等于输入；截断风险只允许严格非空前缀", "receipt meter 的 id、unit、measurement_kind 与数值都会由 Core 核对"],
+      "discussions": ["truncated 风险只证明已扫描前缀中的命中，不能对未扫描尾部下结论", "verdict 与 finding severity 的汇总规则尚未标准化", "Schema 允许相同 rule_id 重复出现；是否必须聚合为一项仍需决定", "rule_id 虽然有边界，仍需治理跨 Provider 的稳定命名空间"]
     },
     {
       "id": "security-code-inspect-input-v1",
       "title": "security.code.inspect/v1 输入",
       "kind": "AW canonical · Observe",
-      "purpose": "把代码或命令片段交给只报告风险事实的代码扫描能力。",
+      "purpose": "把代码或命令片段作为风险事实输入，并显式给出语言选择。",
       "source": "src/aw/crates/aw-contracts/schemas/security-code-inspect-input-v1.schema.json",
       "copies": ["providers/agent-sec-core/schemas/security-code-inspect-input-v1.schema.json"],
       "groups": [
-        {"title": "artifact · 必填", "items": ["id / digest / content：身份、摘要和代码文本", "media_type / origin：内容类型与来源", "tool_name：可选工具名"]},
-        {"title": "boundary · 必填", "items": ["pre_tool / post_tool", "当前 Core 的 Tool Result 路径固定使用 post_tool"]},
+        {"title": "artifact · 必填", "items": ["id / digest / content：被分析正文身份", "media_type / origin：表示与来源", "tool_name：可选工具名"]},
+        {"title": "boundary · 必填", "items": ["pre_tool / post_tool", "当前 Core Tool Result 路径固定为 post_tool"]},
         {"title": "constraints · 必填", "items": ["language：auto / bash / python"]}
       ],
-      "strengths": ["语言假设显式进入能力输入", "代码观察与 Tool Call 阻断是两个 Capability", "输入结构与其他 artifact 能力保持一致"],
-      "discussions": ["当前 Agent Sec 把 auto 固定当 Bash，并不做自动识别", "Core 固定发送 auto，普通 Python 可能得到错误 clean", "无法识别语言时没有规定必须降级还是可以继续给结论"]
+      "strengths": ["语言假设作为输入事实，不隐藏在 Provider 默认值里", "Agent Sec 的 auto 会运行 Bash 与 Python 规则并报告 mixed", "代码观察与 command mediation 是不同 Capability", "artifact 约束与其他 canonical 输入一致"],
+      "discussions": ["当前 Core 对 Tool Result 固定发送 auto，Environment 尚不能提供更精确语言", "auto 的 mixed 是规则集合，不是完整语法解析或 shell 方言证明", "pre_tool 是协议预留，当前代码观察只接入 post_tool", "代码风险分类与 command gate 策略仍由上层解释"]
     },
     {
       "id": "security-code-inspect-output-v1",
       "title": "security.code.inspect/v1 输出",
       "kind": "AW canonical · Observe",
-      "purpose": "返回代码风险 finding、扫描覆盖情况和实际分析语言。",
+      "purpose": "返回代码风险 finding、精确扫描覆盖和实际使用的语言规则集合。",
       "source": "src/aw/crates/aw-contracts/schemas/security-code-inspect-output-v1.schema.json",
       "copies": ["providers/agent-sec-core/schemas/security-code-inspect-output-v1.schema.json"],
       "groups": [
-        {"title": "inspection summary", "items": ["verdict：clean / suspicious / sensitive", "scanned_bytes：已扫描字节数", "truncated：是否未扫描完整", "language_detected：bash / python / unknown，可选"]},
-        {"title": "findings[] · 最多 64", "items": ["rule_id / category：规则与类别", "severity / confidence：严重程度与可信程度", "count：同类命中次数"]}
+        {"title": "inspection summary", "items": ["verdict：clean / suspicious / sensitive", "scanned_bytes / truncated：完整输入或严格前缀", "language_detected：bash / python / mixed / unknown"]},
+        {"title": "findings[] · 最多 64", "items": ["rule_id / category：稳定规则与类别", "severity / confidence：风险等级与可信度", "count：至少为 1"]}
       ],
-      "strengths": ["输出实际分析语言，便于调用方判断结论适用范围", "finding 结构与 content inspect 一致", "未知字段默认拒绝"],
-      "discussions": ["危险代码被映射成 sensitive，内容敏感与执行风险语义混用", "language_detected=unknown 或 truncated=true 仍可给 clean", "verdict 与 findings、count、coverage 没有一致性约束"]
+      "strengths": ["language_detected 现为必填，auto 结果不会静默冒充单一语言", "clean、风险 finding 与 truncated 的跨字段约束已写入 Schema 和 Rust", "Core 校验扫描字节覆盖与两项 observed meter", "finding 不复制匹配原文或偏移"],
+      "discussions": ["canonical 仍允许 unknown + clean；其他 Provider 的未知语言结论如何解释需定策略", "危险执行构造仍借用 sensitive 这个通用 verdict 名称", "mixed 只表示两套规则均执行，不表示输入确为混合语言", "同一规则的去重与排序尚未成为 canonical 要求"]
     },
     {
       "id": "security-command-inspect-input-v1",
       "title": "security.command.inspect/v1 输入",
       "kind": "AW canonical · Mediate",
-      "purpose": "在 Tool Call 执行前提交真实命令，要求安全能力给出闸门决定。",
+      "purpose": "在副作用之前提交待执行命令，并要求安全 Provider 给出 gate 意见。",
       "source": "src/aw/crates/aw-contracts/schemas/security-command-inspect-input-v1.schema.json",
       "copies": ["providers/agent-sec-core/schemas/security-command-inspect-input-v1.schema.json"],
       "groups": [
-        {"title": "command · 必填", "items": ["content：将要执行的命令文本", "digest：命令 UTF-8 字节摘要", "language：auto / bash / python", "tool_name：可选工具名"]},
-        {"title": "boundary · 必填", "items": ["固定为 pre_tool", "表示决定发生在副作用执行之前"]}
+        {"title": "command · 必填", "items": ["content：提交给 gate 的命令 UTF-8 文本", "digest：content 的 SHA-256", "language：auto / bash / python", "tool_name：可选，1–128 字节可打印 ASCII"]},
+        {"title": "boundary · 必填", "items": ["固定为 pre_tool", "表示结论必须先于副作用"]}
       ],
-      "strengths": ["Mediate 输入与 Observe 输入分离，权力更清楚", "boundary 被固定为 pre_tool", "命令和 digest 同时存在，便于建立审计引用"],
-      "discussions": ["auto 仍有假识别风险，且当前实现固定按 Bash", "Schema 无法证明此 content 就是 COSH 最终执行的命令", "tool_name 的字符长度与 Rust 字节长度不一致"]
+      "strengths": ["Mediate 与 Observe 分离，只有该 Capability 能影响 gate", "Core 从 submitted content 计算 digest", "boundary 只能是 pre_tool", "Schema、native operation 与 receipt 共同绑定本次 Provider 调用"],
+      "discussions": ["当前 PoC 只证明 submitted bytes 被扫描，尚未证明 executor 最终执行同一 bytes", "纯命令字符串没有表达 argv、shell、cwd 与环境变量，执行语义可能更宽", "执行前 digest 复核或变更后重扫必须在 COSH 可信边界完成", "tool_name 仅是辅助上下文，不能作为执行身份"]
     },
     {
       "id": "security-command-inspect-output-v1",
       "title": "security.command.inspect/v1 输出",
       "kind": "AW canonical · Mediate",
-      "purpose": "返回 Core 必须解释为 Allow、Warn 或 Block 的 Tool Call 闸门意见。",
+      "purpose": "返回 Core 可解释为 Allow、Warn 或 Block 的完整命令扫描判定。",
       "source": "src/aw/crates/aw-contracts/schemas/security-command-inspect-output-v1.schema.json",
       "copies": ["providers/agent-sec-core/schemas/security-command-inspect-output-v1.schema.json"],
       "groups": [
-        {"title": "decision summary", "items": ["verdict：allow / warn / deny", "reasons[]：最多 32 个稳定理由码", "scanned_bytes：Provider 声明的扫描字节数"]},
-        {"title": "findings[] · 最多 64", "items": ["rule_id / category", "severity / confidence", "count"]}
+        {"title": "decision summary", "items": ["verdict：allow / warn / deny", "reasons[]：最多 32 个稳定理由码", "scanned_bytes：实际检查的完整命令字节数"]},
+        {"title": "findings[] · 最多 64", "items": ["rule_id / category：规则和类别", "severity / confidence：严重度与可信度", "count：至少为 1"]}
       ],
-      "strengths": ["决策值是封闭枚举，Core 映射明确", "reason 使用代码而不是泄露命令原文", "Provider 的 deny 与 Host disposition=denied 被清楚区分"],
-      "discussions": ["allow 可以同时携带 deny reason 和 critical finding", "warn / deny 可以没有 reason", "没有 truncated、coverage 或 detected language，无法证明 allow 来自完整扫描", "reasons 与 findings 之间没有引用一致性规则"]
+      "strengths": ["allow 必须没有 reason 和 finding", "warn / deny 必须同时有 reason 与 finding", "Core 只接受 scanned_bytes 等于 submitted command 长度的 gate", "Provider deny 意见与 Host denied disposition 保持不同语义"],
+      "discussions": ["Schema 不能证明 submitted command 就是 executor 最终执行的命令", "reasons 与 findings 之间没有一一引用约束", "reasons 未要求 unique，重复理由是否应拒绝仍需决定", "warn 到继续执行、交互确认或拒绝的最终策略属于 COSH"]
     },
     {
       "id": "agent-sec-aw-provider-request-v1",
       "title": "Agent Sec native request/v1",
       "kind": "Provider native · Agent Sec",
-      "purpose": "一个进程入口承载 content、code、command 三类 Agent Sec 操作。",
+      "purpose": "以一个 stdin 协议承载三种操作，并用 operation 分支只接收各自需要的字段。",
       "source": "providers/agent-sec-core/schemas/agent-sec-aw-provider-request-v1.schema.json",
       "copies": [],
       "groups": [
-        {"title": "dispatch · 必填", "items": ["protocol_version：固定为 1", "operation：content_inspect / code_inspect / command_inspect", "content：实际扫描文本"]},
-        {"title": "operation options", "items": ["source：内容来源，默认 unknown", "include_low_confidence：PII 扫描选项", "language：auto / bash / python"]}
+        {"title": "oneOf dispatch · 必填", "items": ["content_inspect：content + source + include_low_confidence", "code_inspect：content + language", "command_inspect：content + language"]},
+        {"title": "shared identity", "items": ["protocol_version：固定为 1", "operation：请求分支 discriminator", "content：从 canonical input 原样映射"]}
       ],
-      "strengths": ["native protocol 与 AW canonical contract 解耦", "单一入口适合复用 Agent Sec 现有 Python scanner", "额外字段被拒绝"],
-      "discussions": ["没有按 operation 条件要求对应字段", "command_inspect 缺 language 也能通过 Schema 并依赖默认 auto", "protocol_version 在 Pydantic 类型中只是 int，版本一致性另行手写检查"]
+      "strengths": ["request 已按 operation 使用 oneOf 判别，不再依赖隐式默认字段", "每个分支拒绝未知字段并要求自己的完整参数", "Host 会按 admitted digest 校验 native request 实例", "native 协议与 AW canonical 权限语义保持解耦"],
+      "discussions": ["code_inspect 与 command_inspect 字段相同，但 authority 完全不同，必须保留 operation", "content 大小主要由 Host input budget 限制，native Schema 本身不设 maxLength", "source 词表比 canonical origin 更宽，当前 manifest 固定映射 tool_output", "protocol v1 的未来新增字段需要明确兼容策略与 schema version 规则"]
     },
     {
       "id": "agent-sec-aw-provider-response-v1",
       "title": "Agent Sec native response/v1",
       "kind": "Provider native · Agent Sec",
-      "purpose": "统一承载三类扫描的 settled outcome 和 Host meter 数据。",
+      "purpose": "用 operation 与 disposition 双重判别返回已完成、跳过或失败的 content-free 结果。",
       "source": "providers/agent-sec-core/schemas/agent-sec-aw-provider-response-v1.schema.json",
       "copies": [],
       "groups": [
-        {"title": "always present", "items": ["protocol_version：固定为 1", "disposition：completed / skipped / error", "findings_total：Host meter", "scanned_bytes：Host meter", "truncated：是否截断"]},
-        {"title": "produced payload", "items": ["verdict：inspection 或 command verdict 的联合枚举", "findings[] / reasons[]", "language_detected：可选", "engine：可选扫描引擎标识"]}
+        {"title": "顶层判别与计量", "items": ["protocol_version：固定 1", "operation：content_inspect / code_inspect / command_inspect", "disposition：completed / skipped / error", "findings_total / scanned_bytes：顶层 observed meter 来源"]},
+        {"title": "completed 顶层字段", "items": ["content：verdict / findings / truncated / engine", "code：verdict / findings / truncated / language_detected / engine", "command：verdict / findings / reasons / language_detected / engine", "不存在 inspection 或 gate 包装对象"]},
+        {"title": "其他顶层分支", "items": ["skipped：findings_total=0 / scanned_bytes=0 / skip_reason", "error：findings_total=0 / scanned_bytes / error_code", "每一分支都 additionalProperties=false"]}
       ],
-      "strengths": ["所有 disposition 都提供 meter 所需计数", "matched content 不出现在 native response", "统一结果方便一个 executable 服务三个 Capability"] ,
-      "discussions": ["completed 不要求 verdict，error 也可以携带任意 verdict", "content_inspect 可以返回 allow，operation 与 verdict 无条件关系", "findings_total 不必等于 findings 中 count 总和", "Host 当前不会按此 Schema 验证实例"]
+      "strengths": ["operation 与 disposition 共同决定合法字段和值域", "completed 的 verdict、finding 与覆盖关系已受条件约束", "skipped 固定 0 meter，error 只能返回 scanner_failed", "Host 校验 schema、operation correlation，并由 Core核对 meter 数值"],
+      "discussions": ["error 可报告已扫描字节，但不携带 partial finding，因此不能当作观察事实", "native findings_total 与 findings 求和的最终一致性由 Core meter 校验承担", "error_code 当前只有 scanner_failed，故障分类粒度较粗", "engine 使用 const，新增扫描引擎需要协议或 schema 演进"]
     },
     {
       "id": "tokenless-compression-request-v1",
       "title": "Tokenless CompressionRequest/v1",
       "kind": "Provider native · Tokenless",
-      "purpose": "向 tokenless compress 提交原文、调用边界和允许的替换能力。",
+      "purpose": "向真实 Tokenless 入口提交源正文、源媒体类型、调用边界与替换能力。",
       "source": "providers/tokenless/schemas/tokenless-compression-request-v1.schema.json",
       "copies": [],
       "groups": [
-        {"title": "required", "items": ["protocol_version：固定为 1", "content：待处理正文", "agent_id：Tokenless attribution 名称", "seam：before_model / pre_tool / post_tool / proxy"]},
-        {"title": "correlation", "items": ["session_id / tool_use_id：可选关联", "tool_name：可选工具名", "content_origin：可选来源"]},
-        {"title": "capabilities", "items": ["replace_output：可否替换原文", "publish_retrieve_tool：可否提供取回工具", "replace_with_text：可否改成文本表示"]}
+        {"title": "required", "items": ["protocol_version：固定为 1", "content：与 canonical artifact 相同的正文", "agent_id：manifest const aw-provider", "seam：before_model / pre_tool / post_tool / proxy"]},
+        {"title": "representation + correlation", "items": ["input_media_type：源表示，Provider 集成必须映射", "session_id / tool_use_id：可选 scope 关联", "tool_name / content_origin：可选工具与来源"]},
+        {"title": "capabilities · native 可选", "items": ["capabilities 对象及三个布尔字段在 native Schema 中均可选", "replace_output=true / publish_retrieve_tool=false：PoC manifest 注入常量", "replace_with_text：PoC manifest 从 allow_text_reencoding 映射"]}
       ],
-      "strengths": ["把 Provider 自己需要的 seam 和 feature flags 保留在 native 层", "AW 通过 declarative mapping 注入，不需要在 Host 写 Tokenless 分支", "关联字段和算法输入分开"],
-      "discussions": ["additionalProperties=true，很多字符串没有边界", "AW environment_id 被映射到 Tokenless agent_id，两者语义不同", "content_origin 在 Schema 中可选，但 manifest 总是注入", "Schema 没有表达各 seam 下 capabilities 的合法组合"]
+      "strengths": ["input_media_type 把 representation contract 传到真实 Provider", "agent_id 使用 admitted const，不再混用 EnvironmentId", "顶层与 capabilities 均拒绝未知字段", "manifest 通过声明式映射注入字段，Host 无 Tokenless 特判"],
+      "discussions": ["agent_id、session_id、tool_use_id 与 tool_name 只有最小长度，native Schema 上界仍不统一", "native Schema 允许 capabilities 缺失或部分提供；PoC AW 路径依赖 manifest 补齐常量", "Tokenless 自身旧 adapter 可省略 input_media_type；AW manifest 路径不会省略", "native attribution 名称与 AW actor/environment scope 仍需在文档中严格区分"]
     },
     {
       "id": "tokenless-compression-response-v1",
       "title": "Tokenless CompressionResponse/v1",
       "kind": "Provider native · Tokenless",
-      "purpose": "返回候选文本、压缩处置、可恢复性和 token 估算。",
+      "purpose": "返回实际响应正文、对应媒体类型、处置、可恢复性与同方法 token 估计。",
       "source": "providers/tokenless/schemas/tokenless-compression-response-v1.schema.json",
       "copies": [],
       "groups": [
-        {"title": "required result", "items": ["protocol_version：固定为 1", "output：Provider 建议输出", "disposition：applied / passthrough / no_savings / timeout 等", "reversibility：lossless / retrievable / unrecoverable"]},
-        {"title": "measurement", "items": ["before_tokens / after_tokens：估算值", "tokenizer_id：计数方法"]},
-        {"title": "optional detail", "items": ["content_type：检测到的内容分类", "compressor_chain[]：转换链", "stash_keys[]：可恢复内容引用", "diagnostic：错误诊断"]}
+        {"title": "required result", "items": ["output / output_media_type：本次实际返回正文与表示", "disposition：applied / dry_run / passthrough / no_savings / timeout / error 等", "compressor_chain / reversibility / stash_keys：转换与恢复事实"]},
+        {"title": "measurement", "items": ["before_tokens / after_tokens：同一次估算", "tokenizer_id：计数方法身份", "content_type / diagnostic：可选细类或错误说明"]},
+        {"title": "state constraints", "items": ["applied：output 才是变换后正文，可映射为 candidate", "dry_run：保留 source output，仅报告模拟转换计量", "其他状态：保留 source output；passthrough / failure 固定 lossless 且 chain、stash 为空", "retrievable 必须有 stash key；非 error 禁止 diagnostic"]}
       ],
-      "strengths": ["applied 与旁路/失败 disposition 明确分开", "同一 tokenizer_id 绑定前后 token 数", "可恢复性和 stash 细节存在 native 层"] ,
-      "discussions": ["Schema 未表达 applied 才能输出变更内容等状态约束", "retrievable 不要求 stash_keys，error 不要求 diagnostic", "数组和自由文本没有界限，additionalProperties=true", "AW mapping 丢弃 content_type 和 stash_keys", "Tokenless lossless 与 AW lossless 的保证强度不同"]
+      "strengths": ["output_media_type 使实际返回正文的表示可以被 Host 验证", "状态机约束已覆盖 disposition、chain、reversibility、stash 与 diagnostic", "顶层拒绝未知字段，diagnostic 最多 4096 字符", "仅 applied 分支由 manifest 把 output 与 output_media_type 映射为 canonical candidate"],
+      "discussions": ["error 尚未强制 diagnostic，失败诊断仍可能缺失", "before_tokens 与 after_tokens 的大小关系未由 Schema 约束", "compressor_chain、stash_keys 和部分标识没有 maxItems 或字符串上界", "响应 Schema 无法跨消息证明 dry_run / 其他状态的 output 等于 source；需 Provider 与 Host 校验"]
     },
     {
       "id": "skill-ledger-analyze-v1",
       "title": "Skill Ledger analyze result/v1",
       "kind": "PR 关联变更 · 非 AW Provider Contract",
-      "purpose": "描述 Agent Sec Skill Ledger 的只读分析结果；本 PR 只修改了 $id 域名。",
+      "purpose": "描述 Agent Sec Skill Ledger 的只读分析结果；与 AW Provider 路由和 AW Ledger 记录不同。",
       "source": "src/agent-sec-core/agent-sec-cli/src/agent_sec_cli/skill_ledger/analyze.schema.json",
       "copies": [],
       "groups": [
-        {"title": "top level", "items": ["schema_version / engine_version", "status：pass / warn / deny / error", "coverage_complete：总体覆盖是否完整", "scanners[]：各扫描器结果", "errors[]：总体错误"]},
+        {"title": "top level", "items": ["schema_version / engine_version", "status：pass / warn / deny / error", "coverage_complete：总体覆盖是否完整", "scanners[] / errors[]：扫描器与总体错误"]},
         {"title": "scanner", "items": ["name / version / status / coverage_complete", "findings[] / errors[]"]},
         {"title": "finding / error", "items": ["finding：rule / level / message / file / line / metadata", "error：code / message / file / metadata"]}
       ],
-      "strengths": ["coverage_complete 与 status 分离，比 AW inspect 输出更完整", "scanner 级结果保留独立版本和错误", "顶层与 scanner/error 默认拒绝额外字段"],
-      "discussions": ["finding 没有 additionalProperties=false", "metadata 是无限制对象，不能声称 content-free", "status 与 coverage_complete、findings 之间仍无一致性条件", "这份 Schema 不参与 Provider 路由，不能与 AW canonical Schema 混为一谈"]
+      "strengths": ["coverage_complete 与 status 分开表达", "scanner 级结果保留独立版本和错误", "顶层与 scanner/error 拒绝额外字段", "该 Schema 明确留在 Agent Sec 自己的分析协议层"],
+      "discussions": ["finding 对象没有拒绝未知字段", "metadata 是无限制对象，不能承诺 content-free", "status 与 coverage_complete、findings 的一致性仍由实现承担", "AW Ledger 使用 Rust typed body + validator，不是这 14 个物理 JSON Schema 中的一项"]
     },
     {
       "id": "cosh-ng-e2e-result",
       "title": "COSH-NG E2E result",
       "kind": "PR 关联变更 · 非 AW Provider Contract",
-      "purpose": "记录 COSH-NG 分阶段 E2E 测试结果；本 PR 只修改了 $id 域名。",
+      "purpose": "记录 COSH-NG 分阶段 E2E 结果；它是测试证据容器，不参与 Provider 生效链。",
       "source": "src/cosh-ng/e2e/result.schema.json",
       "copies": [],
       "groups": [
-        {"title": "run", "items": ["schema_version / run_id / profile", "started_at / finished_at", "environment：自由对象"]},
+        {"title": "run", "items": ["schema_version / run_id / profile", "started_at / finished_at", "environment：运行环境自由对象"]},
         {"title": "artifact", "items": ["path：被测产物路径", "sha256：产物摘要", "git_sha：源码提交"]},
         {"title": "cases[]", "items": ["id / status / attempts", "started_at / finished_at", "evidence[] / reason / metrics"]},
         {"title": "cleanup", "items": ["status：PASS / FAIL", "actions[]：清理动作说明"]}
       ],
-      "strengths": ["测试运行、产物、case 和 cleanup 分层清楚", "产物带 SHA-256，case 状态使用封闭枚举", "顶层、artifact、case、cleanup 拒绝未知字段"],
-      "discussions": ["environment 和 metrics 是无约束对象", "attempts 允许 0，但每个结果是否必须至少执行一次没有定义", "时间先后、cleanup 与 case 状态的关系无法由 Schema 保证", "这份 Schema 不参与 Provider 生效链"]
+      "strengths": ["测试运行、产物、case 与 cleanup 分层清楚", "产物绑定 SHA-256，case 状态使用封闭枚举", "主要结构拒绝未知字段", "适合承载最终 VM E2E 证据，但不替代运行契约"],
+      "discussions": ["environment 与 metrics 是无约束对象", "attempts 允许 0，是否代表未执行需另行约定", "时间先后、cleanup 与 case 状态关系无法由 Schema 单独保证", "AW Ledger 也不由此 Schema 定义；它使用独立 Rust typed record 与校验器"]
     }
   ]
 }

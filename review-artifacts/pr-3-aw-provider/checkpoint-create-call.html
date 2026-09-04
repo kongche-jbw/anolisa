@@ -3,505 +3,1133 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Checkpoint 真实创建调用</title>
+    <title>Checkpoint State Provider：一次安全创建流程</title>
     <style>
       :root {
-        --c-bg: #f8fafc;
+        --c-bg: #eef6ff;
         --c-canvas: #ffffff;
-        --c-border: #cbd5e1;
-        --c-border-strong: #64748b;
-        --c-text-main: #0f172a;
-        --c-text-sub: #64748b;
-        --c-accent: #0f766e;
-        --c-accent-soft: #f0fdfa;
-        --c-panel: #f8fafc;
+        --c-panel: #f6faff;
+        --c-border: #bfd4ec;
+        --c-border-strong: #4d729b;
+        --c-text-main: #12263d;
+        --c-text-sub: #52677e;
+        --c-accent: #1769aa;
+        --c-accent-soft: #e3f1ff;
+        --c-planned: #64748b;
+        --c-planned-soft: #f1f5f9;
+        --c-risk: #a03321;
+        --c-risk-soft: #fff1ed;
         --font-ui: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
           sans-serif;
         --font-mono: "SFMono-Regular", "SF Mono", Monaco, Consolas,
           "Liberation Mono", monospace;
       }
 
-      * { box-sizing: border-box; }
-      html { scroll-behavior: smooth; }
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        background: var(--c-bg);
+      }
+
       body {
         margin: 0;
-        padding: 32px;
-        background: var(--c-bg);
+        padding: 24px;
         color: var(--c-text-main);
+        background: var(--c-bg);
         font-family: var(--font-ui);
       }
-      a { color: inherit; }
-      a:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 3px; }
-      .page { width: min(1480px, 100%); margin: 0 auto; }
+
+      code,
+      .mono {
+        font-family: var(--font-mono);
+      }
+
+      code {
+        overflow-wrap: anywhere;
+      }
+
+      .page-scroll {
+        width: 100%;
+        overflow-x: auto;
+        padding-bottom: 8px;
+      }
+
       .diagram-canvas {
         position: relative;
-        padding: 30px;
-        border: 2px solid var(--c-border);
+        width: min(1480px, 100%);
+        min-width: 1040px;
+        margin: 0 auto;
+        padding: 28px;
+        border: 2px solid var(--c-border-strong);
         background: var(--c-canvas);
       }
+
       .diagram-header {
-        display: flex;
-        align-items: flex-start;
-        justify-content: space-between;
-        gap: 24px;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 26px;
+        align-items: start;
         padding-bottom: 20px;
-        border-bottom: 1px solid var(--c-border);
+        border-bottom: 2px solid var(--c-text-main);
       }
+
       .eyebrow {
-        margin: 0 0 8px;
+        margin: 0 0 7px;
         color: var(--c-accent);
-        font-family: var(--font-mono);
-        font-size: 11px;
-        font-weight: 700;
+        font: 800 11px/1.4 var(--font-mono);
         letter-spacing: 0.12em;
         text-transform: uppercase;
       }
+
       h1 {
         margin: 0;
-        font-size: clamp(24px, 3vw, 38px);
-        line-height: 1.16;
-        letter-spacing: -0.025em;
+        font-size: 31px;
+        line-height: 1.2;
+        letter-spacing: -0.02em;
       }
+
       .subtitle {
-        max-width: 850px;
+        max-width: 900px;
         margin: 10px 0 0;
         color: var(--c-text-sub);
         font-size: 14px;
-        line-height: 1.7;
+        line-height: 1.72;
       }
+
       .header-meta {
-        display: flex;
-        flex-wrap: wrap;
-        justify-content: flex-end;
-        gap: 8px;
-        min-width: 260px;
+        display: grid;
+        gap: 7px;
+        justify-items: end;
       }
+
       .badge {
         display: inline-block;
-        padding: 5px 8px;
+        padding: 4px 8px;
         border: 1px solid var(--c-border-strong);
         background: #ffffff;
-        font-family: var(--font-mono);
-        font-size: 10px;
-        font-weight: 650;
-        letter-spacing: 0.04em;
+        color: var(--c-text-main);
+        font: 800 10px/1.3 var(--font-mono);
+        letter-spacing: 0.05em;
         text-transform: uppercase;
       }
-      .badge--accent { border-color: var(--c-accent); color: var(--c-accent); }
-      .fact-strip {
+
+      .badge--implemented {
+        border-color: #236b45;
+        background: #eaf8ef;
+        color: #185637;
+      }
+
+      .badge--gap {
+        border-color: var(--c-risk);
+        background: var(--c-risk-soft);
+        color: var(--c-risk);
+      }
+
+      .badge--planned {
+        border-color: var(--c-planned);
+        background: var(--c-planned-soft);
+        color: #475569;
+      }
+
+      .status-grid {
         display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        border: 1px solid var(--c-border);
-        border-top: 0;
-      }
-      .fact { min-width: 0; padding: 14px 16px; border-right: 1px solid var(--c-border); }
-      .fact:last-child { border-right: 0; }
-      .fact__label {
-        display: block;
-        margin-bottom: 5px;
-        color: var(--c-text-sub);
-        font-size: 10px;
-        font-weight: 700;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-      }
-      .fact__value {
-        display: block;
-        font-family: var(--font-mono);
-        font-size: 12px;
-        line-height: 1.45;
-        overflow-wrap: anywhere;
-      }
-      .section { margin-top: 28px; }
-      .section-head {
-        display: flex;
-        align-items: baseline;
-        justify-content: space-between;
-        gap: 18px;
-        margin-bottom: 12px;
-      }
-      .section-title { margin: 0; font-size: 17px; }
-      .section-note { margin: 0; color: var(--c-text-sub); font-size: 12px; }
-      .route-scroll { overflow-x: auto; border: 1px solid var(--c-border); background: var(--c-panel); }
-      .route-canvas { position: relative; width: 1280px; height: 166px; background: #ffffff; }
-      .route-node {
-        position: absolute;
-        top: 36px;
-        width: 166px;
-        height: 76px;
-        padding: 11px 12px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        margin: 20px 0 22px;
         border: 1px solid var(--c-border-strong);
-        background: #ffffff;
-        text-align: center;
-        text-decoration: none;
       }
-      .route-node:hover { border-color: var(--c-accent); background: var(--c-accent-soft); }
-      .route-node__role {
+
+      .status {
+        min-width: 0;
+        padding: 13px 15px;
+        border-right: 1px solid var(--c-border-strong);
+      }
+
+      .status:last-child {
+        border-right: 0;
+      }
+
+      .status--current {
+        background: #eefaf2;
+      }
+
+      .status--gap {
+        background: var(--c-risk-soft);
+      }
+
+      .status__label {
         display: block;
-        margin-bottom: 6px;
-        color: var(--c-text-sub);
-        font-family: var(--font-mono);
-        font-size: 9px;
-        font-weight: 700;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-      }
-      .route-node__name { display: block; font-size: 14px; font-weight: 700; }
-      .route-node__desc { display: block; margin-top: 4px; color: var(--c-text-sub); font-size: 10px; line-height: 1.35; }
-      .node-user { left: 18px; }
-      .node-cli { left: 226px; }
-      .node-client { left: 434px; }
-      .node-daemon { left: 642px; }
-      .node-manager { left: 850px; }
-      .node-storage { left: 1058px; }
-      .connectors {
-        position: absolute;
-        left: 0;
-        top: 0;
-        width: 1280px;
-        height: 166px;
-        pointer-events: none;
-        overflow: visible;
-      }
-      .conn { fill: none; }
-      .conn--flow { stroke: #0f172a; stroke-width: 1.5; marker-end: url(#ck-arrow-request); }
-      .conn--return { stroke: #0f766e; stroke-width: 1.75; marker-end: url(#ck-arrow-return); }
-      .connector-label { fill: #64748b; font-family: var(--font-mono); font-size: 9px; }
-      .connector-label--return { fill: #0f766e; }
-      .route-caption {
-        position: absolute;
-        left: 18px;
-        bottom: 8px;
-        margin: 0;
-        color: var(--c-text-sub);
-        font-family: var(--font-mono);
-        font-size: 10px;
-      }
-      .legend {
-        display: flex;
-        align-items: center;
-        flex-wrap: wrap;
-        gap: 18px;
-        padding: 12px 14px;
-        border: 1px solid var(--c-border);
-        border-top: 0;
-      }
-      .legend__title { color: var(--c-text-sub); font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; }
-      .legend__item { display: inline-flex; align-items: center; gap: 6px; color: var(--c-text-sub); font-size: 11px; }
-      .legend__item svg { overflow: visible; }
-      .boundary-strip {
-        margin-top: 12px;
-        padding: 12px 14px;
-        border: 1px solid var(--c-border-strong);
-        color: var(--c-text-sub);
-        font-size: 12px;
-        line-height: 1.6;
-      }
-      .boundary-strip strong { color: var(--c-text-main); }
-      .step-nav { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
-      .step-nav a {
-        min-height: 34px;
-        padding: 7px 10px;
-        border: 1px solid var(--c-border-strong);
-        background: #ffffff;
-        font-family: var(--font-mono);
-        font-size: 10px;
-        font-weight: 650;
-        text-decoration: none;
-      }
-      .step-nav a:hover { border-color: var(--c-accent); color: var(--c-accent); }
-      .step-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-      .step-card { min-width: 0; border: 1px solid var(--c-border); background: #ffffff; scroll-margin-top: 16px; }
-      .step-card:target { border: 2px solid var(--c-accent); }
-      .step-card__head {
-        display: grid;
-        grid-template-columns: 42px minmax(0, 1fr) auto;
-        align-items: center;
-        min-height: 58px;
-        border-bottom: 1px solid var(--c-border);
-      }
-      .step-card__index {
-        display: grid;
-        place-items: center;
-        align-self: stretch;
-        border-right: 1px solid var(--c-border);
+        margin-bottom: 4px;
         color: var(--c-accent);
-        font-family: var(--font-mono);
-        font-size: 14px;
+        font: 800 10px/1.3 var(--font-mono);
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
+      }
+
+      .status--gap .status__label {
+        color: var(--c-risk);
+      }
+
+      .status__value {
+        display: block;
+        font-size: 12px;
+        font-weight: 700;
+        line-height: 1.55;
+      }
+
+      .section-label {
+        display: grid;
+        grid-template-columns: 182px minmax(0, 1fr);
+        border: 1px solid var(--c-border-strong);
+        border-bottom: 0;
+        background: var(--c-accent-soft);
+      }
+
+      .section-label__index {
+        padding: 10px 14px;
+        border-right: 1px solid var(--c-border-strong);
+        color: var(--c-accent);
+        font: 800 11px/1.4 var(--font-mono);
+        letter-spacing: 0.08em;
+      }
+
+      .section-label__text {
+        padding: 10px 16px;
+        font-size: 12px;
         font-weight: 800;
       }
-      .step-card__title { min-width: 0; padding: 9px 12px; }
-      .step-card__title h3 { margin: 0; font-size: 14px; }
-      .step-card__route { display: block; margin-top: 4px; color: var(--c-text-sub); font-family: var(--font-mono); font-size: 10px; }
-      .step-card__kind {
-        margin-right: 10px;
-        padding: 4px 6px;
-        border: 1px solid var(--c-border);
-        color: var(--c-text-sub);
-        font-family: var(--font-mono);
-        font-size: 9px;
-        font-weight: 700;
-        text-transform: uppercase;
+
+      .section-label--planned {
+        border-color: var(--c-planned);
+        border-style: dashed;
+        background: var(--c-planned-soft);
       }
-      .field-row {
+
+      .section-label--planned .section-label__index {
+        border-right-color: var(--c-planned);
+        color: var(--c-planned);
+      }
+
+      .step {
         display: grid;
-        grid-template-columns: minmax(125px, 0.75fr) minmax(190px, 1.35fr) minmax(180px, 1.1fr);
-        min-width: 0;
-        border-bottom: 1px solid #e2e8f0;
+        grid-template-columns: 182px minmax(0, 1fr);
+        border: 1px solid var(--c-border-strong);
+        background: #ffffff;
       }
-      .field-row:last-child { border-bottom: 0; }
-      .field-name,
-      .field-value,
-      .field-meaning { min-width: 0; padding: 9px 10px; font-size: 11px; line-height: 1.48; }
-      .field-name { border-right: 1px solid #e2e8f0; color: var(--c-text-sub); font-family: var(--font-mono); font-weight: 650; overflow-wrap: anywhere; }
-      .field-value { border-right: 1px solid #e2e8f0; background: var(--c-panel); font-family: var(--font-mono); overflow-wrap: anywhere; }
-      .field-value strong { color: var(--c-accent); }
-      .field-meaning { color: var(--c-text-sub); }
-      .card-foot { padding: 10px 12px; border-top: 1px solid var(--c-border); background: var(--c-accent-soft); color: #115e59; font-size: 11px; line-height: 1.5; }
-      .reference-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
-      .reference-card { padding: 16px; border: 1px solid var(--c-border); }
-      .reference-card h3 { margin: 0 0 12px; font-size: 13px; }
-      .reference-card dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 12px; margin: 0; }
-      .reference-card dt { font-family: var(--font-mono); font-size: 10px; font-weight: 700; }
-      .reference-card dd { margin: 0; color: var(--c-text-sub); font-size: 11px; line-height: 1.45; }
-      .review-note { display: grid; grid-template-columns: 180px minmax(0, 1fr); border: 1px solid var(--c-border-strong); }
-      .review-note__label {
-        padding: 16px;
+
+      .step--evidence {
+        border-color: var(--c-risk);
+      }
+
+      .step--planned {
+        border-color: var(--c-planned);
+        border-style: dashed;
+      }
+
+      .step__actor {
+        min-width: 0;
+        padding: 16px 14px;
         border-right: 1px solid var(--c-border-strong);
-        background: var(--c-text-main);
-        color: #ffffff;
-        font-family: var(--font-mono);
-        font-size: 11px;
-        font-weight: 700;
+        background: var(--c-panel);
+      }
+
+      .step--evidence .step__actor {
+        border-right-color: var(--c-risk);
+        background: var(--c-risk-soft);
+      }
+
+      .step--planned .step__actor {
+        border-right-color: var(--c-planned);
+        background: var(--c-planned-soft);
+      }
+
+      .step__number {
+        display: block;
+        color: var(--c-accent);
+        font: 800 11px/1.3 var(--font-mono);
         letter-spacing: 0.08em;
+      }
+
+      .step--evidence .step__number {
+        color: var(--c-risk);
+      }
+
+      .step--planned .step__number,
+      .step--planned .step__schema,
+      .step--planned .field__name {
+        color: var(--c-planned);
+      }
+
+      .step__actor-name {
+        display: block;
+        margin-top: 6px;
+        font-size: 15px;
+        font-weight: 800;
+        line-height: 1.35;
+      }
+
+      .step__actor-role {
+        display: block;
+        margin-top: 4px;
+        color: var(--c-text-sub);
+        font-size: 11px;
+        line-height: 1.45;
+      }
+
+      .step__body {
+        min-width: 0;
+        padding: 15px 17px 16px;
+      }
+
+      .step__title-row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 8px 18px;
+        margin-bottom: 11px;
+      }
+
+      .step__title {
+        margin: 0;
+        font-size: 16px;
+        line-height: 1.35;
+      }
+
+      .step__schema {
+        color: var(--c-accent);
+        font: 700 11px/1.45 var(--font-mono);
+        overflow-wrap: anywhere;
+      }
+
+      .field-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        border-top: 1px solid var(--c-border);
+        border-left: 1px solid var(--c-border);
+      }
+
+      .field {
+        min-width: 0;
+        padding: 9px 10px 10px;
+        border-right: 1px solid var(--c-border);
+        border-bottom: 1px solid var(--c-border);
+        background: #ffffff;
+      }
+
+      .field--wide {
+        grid-column: span 2;
+      }
+
+      .field--full {
+        grid-column: 1 / -1;
+      }
+
+      .field__name {
+        display: block;
+        margin-bottom: 4px;
+        color: var(--c-accent);
+        font: 750 10px/1.35 var(--font-mono);
+        overflow-wrap: anywhere;
+      }
+
+      .step--evidence .field__name {
+        color: var(--c-risk);
+      }
+
+      .field__value {
+        display: block;
+        font: 650 12px/1.48 var(--font-mono);
+        overflow-wrap: anywhere;
+      }
+
+      .field__meaning {
+        display: block;
+        margin-top: 4px;
+        color: var(--c-text-sub);
+        font-size: 11px;
+        line-height: 1.48;
+      }
+
+      .connector {
+        display: grid;
+        grid-template-columns: 182px minmax(0, 1fr);
+        min-height: 48px;
+      }
+
+      .connector__rail {
+        display: flex;
+        justify-content: center;
+        align-items: stretch;
+      }
+
+      .connector__rail svg {
+        display: block;
+        width: 24px;
+        height: 48px;
+        overflow: visible;
+      }
+
+      .connector__label {
+        align-self: center;
+        margin-left: 18px;
+        padding-left: 12px;
+        border-left: 3px solid var(--c-accent);
+        color: var(--c-text-sub);
+        font: 600 11px/1.48 var(--font-mono);
+        overflow-wrap: anywhere;
+      }
+
+      .connector--evidence .connector__label {
+        border-left-color: var(--c-risk);
+        color: var(--c-risk);
+      }
+
+      .connector--planned .connector__label {
+        border-left-color: var(--c-planned);
+        color: var(--c-planned);
+      }
+
+      .outcome-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        margin-top: 22px;
+        border: 2px solid var(--c-accent);
+        background: var(--c-accent-soft);
+      }
+
+      .outcome {
+        padding: 13px 14px;
+        border-right: 1px solid var(--c-border-strong);
+      }
+
+      .outcome:last-child {
+        border-right: 0;
+      }
+
+      .outcome__label {
+        display: block;
+        margin-bottom: 4px;
+        color: var(--c-accent);
+        font: 800 10px/1.3 var(--font-mono);
+        letter-spacing: 0.07em;
         text-transform: uppercase;
       }
-      .review-note__body { padding: 14px 16px; color: var(--c-text-sub); font-size: 12px; line-height: 1.65; }
-      .review-note__body strong { color: var(--c-text-main); }
-      .footer {
+
+      .outcome__value {
+        font-size: 12px;
+        font-weight: 750;
+        line-height: 1.52;
+      }
+
+      .boundary-note {
+        margin-top: 20px;
+        padding: 14px 16px;
+        border: 1px solid var(--c-risk);
+        border-left: 5px solid var(--c-risk);
+        background: var(--c-risk-soft);
+      }
+
+      .boundary-note h2 {
+        margin: 0 0 6px;
+        color: var(--c-risk);
+        font-size: 13px;
+      }
+
+      .boundary-note p {
+        margin: 0;
+        color: #71392f;
+        font-size: 12px;
+        line-height: 1.65;
+      }
+
+      .legend {
         display: flex;
-        justify-content: space-between;
-        gap: 18px;
-        margin-top: 28px;
-        padding-top: 16px;
+        flex-wrap: wrap;
+        gap: 12px 26px;
+        align-items: center;
+        margin-top: 20px;
+        padding-top: 14px;
         border-top: 1px solid var(--c-border);
         color: var(--c-text-sub);
-        font-size: 10px;
-        line-height: 1.5;
+        font-size: 11px;
       }
-      .footer code { font-family: var(--font-mono); overflow-wrap: anywhere; }
-      @media (max-width: 1080px) {
-        body { padding: 18px; }
-        .diagram-canvas { padding: 20px; }
-        .diagram-header { flex-direction: column; }
-        .header-meta { justify-content: flex-start; }
-        .fact-strip,
-        .step-grid,
-        .reference-grid { grid-template-columns: 1fr; }
-        .fact { border-right: 0; border-bottom: 1px solid var(--c-border); }
-        .fact:last-child { border-bottom: 0; }
+
+      .legend__title {
+        color: var(--c-text-main);
+        font: 800 10px/1.3 var(--font-mono);
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
       }
-      @media (max-width: 720px) {
-        body { padding: 0; }
-        .diagram-canvas { padding: 16px; border-left: 0; border-right: 0; }
-        .field-row { grid-template-columns: 1fr; }
-        .field-name,
-        .field-value { border-right: 0; border-bottom: 1px solid #e2e8f0; }
-        .review-note { grid-template-columns: 1fr; }
-        .review-note__label { border-right: 0; border-bottom: 1px solid var(--c-border-strong); }
-        .footer { flex-direction: column; }
+
+      .legend__item {
+        display: inline-flex;
+        gap: 7px;
+        align-items: center;
       }
+
+      @media (max-width: 900px) {
+        body {
+          padding: 12px;
+        }
+
+        .diagram-canvas {
+          margin: 0;
+        }
+      }
+
       @media print {
-        body { padding: 0; background: #ffffff; }
-        .diagram-canvas { border: 0; }
-        .step-nav { display: none; }
+        body {
+          padding: 0;
+          background: #ffffff;
+        }
+
+        .page-scroll {
+          overflow: visible;
+        }
+
+        .diagram-canvas {
+          width: 100%;
+          min-width: 0;
+          border-width: 1px;
+        }
       }
     </style>
   </head>
   <body>
-    <main class="page">
+    <main class="page-scroll">
       <article class="diagram-canvas" aria-labelledby="diagram-title">
         <header class="diagram-header">
           <div>
-            <p class="eyebrow">Checkpoint / Current path / Side effect</p>
-            <h1 id="diagram-title">一次 Checkpoint 如何创建快照</h1>
+            <p class="eyebrow">Gateway State Provider / Workspace Checkpoint / Guarded V2</p>
+            <h1 id="diagram-title">一次安全 checkpoint：先持久化授权，再执行一次副作用</h1>
             <p class="subtitle">
-              示例从一条 <code>cosh-cli checkpoint create</code> 命令开始，经过
-              Unix socket 到达 ws-ckpt，最后创建 Btrfs 只读快照并返回结果。
+              当前 PoC 已把 <code>workspace_checkpoint_create({})</code> 从 COSH Runtime 接入 Gateway
+              State Provider。Gateway 先持久化 approval、binding v4、稳定 permit/execution、claim 与
+              start，再发起一次 GuardedCheckpointV2；不确定或重启恢复只查询 evidence。
             </p>
           </div>
-          <div class="header-meta" aria-label="图表元数据">
-            <span class="badge badge--accent">Drafter blueprint</span>
-            <span class="badge">Current implementation</span>
-            <span class="badge">Legacy checkpoint wire</span>
+          <div class="header-meta" aria-label="图示状态">
+            <span class="badge badge--implemented">Runtime → Gateway 已接</span>
+            <span class="badge badge--implemented">binding v4 · guarded v2</span>
+            <span class="badge badge--implemented">VM happy path · passed</span>
+            <span class="badge badge--gap">response-loss / restart · pending</span>
+            <span class="badge">same-host guarded checkpoint</span>
           </div>
         </header>
 
-        <div class="fact-strip" aria-label="调用摘要">
-          <div class="fact"><span class="fact__label">Workspace</span><span class="fact__value">/home/agent/project</span></div>
-          <div class="fact"><span class="fact__label">Checkpoint id</span><span class="fact__value">before-change</span></div>
-          <div class="fact"><span class="fact__label">Transport</span><span class="fact__value">Unix socket + bincode</span></div>
-          <div class="fact"><span class="fact__label">Result</span><span class="fact__value">CheckpointOk · skipped=false</span></div>
-        </div>
-
-        <section class="section" aria-labelledby="route-title">
-          <div class="section-head">
-            <h2 class="section-title" id="route-title">1. 当前真实调用路径</h2>
-            <p class="section-note">选择节点可跳到对应字段。</p>
+        <section class="status-grid" aria-label="架构定位">
+          <div class="status status--current">
+            <span class="status__label">Current implementation</span>
+            <span class="status__value">COSH hosted tool + Gateway <code>workspace-checkpoint-v1</code> profile + sealed <code>ws-ckpt</code> target。</span>
           </div>
-          <div class="route-scroll">
-            <div class="route-canvas">
-              <a class="route-node node-user" href="#ck-step-1"><span class="route-node__role">Caller</span><span class="route-node__name">用户或 Agent</span><span class="route-node__desc">请求创建安全点</span></a>
-              <a class="route-node node-cli" href="#ck-step-1"><span class="route-node__role">CLI</span><span class="route-node__name">cosh-cli</span><span class="route-node__desc">校验参数并包装输出</span></a>
-              <a class="route-node node-client" href="#ck-step-2"><span class="route-node__role">IPC client</span><span class="route-node__name">CkptClient</span><span class="route-node__desc">编码请求和读取响应</span></a>
-              <a class="route-node node-daemon" href="#ck-step-4"><span class="route-node__role">Local service</span><span class="route-node__name">ws-ckpt daemon</span><span class="route-node__desc">鉴权和调度</span></a>
-              <a class="route-node node-manager" href="#ck-step-4"><span class="route-node__role">Domain logic</span><span class="route-node__name">Snapshot Manager</span><span class="route-node__desc">检查并创建快照</span></a>
-              <a class="route-node node-storage" href="#ck-step-5"><span class="route-node__role">Persistent state</span><span class="route-node__name">Btrfs + index</span><span class="route-node__desc">快照、DAG 和 head</span></a>
+          <div class="status">
+            <span class="status__label">Gateway external wire</span>
+            <span class="status__value">Legacy v1 只兼容 exact <code>task-only-v1</code>；<code>workspace-checkpoint-v1</code> 必须使用 v2 admission echo，v1 submit 会被拒绝。</span>
+          </div>
+          <div class="status status--gap">
+            <span class="status__label">Validation boundary</span>
+            <span class="status__value">Ubuntu VM happy path 已通过：Herdr <code>plugin-log-11</code> succeeded，Gateway 记录 11 个 approval → permit → execution → Guarded V2 → task_succeeded 事件，snapshot=<code>ckp_8e84400b…</code>。response-loss、fault/restart 与 evidence-only reconcile VM 演练仍 pending。</span>
+          </div>
+        </section>
 
-              <svg class="connectors" role="img" aria-label="Checkpoint 请求与结果回流">
-                <defs>
-                  <marker id="ck-arrow-request" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M 0 1 L 10 5 L 0 9 z" fill="#0f172a" /></marker>
-                  <marker id="ck-arrow-return" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M 0 1 L 10 5 L 0 9 z" fill="#0f766e" /></marker>
-                </defs>
-                <line class="conn conn--flow" x1="184" y1="59" x2="226" y2="59" />
-                <line class="conn conn--flow" x1="392" y1="59" x2="434" y2="59" />
-                <line class="conn conn--flow" x1="600" y1="59" x2="642" y2="59" />
-                <line class="conn conn--flow" x1="808" y1="59" x2="850" y2="59" />
-                <line class="conn conn--flow" x1="1016" y1="59" x2="1058" y2="59" />
-                <line class="conn conn--flow conn--return" x1="1058" y1="92" x2="1016" y2="92" />
-                <line class="conn conn--flow conn--return" x1="850" y1="92" x2="808" y2="92" />
-                <line class="conn conn--flow conn--return" x1="642" y1="92" x2="600" y2="92" />
-                <line class="conn conn--flow conn--return" x1="434" y1="92" x2="392" y2="92" />
-                <line class="conn conn--flow conn--return" x1="226" y1="92" x2="184" y2="92" />
-                <text class="connector-label" x="205" y="52" text-anchor="middle">CLI</text>
-                <text class="connector-label" x="413" y="52" text-anchor="middle">create</text>
-                <text class="connector-label" x="621" y="52" text-anchor="middle">frame</text>
-                <text class="connector-label" x="829" y="52" text-anchor="middle">dispatch</text>
-                <text class="connector-label" x="1037" y="52" text-anchor="middle">persist</text>
-                <text class="connector-label connector-label--return" x="1037" y="106" text-anchor="middle">created</text>
-                <text class="connector-label connector-label--return" x="829" y="106" text-anchor="middle">ok</text>
-                <text class="connector-label connector-label--return" x="621" y="106" text-anchor="middle">response</text>
-                <text class="connector-label connector-label--return" x="413" y="106" text-anchor="middle">display</text>
-                <text class="connector-label connector-label--return" x="205" y="106" text-anchor="middle">JSON</text>
-              </svg>
-              <p class="route-caption">黑色线传递创建请求，青色线返回快照结果。</p>
+        <section aria-label="Checkpoint 创建时序">
+          <div class="section-label">
+            <span class="section-label__index">INSTANCE ADMISSION</span>
+            <span class="section-label__text">安装 ws-ckpt 不产生权限；显式配置并验证实例绑定后才可执行</span>
+          </div>
+
+          <article class="step">
+            <div class="step__actor">
+              <span class="step__number">STEP 01</span>
+              <strong class="step__actor-name">Gateway Startup</strong>
+              <span class="step__actor-role">trusted instance configuration</span>
             </div>
+            <div class="step__body">
+              <div class="step__title-row">
+                <h2 class="step__title">显式启用 checkpoint profile 并解析真实绑定</h2>
+                <span class="step__schema">CheckpointDriver::admit</span>
+              </div>
+              <div class="field-grid">
+                <div class="field field--full">
+                  <span class="field__name">serve flags</span>
+                  <span class="field__value">--capability-profile workspace-checkpoint-v1 · --checkpoint-socket /run/ws-ckpt-agent-work/ws-ckpt.sock · --workspace /workspace</span>
+                  <span class="field__meaning">所有副作用入口都来自系统级显式配置；默认 Task-only 实例不拥有 checkpoint 权限。</span>
+                </div>
+                <div class="field field--full">
+                  <span class="field__name">Gateway wire admission rule</span>
+                  <span class="field__value">v1 + exact task-only-v1 only · checkpoint profile requires v2 + exact admission echo</span>
+                  <span class="field__meaning">Checkpoint 请求不能借 legacy v1 绕过 profile、target、workspace 或 Runtime 绑定。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">socket identity</span>
+                  <span class="field__value">absolute path + device + inode</span>
+                  <span class="field__meaning">运行中若 socket 被替换，Gateway fail closed。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">peer / owner</span>
+                  <span class="field__value">daemon_uid + gateway owner_uid</span>
+                  <span class="field__meaning">Unix peer credentials 限制调用者与服务端身份。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">PinnedDirectory</span>
+                  <span class="field__value">O_PATH fd + runtime device/inode</span>
+                  <span class="field__meaning">Gateway 保留 Runtime 实际工作区 inode，不在调用时重新按配置路径查找。</span>
+                </div>
+                <div class="field field--wide">
+                  <span class="field__name">WorkspaceIdentityV2 / generation</span>
+                  <span class="field__value">ws_id + registered_path + sha256(v2 domain + Btrfs FSID + subvolume UUID)</span>
+                  <span class="field__meaning">通过已 pin fd 的 <code>/proc/self/fd/N</code> 可读句柄计算，并与 ws-ckpt 返回值比对。</span>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <div class="connector" aria-label="实例 admission 后 Runtime 使用已协商工具入口">
+            <div class="connector__rail">
+              <svg viewBox="0 0 24 48" role="img" aria-label="向下的计划接线">
+                <defs>
+                  <marker id="c-arrow-01" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                    <path d="M 0 1 L 10 5 L 0 9 z" fill="#1769aa" />
+                  </marker>
+                </defs>
+                <line class="conn conn--flow" x1="12" y1="0" x2="12" y2="44" stroke="#1769aa" stroke-width="2" marker-end="url(#c-arrow-01)" />
+              </svg>
+            </div>
+            <div class="connector__label"><strong>IMPLEMENTED</strong> · profile negotiation advertises workspace_checkpoint_create</div>
           </div>
-          <div class="legend" aria-label="连线图例">
-            <span class="legend__title">Legend</span>
-            <span class="legend__item"><svg width="42" height="12" aria-hidden="true"><defs><marker id="ck-lg-request" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M 0 1 L 10 5 L 0 9 z" fill="#0f172a" /></marker></defs><line x1="0" y1="6" x2="34" y2="6" stroke="#0f172a" stroke-width="1.5" marker-end="url(#ck-lg-request)" /></svg>创建请求</span>
-            <span class="legend__item"><svg width="42" height="12" aria-hidden="true"><defs><marker id="ck-lg-return" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M 0 1 L 10 5 L 0 9 z" fill="#0f766e" /></marker></defs><line x1="0" y1="6" x2="34" y2="6" stroke="#0f766e" stroke-width="1.75" marker-end="url(#ck-lg-return)" /></svg>创建结果</span>
+
+          <div class="section-label">
+            <span class="section-label__index">RUNTIME INGRESS · IMPLEMENTED</span>
+            <span class="section-label__text">模型只能调用空参数工具；Bridge 绑定已观察 tool_use 并生成全部执行身份</span>
           </div>
-          <div class="boundary-strip">
-            <strong>当前链路不经过 AW Core 和 Provider Host。</strong>
-            PR head 中没有 Checkpoint Capability、canonical Schema、Provider manifest 或
-            ProviderReceipt。实线只表示仓库里已经存在的调用。
+
+          <article class="step">
+            <div class="step__actor">
+              <span class="step__number">STEP 02</span>
+              <strong class="step__actor-name">COSH Runtime</strong>
+              <span class="step__actor-role">hosted tool + Gateway bridge</span>
+            </div>
+            <div class="step__body">
+              <div class="step__title-row">
+                <h2 class="step__title">把空参数工具调用变成受治理 CapabilityRequest</h2>
+                <span class="badge badge--implemented">已接线</span>
+              </div>
+              <div class="field-grid">
+                <div class="field field--wide">
+                  <span class="field__name">model tool call</span>
+                  <span class="field__value">workspace_checkpoint_create({})</span>
+                  <span class="field__meaning">工作区、socket 和权限均不能由模型参数覆盖。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">observed tool binding</span>
+                  <span class="field__value">private_tool_use_id → AW ToolUseId</span>
+                  <span class="field__meaning">Bridge 只接受本轮已观察到的同名 tool use。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">checkpoint_id</span>
+                  <span class="field__value">ckp_8e84400b…（Bridge 生成）</span>
+                  <span class="field__meaning">不从模型输入读取，是快照与 evidence 的幂等身份。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">operation</span>
+                  <span class="field__value">workspace / checkpoint_create</span>
+                  <span class="field__meaning">封闭 descriptor + WorkspaceCheckpointCreateV1。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">request_id / task_id / run_id</span>
+                  <span class="field__value">req_… / tsk_… / run_…</span>
+                  <span class="field__meaning">把副作用归属到一次运行。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">operation_digest</span>
+                  <span class="field__value">sha256(normalized operation)</span>
+                  <span class="field__meaning">绑定操作名称与规范化参数。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">input_digest / expires_at_ms</span>
+                  <span class="field__value">sha256(private callback input tuple) / prompt deadline</span>
+                  <span class="field__meaning">私有 request 与本轮截止时间一起进入 durable admission。</span>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <div class="connector" aria-label="Runtime 到 Gateway Broker 已实现接线">
+            <div class="connector__rail">
+              <svg viewBox="0 0 24 48" role="img" aria-label="向下的计划接线">
+                <defs>
+                  <marker id="c-arrow-02" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                    <path d="M 0 1 L 10 5 L 0 9 z" fill="#1769aa" />
+                  </marker>
+                </defs>
+                <line class="conn conn--flow" x1="12" y1="0" x2="12" y2="44" stroke="#1769aa" stroke-width="2" marker-end="url(#c-arrow-02)" />
+              </svg>
+            </div>
+            <div class="connector__label"><strong>IMPLEMENTED</strong> · COSH Runtime → Gateway Broker · CapabilityRequest + typed operation</div>
+          </div>
+
+          <div class="section-label">
+            <span class="section-label__index">GATEWAY EFFECT PATH</span>
+            <span class="section-label__text">Brokered request、批准身份和真实 provider binding 共同决定一次副作用</span>
+          </div>
+
+          <article class="step">
+            <div class="step__actor">
+              <span class="step__number">STEP 03</span>
+              <strong class="step__actor-name">Gateway Policy</strong>
+              <span class="step__actor-role">approval + sealed binding</span>
+            </div>
+            <div class="step__body">
+              <div class="step__title-row">
+                <h2 class="step__title">先分配稳定执行身份，再持久化 approval 与 binding</h2>
+                <span class="step__schema">CheckpointBinding v4</span>
+              </div>
+              <div class="field-grid">
+                <div class="field">
+                  <span class="field__name">preallocated identity</span>
+                  <span class="field__value">permit_id + execution_id</span>
+                  <span class="field__meaning">在 approval 对外可见前分配并写入 binding v4。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">approval</span>
+                  <span class="field__value">approval_id + decision=approve</span>
+                  <span class="field__meaning">拒绝或未批准的过期请求不会消费副作用权限。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">runtime_fence</span>
+                  <span class="field__value">runtime binding + run lease</span>
+                  <span class="field__meaning">只有当前受信 runtime 能消费 permit。</span>
+                </div>
+                <div class="field field--full">
+                  <span class="field__name">provider_binding</span>
+                  <span class="field__value">v4 · protocol=v2 · socket dev/ino/uid · runtime workspace dev/ino · ws_id · path · generation · owner_uid · permit_id · execution_id</span>
+                  <span class="field__meaning">批准、执行和历史恢复使用同一 sealed binding；不依赖重新解析旧路径。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">target_identity_digest</span>
+                  <span class="field__value">sha256(profile + target + binding v4)</span>
+                  <span class="field__meaning">包括稳定 permit/execution 与真实 inode/generation。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">digest binding</span>
+                  <span class="field__value">operation_digest + input_digest</span>
+                  <span class="field__meaning">permit 不可挪给别的参数。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">replay rule</span>
+                  <span class="field__value">same approval → same permit_id / execution_id</span>
+                  <span class="field__meaning">批准落盘后即使原 deadline 已过，重放也只能恢复同一权威。</span>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <div class="connector" aria-label="Policy 到 durable execution">
+            <div class="connector__rail">
+              <svg viewBox="0 0 24 48" role="img" aria-label="向下数据流">
+                <defs>
+                  <marker id="c-arrow-03" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                    <path d="M 0 1 L 10 5 L 0 9 z" fill="#1769aa" />
+                  </marker>
+                </defs>
+                <line class="conn conn--flow" x1="12" y1="0" x2="12" y2="44" stroke="#1769aa" stroke-width="2" marker-end="url(#c-arrow-03)" />
+              </svg>
+            </div>
+            <div class="connector__label">approved permit → GovernedExecutionCoordinator</div>
+          </div>
+
+          <div class="section-label">
+            <span class="section-label__index">EFFECT COMMIT</span>
+            <span class="section-label__text">claim 与 start 必须先落盘，ws-ckpt 副作用随后最多发起一次</span>
+          </div>
+
+          <article class="step">
+            <div class="step__actor">
+              <span class="step__number">STEP 04</span>
+              <strong class="step__actor-name">Gateway Ledger</strong>
+              <span class="step__actor-role">durable authority + start marker</span>
+            </div>
+            <div class="step__body">
+              <div class="step__title-row">
+                <h2 class="step__title">原子 claim permit，再持久化 started 状态</h2>
+                <span class="step__schema">checkpoint_claim → checkpoint_start</span>
+              </div>
+              <div class="field-grid">
+                <div class="field">
+                  <span class="field__name">ExecutionClaim</span>
+                  <span class="field__value">permit_id + execution_id + lease</span>
+                  <span class="field__meaning">必须等于 approval plan 在 binding v4 中预分配的身份。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">bound facts</span>
+                  <span class="field__value">target + target digest + runtime fence</span>
+                  <span class="field__meaning">claim 继续沿用 permit 的目标身份。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">input facts</span>
+                  <span class="field__value">operation_digest + input_digest</span>
+                  <span class="field__meaning">副作用参数不可在 claim 后变化。</span>
+                </div>
+                <div class="field field--wide">
+                  <span class="field__name">durable order</span>
+                  <span class="field__value">request → approval → permit → claim → start → external effect → terminal</span>
+                  <span class="field__meaning">没有 durable start，不允许调用 ws-ckpt；重启看到 start 后进入证据恢复。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">provider_binding</span>
+                  <span class="field__value">exact persisted CheckpointBinding v4</span>
+                  <span class="field__meaning">执行加载持久化绑定并与当前实例比对；接管恢复继续用历史绑定查询证据。</span>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <div class="connector" aria-label="Gateway Ledger 到 ws-ckpt">
+            <div class="connector__rail">
+              <svg viewBox="0 0 24 48" role="img" aria-label="向下数据流">
+                <defs>
+                  <marker id="c-arrow-04" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                    <path d="M 0 1 L 10 5 L 0 9 z" fill="#1769aa" />
+                  </marker>
+                </defs>
+                <line class="conn conn--flow" x1="12" y1="0" x2="12" y2="44" stroke="#1769aa" stroke-width="2" marker-end="url(#c-arrow-04)" />
+              </svg>
+            </div>
+            <div class="connector__label">after durable start · Gateway → ws-ckpt Unix socket</div>
+          </div>
+
+          <article class="step">
+            <div class="step__actor">
+              <span class="step__number">STEP 05</span>
+              <strong class="step__actor-name">ws-ckpt</strong>
+              <span class="step__actor-role">Guarded Checkpoint V2 daemon</span>
+            </div>
+            <div class="step__body">
+              <div class="step__title-row">
+                <h2 class="step__title">验证 generation 与 peer UID 后创建一次 checkpoint</h2>
+                <span class="step__schema">GuardedCheckpointV2</span>
+              </div>
+              <div class="field-grid">
+                <div class="field">
+                  <span class="field__name">ws_id</span>
+                  <span class="field__value">ws-db447c</span>
+                  <span class="field__meaning">必须等于 admission 时解析的工作区。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">expected_generation</span>
+                  <span class="field__value">exact WorkspaceGenerationTokenV2</span>
+                  <span class="field__meaning">工作区被重建后旧请求不能生效。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">checkpoint_id</span>
+                  <span class="field__value">ckp_8e84400b…（与 Bridge 生成值相同）</span>
+                  <span class="field__meaning">与 brokered operation 相同。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">operation_digest</span>
+                  <span class="field__value">exact 32-byte SHA-256</span>
+                  <span class="field__meaning">将 daemon 证据绑定到高层操作。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">message / metadata / pin</span>
+                  <span class="field__value">governed task checkpoint / null / false</span>
+                  <span class="field__meaning">非身份参数保持受控。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">daemon checks</span>
+                  <span class="field__value">peer UID + registered path + generation</span>
+                  <span class="field__meaning">不满足时返回 KnownNoEffect rejection。</span>
+                </div>
+                <div class="field field--wide">
+                  <span class="field__name">effect call count</span>
+                  <span class="field__value">guarded_create_v2 = exactly one initial attempt</span>
+                  <span class="field__meaning">传输结果不确定后不会再次调用 create，只能查询 evidence。</span>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <div class="connector" aria-label="ws-ckpt 到 durable evidence">
+            <div class="connector__rail">
+              <svg viewBox="0 0 24 48" role="img" aria-label="向下数据流">
+                <defs>
+                  <marker id="c-arrow-05" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                    <path d="M 0 1 L 10 5 L 0 9 z" fill="#1769aa" />
+                  </marker>
+                </defs>
+                <line class="conn conn--flow" x1="12" y1="0" x2="12" y2="44" stroke="#1769aa" stroke-width="2" marker-end="url(#c-arrow-05)" />
+              </svg>
+            </div>
+            <div class="connector__label">ws-ckpt → Gateway · GuardedCheckpointEvidenceV2</div>
+          </div>
+
+          <article class="step">
+            <div class="step__actor">
+              <span class="step__number">STEP 06</span>
+              <strong class="step__actor-name">Gateway Target</strong>
+              <span class="step__actor-role">evidence verification</span>
+            </div>
+            <div class="step__body">
+              <div class="step__title-row">
+                <h2 class="step__title">逐字段验证 daemon 的 durable evidence</h2>
+                <span class="step__schema">GuardedCheckpointEvidenceV2</span>
+              </div>
+              <div class="field-grid">
+                <div class="field">
+                  <span class="field__name">workspace identity</span>
+                  <span class="field__value">ws_id + registered_path + generation</span>
+                  <span class="field__meaning">三者全部匹配原 provider binding。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">operation identity</span>
+                  <span class="field__value">checkpoint_id + operation_digest</span>
+                  <span class="field__meaning">证据必须属于本次操作。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">caller identity</span>
+                  <span class="field__value">caller_uid == owner_uid</span>
+                  <span class="field__meaning">daemon 记录的实际 peer 必须匹配。</span>
+                </div>
+                <div class="field field--wide">
+                  <span class="field__name">outcome</span>
+                  <span class="field__value">Created { snapshot_id=ckp_8e84400b… } 或 Skipped { reason }</span>
+                  <span class="field__meaning">Created 的 snapshot_id 必须等于请求的 checkpoint_id。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">receipt_digest</span>
+                  <span class="field__value">sha256(target + operation + evidence)</span>
+                  <span class="field__meaning">Gateway 自己计算，不接受 Provider 自报摘要。</span>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <div class="connector connector--evidence" aria-label="不确定结果进入证据恢复">
+            <div class="connector__rail">
+              <svg viewBox="0 0 24 48" role="img" aria-label="向下证据查询流">
+                <defs>
+                  <marker id="c-arrow-06" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                    <path d="M 0 1 L 10 5 L 0 9 z" fill="#a03321" />
+                  </marker>
+                </defs>
+                <line class="conn conn--critical" x1="12" y1="0" x2="12" y2="44" stroke="#a03321" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#c-arrow-06)" />
+              </svg>
+            </div>
+            <div class="connector__label">only when response/commit is ambiguous · exact evidence lookup, never effect replay</div>
+          </div>
+
+          <article class="step step--evidence">
+            <div class="step__actor">
+              <span class="step__number">STEP 07 · RECOVERY</span>
+              <strong class="step__actor-name">Gateway Recovery</strong>
+              <span class="step__actor-role">query-only reconciliation</span>
+            </div>
+            <div class="step__body">
+              <div class="step__title-row">
+                <h2 class="step__title">不确定时只查询同一操作的证据</h2>
+                <span class="badge badge--gap">never replay create</span>
+              </div>
+              <div class="field-grid">
+                <div class="field field--wide">
+                  <span class="field__name">checkpoint_evidence_v2 query key</span>
+                  <span class="field__value">ws_id + expected_generation + checkpoint_id + operation_digest</span>
+                  <span class="field__meaning">查询键与 GuardedCheckpointV2 完全相同，但该操作不产生新 checkpoint。</span>
+                </div>
+                <div class="field field--wide">
+                  <span class="field__name">recovery endpoint rule</span>
+                  <span class="field__value">authenticate current trusted socket peer · query exact historical binding identity</span>
+                  <span class="field__meaning">daemon 或 socket 重启后不要求 inode 与旧记录相同；UID 必须仍匹配，查询参数来自持久化 binding v4。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">matching evidence</span>
+                  <span class="field__value">conclusive</span>
+                  <span class="field__meaning">复用 STEP 06 的完整逐字段校验。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">none / timeout / mismatch</span>
+                  <span class="field__value">unknown → uncertain</span>
+                  <span class="field__meaning">保持不确定，不猜测成功或失败。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">forbidden action</span>
+                  <span class="field__value">GuardedCheckpointV2 replay</span>
+                  <span class="field__meaning">副作用请求不得为“重试方便”而重发。</span>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <div class="connector" aria-label="证据校验到 terminal receipt">
+            <div class="connector__rail">
+              <svg viewBox="0 0 24 48" role="img" aria-label="向下数据流">
+                <defs>
+                  <marker id="c-arrow-07" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                    <path d="M 0 1 L 10 5 L 0 9 z" fill="#1769aa" />
+                  </marker>
+                </defs>
+                <line class="conn conn--flow" x1="12" y1="0" x2="12" y2="44" stroke="#1769aa" stroke-width="2" marker-end="url(#c-arrow-07)" />
+              </svg>
+            </div>
+            <div class="connector__label">conclusive evidence or explicit uncertain outcome → durable terminal delivery</div>
+          </div>
+
+          <article class="step">
+            <div class="step__actor">
+              <span class="step__number">STEP 08</span>
+              <strong class="step__actor-name">Gateway Ledger</strong>
+              <span class="step__actor-role">terminal receipt + typed result</span>
+            </div>
+            <div class="step__body">
+              <div class="step__title-row">
+                <h2 class="step__title">持久化唯一终态，再交付给 Runtime 与 Herdr</h2>
+                <span class="step__schema">BrokeredExecutionOutcome</span>
+              </div>
+              <div class="field-grid">
+                <div class="field">
+                  <span class="field__name">Succeeded</span>
+                  <span class="field__value">execution_id + typed result</span>
+                  <span class="field__meaning">仅有匹配 evidence 时成立。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">typed result</span>
+                  <span class="field__value">Created { snapshot_id } / Skipped { reason }</span>
+                  <span class="field__meaning">Runtime 不解析 daemon 私有 wire 格式。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">Uncertain</span>
+                  <span class="field__value">checkpoint_result_uncertain</span>
+                  <span class="field__meaning">证据无法证明时保持可见的不确定状态。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">terminal receipt</span>
+                  <span class="field__value">receipt_digest + safe detail + committed_at</span>
+                  <span class="field__meaning">持久化后才向 Runtime 宣告终态。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">Herdr projection</span>
+                  <span class="field__value">plugin-log-11 · succeeded · task_succeeded</span>
+                  <span class="field__meaning">VM happy path 的只读展示结果；Herdr 不拥有执行权限。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">raw workspace content</span>
+                  <span class="field__value">not stored in Gateway receipt</span>
+                  <span class="field__meaning">审计记录保持最小化。</span>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <div class="connector" aria-label="Gateway typed result 回到 Core">
+            <div class="connector__rail">
+              <svg viewBox="0 0 24 48" role="img" aria-label="向下数据流">
+                <defs>
+                  <marker id="c-arrow-08" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                    <path d="M 0 1 L 10 5 L 0 9 z" fill="#1769aa" />
+                  </marker>
+                </defs>
+                <line class="conn conn--flow" x1="12" y1="0" x2="12" y2="44" stroke="#1769aa" stroke-width="2" marker-end="url(#c-arrow-08)" />
+              </svg>
+            </div>
+            <div class="connector__label">Gateway → COSH Core · typed checkpoint result → ordinary Tool Result final-adoption boundary</div>
+          </div>
+
+          <article class="step">
+            <div class="step__actor">
+              <span class="step__number">STEP 09</span>
+              <strong class="step__actor-name">COSH + AW Core</strong>
+              <span class="step__actor-role">result delivery + final adoption</span>
+            </div>
+            <div class="step__body">
+              <div class="step__title-row">
+                <h2 class="step__title">把已落稳的 effect result 交给模型历史</h2>
+                <span class="step__schema">AW effective-bytes boundary</span>
+              </div>
+              <div class="field-grid">
+                <div class="field field--wide">
+                  <span class="field__name">typed checkpoint result</span>
+                  <span class="field__value">Created { checkpoint_id, snapshot_id } / Skipped { reason } / Uncertain</span>
+                  <span class="field__meaning">Gateway effect ledger 先落稳，Core 之后才形成模型可见 Tool Result。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">final adoption</span>
+                  <span class="field__value">source or validated lossless candidate</span>
+                  <span class="field__meaning">与其他 Tool Result 一样经过 AW effective-bytes 边界。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">required-ledger failure</span>
+                  <span class="field__value">rollback history slot + fail turn/task</span>
+                  <span class="field__meaning">只能回滚模型历史，不得声称已完成的 checkpoint 没发生。</span>
+                </div>
+                <div class="field field--wide">
+                  <span class="field__name">two durable truths</span>
+                  <span class="field__value">Gateway effect outcome ≠ AW model-history adoption outcome</span>
+                  <span class="field__meaning">副作用事实与模型可见结果采用分别落稳，失败语义不能互相覆盖。</span>
+                </div>
+              </div>
+            </div>
+          </article>
+        </section>
+
+        <section class="outcome-grid" aria-label="终态语义">
+          <div class="outcome">
+            <span class="outcome__label">Known success</span>
+            <span class="outcome__value">Guarded response 或 exact evidence 能证明同一 checkpoint 已创建或明确跳过。</span>
+          </div>
+          <div class="outcome">
+            <span class="outcome__label">Known no effect</span>
+            <span class="outcome__value">daemon 在 backend 前拒绝；Gateway 可记录确定失败，不需要查询或重试。</span>
+          </div>
+          <div class="outcome">
+            <span class="outcome__label">Unknown effect</span>
+            <span class="outcome__value">只发 CheckpointEvidenceV2；没有匹配证据则返回 uncertain，绝不重放 create。</span>
+          </div>
+          <div class="outcome">
+            <span class="outcome__label">Model-history failure</span>
+            <span class="outcome__value">可以回滚 Tool Result history 并使 turn/task 失败，但不能撤销或否认已落稳的 checkpoint。</span>
           </div>
         </section>
 
-        <section class="section" aria-labelledby="steps-title">
-          <div class="section-head">
-            <h2 class="section-title" id="steps-title">2. 六个副作用阶段</h2>
-            <p class="section-note">逻辑对象使用 JSON 展示，真实 wire 使用 bincode。</p>
-          </div>
-          <nav class="step-nav" aria-label="副作用阶段">
-            <a href="#ck-step-1">01 CLI command</a>
-            <a href="#ck-step-2">02 Request</a>
-            <a href="#ck-step-3">03 Wire</a>
-            <a href="#ck-step-4">04 Admission</a>
-            <a href="#ck-step-5">05 Persist</a>
-            <a href="#ck-step-6">06 Response</a>
-          </nav>
+        <aside class="boundary-note">
+          <h2>当前演示边界</h2>
+          <p>
+            Runtime hosted tool、Gateway bridge、profile admission、binding v4、durable approval/permit/claim/start、
+            GuardedCheckpointV2、evidence-only recovery、terminal delivery 与后续 AW final-adoption 已接通并有定向单测。
+            这条 State Provider 路径仍不是 <code>provider.toml</code> 驱动的 AW manifest Provider，也不经过通用 Provider Host。
+            同源 HEAD <code>5ebfc0b3905fa2f5f74aff2da4aec2b3be639647</code> 的 Ubuntu VM happy path 已通过：
+            Herdr <code>plugin-log-11</code> succeeded，Gateway 记录 11 个事件并得到 snapshot
+            <code>ckp_8e84400b…</code>。response-loss、传输故障与 Gateway/ws-ckpt 重启后的
+            evidence-only reconcile 仍处于 pending，不能声称 fault/restart recovery 已被实机证明。
+          </p>
+        </aside>
 
-          <div class="step-grid">
-            <article class="step-card" id="ck-step-1">
-              <header class="step-card__head"><span class="step-card__index">01</span><div class="step-card__title"><h3>调用者提交 CLI 参数</h3><span class="step-card__route">用户或 Agent → cosh-cli</span></div><span class="step-card__kind">CLI command</span></header>
-              <div class="field-table">
-                <div class="field-row"><span class="field-name">workspace</span><span class="field-value">/home/agent/project</span><span class="field-meaning">需要保存的工作区。</span></div>
-                <div class="field-row"><span class="field-name">id</span><span class="field-value"><strong>before-change</strong></span><span class="field-meaning">本次快照的稳定标识。</span></div>
-                <div class="field-row"><span class="field-name">message</span><span class="field-value">safe point</span><span class="field-meaning">说明创建目的。</span></div>
-              </div>
-              <div class="card-foot">CLI 先确认 workspace 路径存在，再创建 CkptClient。</div>
-            </article>
-
-            <article class="step-card" id="ck-step-2">
-              <header class="step-card__head"><span class="step-card__index">02</span><div class="step-card__title"><h3>Client 建立逻辑请求</h3><span class="step-card__route">cosh-cli → CkptClient</span></div><span class="step-card__kind">Request</span></header>
-              <div class="field-table">
-                <div class="field-row"><span class="field-name">variant</span><span class="field-value">Request::Checkpoint</span><span class="field-meaning">当前 legacy 创建请求。</span></div>
-                <div class="field-row"><span class="field-name">workspace / id</span><span class="field-value">/home/agent/project · before-change</span><span class="field-meaning">定位工作区和快照。</span></div>
-                <div class="field-row"><span class="field-name">metadata / pin</span><span class="field-value">null · false</span><span class="field-meaning">本例不附加元数据，也不固定快照。</span></div>
-              </div>
-              <div class="card-foot">请求没有 AW invocation id、manifest digest 或 operation digest。</div>
-            </article>
-
-            <article class="step-card" id="ck-step-3">
-              <header class="step-card__head"><span class="step-card__index">03</span><div class="step-card__title"><h3>Client 编码 Unix socket 帧</h3><span class="step-card__route">CkptClient → ws-ckpt daemon</span></div><span class="step-card__kind">Wire</span></header>
-              <div class="field-table">
-                <div class="field-row"><span class="field-name">socket</span><span class="field-value">/run/ws-ckpt/ws-ckpt.sock</span><span class="field-meaning">本地 daemon 地址。</span></div>
-                <div class="field-row"><span class="field-name">frame</span><span class="field-value">[u32 little-endian length][payload]</span><span class="field-meaning">四字节长度加请求正文。</span></div>
-                <div class="field-row"><span class="field-name">encoding</span><span class="field-value">bincode</span><span class="field-meaning">真实 wire 编码。</span></div>
-                <div class="field-row"><span class="field-name">timeout</span><span class="field-value">5000 ms</span><span class="field-meaning">默认 socket I/O 上限。</span></div>
-              </div>
-              <div class="card-foot">文档中的 JSON 只是字段示意，不能当作 JSON RPC 请求发送。</div>
-            </article>
-
-            <article class="step-card" id="ck-step-4">
-              <header class="step-card__head"><span class="step-card__index">04</span><div class="step-card__title"><h3>daemon 完成准入与检查</h3><span class="step-card__route">ws-ckpt daemon → Snapshot Manager</span></div><span class="step-card__kind">Admission</span></header>
-              <div class="field-table">
-                <div class="field-row"><span class="field-name">peer identity</span><span class="field-value">Unix peer UID</span><span class="field-meaning">识别真实本地调用者。</span></div>
-                <div class="field-row"><span class="field-name">workspace</span><span class="field-value">ownership + path checks</span><span class="field-meaning">限制调用者可操作的目录。</span></div>
-                <div class="field-row"><span class="field-name">bootstrap</span><span class="field-value">legacy auto-init / adopt</span><span class="field-meaning">必要时注册工作区。</span></div>
-                <div class="field-row"><span class="field-name">snapshot checks</span><span class="field-value">quiescence · unique id · non-empty</span><span class="field-meaning">创建前检查。</span></div>
-              </div>
-              <div class="card-foot">空工作区会得到 CheckpointSkipped，不会生成虚假的 snapshot id。</div>
-            </article>
-
-            <article class="step-card" id="ck-step-5">
-              <header class="step-card__head"><span class="step-card__index">05</span><div class="step-card__title"><h3>Snapshot Manager 持久化状态</h3><span class="step-card__route">Snapshot Manager → Btrfs + index</span></div><span class="step-card__kind">Persist</span></header>
-              <div class="field-table">
-                <div class="field-row"><span class="field-name">snapshot</span><span class="field-value"><strong>before-change</strong></span><span class="field-meaning">创建 Btrfs 只读 CoW 快照。</span></div>
-                <div class="field-row"><span class="field-name">parent_id</span><span class="field-value">previous head</span><span class="field-meaning">建立快照 DAG 父子关系。</span></div>
-                <div class="field-row"><span class="field-name">head</span><span class="field-value">before-change</span><span class="field-meaning">更新工作区当前快照。</span></div>
-                <div class="field-row"><span class="field-name">index</span><span class="field-value">SnapshotMeta</span><span class="field-meaning">保存可查询的元数据。</span></div>
-              </div>
-              <div class="card-foot">此阶段已经产生文件系统副作用，响应丢失不能证明未创建。</div>
-            </article>
-
-            <article class="step-card" id="ck-step-6">
-              <header class="step-card__head"><span class="step-card__index">06</span><div class="step-card__title"><h3>创建结果返回调用者</h3><span class="step-card__route">daemon → CkptClient → cosh-cli → 调用者</span></div><span class="step-card__kind">Response</span></header>
-              <div class="field-table">
-                <div class="field-row"><span class="field-name">daemon response</span><span class="field-value">CheckpointOk { before-change }</span><span class="field-meaning">daemon 确认快照创建成功。</span></div>
-                <div class="field-row"><span class="field-name">ok</span><span class="field-value"><strong>true</strong></span><span class="field-meaning">统一 COSH 响应成功。</span></div>
-                <div class="field-row"><span class="field-name">skipped</span><span class="field-value">false</span><span class="field-meaning">本例实际创建了快照。</span></div>
-                <div class="field-row"><span class="field-name">workspace</span><span class="field-value">/home/agent/project</span><span class="field-meaning">回显操作目标。</span></div>
-              </div>
-              <div class="card-foot">当前响应不会产生 AW ProviderReceipt，也不会写入 AW Ledger。</div>
-            </article>
-          </div>
-        </section>
-
-        <section class="section" aria-labelledby="outcome-title">
-          <div class="section-head"><h2 class="section-title" id="outcome-title">3. 三种结果语义</h2></div>
-          <div class="reference-grid">
-            <div class="reference-card"><h3>Created</h3><dl><dt>response</dt><dd>CheckpointOk</dd><dt>meaning</dt><dd>快照和索引已经创建。</dd></dl></div>
-            <div class="reference-card"><h3>Skipped</h3><dl><dt>response</dt><dd>CheckpointSkipped</dd><dt>meaning</dt><dd>已确定没有创建快照，退出码仍为 0。</dd></dl></div>
-            <div class="reference-card"><h3>Transport failure</h3><dl><dt>response</dt><dd>missing or invalid</dd><dt>meaning</dt><dd>请求写出后可能已经产生副作用，不能盲目重试。</dd></dl></div>
-          </div>
-        </section>
-
-        <section class="section review-note" aria-label="未来 Provider 化边界">
-          <div class="review-note__label">Future boundary</div>
-          <div class="review-note__body">
-            <strong>未来接入 AW 需要 Enforce authority 和可核对的副作用证据。</strong>
-            目标方案可复用 GuardedCheckpointV2 的 <code>operation_digest</code> 与 durable
-            evidence，并增加 local-service driver、Reconcile 和 Uncertain 状态。当前
-            one-shot Host 明确不接纳这类 Enforce 操作。
-          </div>
-        </section>
-
-        <footer class="footer">
-          <span>Current wire <code>Request::Checkpoint + bincode</code></span>
-          <span>AW integration <code>not implemented at PR head 42d07649</code></span>
+        <footer class="legend" aria-label="图例">
+          <span class="legend__title">Legend</span>
+          <span class="legend__item">
+            <svg width="40" height="12" aria-hidden="true">
+              <defs>
+                <marker id="c-legend-flow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                  <path d="M 0 1 L 10 5 L 0 9 z" fill="#1769aa" />
+                </marker>
+              </defs>
+              <line x1="0" y1="6" x2="36" y2="6" stroke="#1769aa" stroke-width="2" marker-end="url(#c-legend-flow)" />
+            </svg>
+            正常授权与执行流
+          </span>
+          <span class="legend__item">
+            <svg width="40" height="12" aria-hidden="true">
+              <defs>
+                <marker id="c-legend-evidence" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                  <path d="M 0 1 L 10 5 L 0 9 z" fill="#a03321" />
+                </marker>
+              </defs>
+              <line x1="0" y1="6" x2="36" y2="6" stroke="#a03321" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#c-legend-evidence)" />
+            </svg>
+            不确定结果的只读证据查询
+          </span>
+          <span class="legend__item"><span class="badge badge--implemented">PASSED</span> VM happy path 已实机验证</span>
+          <span class="legend__item"><span class="badge badge--gap">PENDING</span> fault / response-loss / restart VM 未演练</span>
         </footer>
       </article>
     </main>

@@ -2,42 +2,59 @@
 
 [English](README.md)
 
-本目录保存
+本目录说明
 [casparant/anolisa PR 3](https://github.com/casparant/anolisa/pull/3)
-的只读架构审查材料。审查基线固定为
+提出的架构，以及
+[`kongche-jbw/anolisa:feat/aw/provider-e2e-poc`](https://github.com/kongche-jbw/anolisa/tree/feat/aw/provider-e2e-poc)
+实现的修正基线。原 PR 审查基线固定为
 `8574ecb022ec9ffc68e1a71e30f2186b6ec81674`，头提交固定为
-`42d07649409ecd5bb023056b28545efbd9325ef2`。
+`42d07649409ecd5bb023056b28545efbd9325ef2`。修正 PoC 及最终 VM 证据固定为
+`5ebfc0b3905fa2f5f74aff2da4aec2b3be639647`。
 
-这些文件属于审查证据，不是正式产品文档，也不表示 AW Provider 已经达到生产可用状态。
+PR 3 的大方向成立。Canonical Capability Contract、AW Core、通用 Provider Host、组件
+Provider、Environment 最终权力与 content-free Ledger 的分层值得保留。原 PR 头提交仍有
+跨边界语义没有闭合，fork PoC 用可执行代码验证修复方向。PoC 是后续实现基线，不代表
+生产交付已经完成。
+
+## 三种状态
+
+| 标记 | 含义 |
+| --- | --- |
+| 原 PR | 固定头提交 `42d07649` 上已经存在的行为 |
+| PoC 基线 | fork 分支已经实现或用真实组件验证的行为 |
+| 仍待完成 | 尚未冻结的合同、运行接线或产品化工作 |
+
+PoC 已明确结果回流。Provider Host 把瞬时 candidate 与不含正文的 receipt 返回 AW Core，
+Core 校验后交给 COSH。COSH 决定写入哪一段本地模型历史，随后 AW Ledger 保存类型封闭的
+`context_adoption` 事实。它引用 Core 结果形成的完整 `post_tool_use_plan`。候选为空或不满足
+严格 `lossless` 时，COSH 保留 source bytes。
+
+仍有两条边界需要继续开发。PreTool 安全检查尚未绑定 COSH 最终执行的准确字节。
+Checkpoint 当前采用 Gateway State Provider 与 Guarded Checkpoint V2，它不属于 AW
+manifest Provider。Btrfs subvolume 上的 Ubuntu VM + Herdr 正常链路已经通过，覆盖
+approval、permit、execution、Guarded V2、durable evidence 与 `task_succeeded`。响应丢失
+和进程重启后的 evidence-only 恢复还没有进行故障注入实机验证。
 
 ## 建议阅读顺序
 
-| 读者 | 首选文档 | 目的 |
+| 读者 | 文档 | 阅读目标 |
 | --- | --- | --- |
-| 管理层与架构负责人 | [面向管理层的架构说明](executive-brief_zh.md) | 理解方向、边界与决策项 |
-| 第一次接触 Provider 的研发 | [原理与组件接入手册](component-integration_zh.md) | 从术语到 Tokenless 实际链路 |
-| 安全与 Checkpoint 研发 | [运行实例与边界说明](runtime-call-examples_zh.md) | 查看真实字段、结果回流与副作用边界 |
-| Schema 设计与接口评审人员 | [全部 Schema 图册](schema-reference_zh.md) | 查看 22 个文件、14 个逻辑 Schema 及逐份结论 |
-| PR Reviewer | [完整架构审查](architecture-review_zh.md) | 查看 P1、设计债务、证据和验证 |
-| 准备提交 Review 的维护者 | [PR Review 评论草稿](pr-review-comment_zh.md) | 复制聚焦逻辑与 Schema 的 Request changes 评论 |
-| Agent Host POC 负责人 | [与 Agent Host POC 的对照](poc-comparison_zh.md) | 确认现状、目标和连接层 |
+| 管理层与架构负责人 | [AW Provider 架构说明](executive-brief_zh.md) | 理解 Provider 如何生效及剩余决策 |
+| PR Reviewer | [完整架构审查](architecture-review_zh.md) | 区分原 PR 问题与 PoC 修复基线 |
+| Schema 评审人员 | [Schema 参考与语义讨论](schema-reference_zh.md) | 逐份查看字段、语义和争议点 |
+| 组件研发 | [组件接入手册](component-integration_zh.md) | 开发 native endpoint、manifest 与测试 |
+| 运行链路研发 | [真实调用实例](runtime-call-examples_zh.md) | 查看 Tokenless、安全与 Checkpoint 字段 |
+| Agent Host PoC 负责人 | [PoC 对照](poc-comparison_zh.md) | 确认能力面与主机面的连接位置 |
+| 准备提交 Review 的维护者 | [PR Review 评论草稿](pr-review-comment_zh.md) | 提交聚焦逻辑和 Schema 的评论 |
 
-## 交互式架构图
+## 交互图
 
-- [Provider 生效架构](provider-effect-architecture.html)：区分当前运行主链、Schema 映射、
-  最终权力与产品化缺口。
-- [Tokenless 生效时序](provider-effect-sequence.html)：采用 Drafter 工程蓝图风格，使用同一份 `list_recent_builds`
-  fixture，贯穿展示真实 artifact id、source digest、scope、359→110 meters、candidate、
-  receipt 与最终 replacement。
-- [Agent Sec 命令检查时序](security-command-call.html)：用六组简化字段展示 pipe-to-shell
-  命令、`shell-download-exec` 结果、Core gate 与 Ledger 事实。
-- [Checkpoint 创建时序](checkpoint-create-call.html)：用六组简化字段展示当前 CLI、
-  Unix socket、ws-ckpt 与 Btrfs 链路，并标明现有 AW 边界。
+- [Provider 生效架构](provider-effect-architecture.html)
+- [Tokenless 生效时序](provider-effect-sequence.html)
+- [Agent Sec 命令检查时序](security-command-call.html)
+- [Checkpoint State Provider 时序](checkpoint-create-call.html)
 
-三份调用时序图均为自包含 Drafter HTML，默认直接展示字段值和字段语义，并支持按步骤
-定位。Provider 生效架构图为自包含 Archify 产物，支持引导视图、节点检索、路径跟踪、
-主题切换和导出。14 张浅色 Schema SVG 位于 `images/schemas/`，其确定性数据源与生成脚本
-位于 `diagram-sources/`。
+三份调用图使用明亮的 Drafter 工程蓝图风格，直接展示简化后的真实字段值。总体架构图是
+自包含 Archify 页面。十四张浅色 Schema 图位于 `images/schemas/`。
 
-Provider 生效架构图通过九项 showcase 校验，错误和警告均为零。全部页面交付前另使用
-Firefox headless 进行截图检查。
+构建打包与 CI 接线不属于本轮审查重点。生产交付前仍必须完成这些工作。

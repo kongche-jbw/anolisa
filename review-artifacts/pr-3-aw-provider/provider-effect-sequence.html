@@ -3,19 +3,19 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Tokenless Provider：真实字段调用时序</title>
+    <title>Tokenless Provider：真实字段生效时序</title>
     <style>
       :root {
-        --c-bg: #f8fafc;
+        --c-bg: #eef7f6;
         --c-canvas: #ffffff;
-        --c-border: #cbd5e1;
-        --c-border-strong: #64748b;
-        --c-text-main: #0f172a;
-        --c-text-sub: #64748b;
-        --c-text-faint: #94a3b8;
-        --c-accent: #0f766e;
-        --c-accent-soft: #f0fdfa;
-        --c-panel: #f8fafc;
+        --c-panel: #f7fcfb;
+        --c-border: #b7d6d2;
+        --c-border-strong: #4f7f79;
+        --c-text-main: #102a2a;
+        --c-text-sub: #4f6666;
+        --c-accent: #087f73;
+        --c-accent-soft: #dff6f1;
+        --c-dark: #123d3a;
         --font-ui: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
           sans-serif;
         --font-mono: "SFMono-Regular", "SF Mono", Monaco, Consolas,
@@ -27,111 +27,108 @@
       }
 
       html {
-        scroll-behavior: smooth;
+        background: var(--c-bg);
       }
 
       body {
         margin: 0;
-        padding: 32px;
-        background: var(--c-bg);
+        padding: 24px;
         color: var(--c-text-main);
+        background: var(--c-bg);
         font-family: var(--font-ui);
       }
 
-      button,
-      summary {
-        font: inherit;
+      code,
+      .mono {
+        font-family: var(--font-mono);
       }
 
-      button:focus-visible,
-      summary:focus-visible,
-      .route-node:focus-visible {
-        outline: 2px solid var(--c-accent);
-        outline-offset: 3px;
+      code {
+        overflow-wrap: anywhere;
       }
 
-      .page {
-        width: min(1480px, 100%);
-        margin: 0 auto;
+      .page-scroll {
+        width: 100%;
+        overflow-x: auto;
+        padding-bottom: 8px;
       }
 
       .diagram-canvas {
         position: relative;
+        width: min(1500px, 100%);
+        min-width: 1060px;
+        margin: 0 auto;
+        padding: 28px;
+        border: 2px solid var(--c-border-strong);
         background: var(--c-canvas);
-        border: 2px solid var(--c-border);
-        padding: 30px;
       }
 
       .diagram-header {
-        display: flex;
-        align-items: flex-start;
-        justify-content: space-between;
-        gap: 24px;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 28px;
+        align-items: start;
         padding-bottom: 20px;
-        border-bottom: 1px solid var(--c-border);
+        border-bottom: 2px solid var(--c-dark);
       }
 
       .eyebrow {
-        margin: 0 0 8px;
+        margin: 0 0 7px;
         color: var(--c-accent);
-        font-family: var(--font-mono);
-        font-size: 11px;
-        font-weight: 700;
+        font: 700 11px/1.4 var(--font-mono);
         letter-spacing: 0.12em;
         text-transform: uppercase;
       }
 
       h1 {
         margin: 0;
-        font-size: clamp(24px, 3vw, 38px);
-        line-height: 1.16;
-        letter-spacing: -0.025em;
+        font-size: 32px;
+        line-height: 1.2;
+        letter-spacing: -0.02em;
       }
 
       .subtitle {
-        max-width: 850px;
+        max-width: 920px;
         margin: 10px 0 0;
         color: var(--c-text-sub);
         font-size: 14px;
-        line-height: 1.7;
+        line-height: 1.72;
       }
 
       .header-meta {
-        display: flex;
-        flex-wrap: wrap;
-        justify-content: flex-end;
-        gap: 8px;
-        min-width: 280px;
+        display: grid;
+        gap: 7px;
+        justify-items: end;
       }
 
       .badge {
         display: inline-block;
+        padding: 4px 8px;
         border: 1px solid var(--c-border-strong);
-        padding: 5px 8px;
-        color: var(--c-text-main);
         background: #ffffff;
-        font-family: var(--font-mono);
-        font-size: 10px;
-        font-weight: 600;
-        letter-spacing: 0.04em;
+        color: var(--c-dark);
+        font: 700 10px/1.3 var(--font-mono);
+        letter-spacing: 0.05em;
         text-transform: uppercase;
       }
 
       .badge--accent {
         border-color: var(--c-accent);
-        color: var(--c-accent);
+        background: var(--c-accent-soft);
+        color: #075e56;
       }
 
       .fact-strip {
         display: grid;
         grid-template-columns: repeat(4, minmax(0, 1fr));
+        margin: 20px 0 22px;
         border: 1px solid var(--c-border);
-        border-top: 0;
+        background: var(--c-panel);
       }
 
       .fact {
         min-width: 0;
-        padding: 14px 16px;
+        padding: 12px 15px;
         border-right: 1px solid var(--c-border);
       }
 
@@ -141,7 +138,7 @@
 
       .fact__label {
         display: block;
-        margin-bottom: 5px;
+        margin-bottom: 4px;
         color: var(--c-text-sub);
         font-size: 10px;
         font-weight: 700;
@@ -151,581 +148,261 @@
 
       .fact__value {
         display: block;
-        font-family: var(--font-mono);
-        font-size: 12px;
-        line-height: 1.45;
+        font: 600 12px/1.48 var(--font-mono);
         overflow-wrap: anywhere;
       }
 
-      .section {
-        margin-top: 28px;
-      }
-
-      .section-head {
-        display: flex;
-        align-items: baseline;
-        justify-content: space-between;
-        gap: 18px;
-        margin-bottom: 12px;
-      }
-
-      .section-title {
-        margin: 0;
-        font-size: 17px;
-        letter-spacing: -0.01em;
-      }
-
-      .section-note {
-        margin: 0;
-        color: var(--c-text-sub);
-        font-size: 12px;
-      }
-
-      .route-scroll {
-        overflow-x: auto;
-        border: 1px solid var(--c-border);
-        background: var(--c-panel);
-      }
-
-      .route-canvas {
-        position: relative;
-        width: 1280px;
-        height: 196px;
-        background: #ffffff;
-      }
-
-      .route-node {
-        position: absolute;
-        top: 42px;
-        width: 166px;
-        height: 76px;
-        padding: 11px 12px;
+      .section-label {
+        display: grid;
+        grid-template-columns: 176px minmax(0, 1fr);
         border: 1px solid var(--c-border-strong);
-        background: #ffffff;
-        color: var(--c-text-main);
-        cursor: pointer;
-        transition: border-color 120ms ease, background-color 120ms ease,
-          opacity 120ms ease;
-      }
-
-      .route-node:hover,
-      .route-node.is-focus {
-        border-color: var(--c-accent);
+        border-bottom: 0;
         background: var(--c-accent-soft);
       }
 
-      .route-node.is-dim,
-      .connector.is-dim,
-      .connector-label.is-dim {
-        opacity: 0.18;
-      }
-
-      .route-node__role {
-        display: block;
-        margin-bottom: 6px;
-        color: var(--c-text-sub);
-        font-family: var(--font-mono);
-        font-size: 9px;
-        font-weight: 700;
+      .section-label__index {
+        padding: 10px 14px;
+        border-right: 1px solid var(--c-border-strong);
+        color: var(--c-accent);
+        font: 800 11px/1.4 var(--font-mono);
         letter-spacing: 0.08em;
-        text-transform: uppercase;
       }
 
-      .route-node__name {
-        display: block;
-        font-size: 14px;
-        font-weight: 700;
+      .section-label__text {
+        padding: 10px 16px;
+        font-size: 12px;
+        font-weight: 750;
+        letter-spacing: 0.02em;
       }
 
-      .route-node__desc {
+      .step {
+        display: grid;
+        grid-template-columns: 176px minmax(0, 1fr);
+        border: 1px solid var(--c-border-strong);
+        background: #ffffff;
+      }
+
+      .step__actor {
+        min-width: 0;
+        padding: 16px 14px;
+        border-right: 1px solid var(--c-border-strong);
+        background: var(--c-panel);
+      }
+
+      .step__number {
         display: block;
-        margin-top: 4px;
-        color: var(--c-text-sub);
-        font-size: 10px;
+        color: var(--c-accent);
+        font: 800 11px/1.3 var(--font-mono);
+        letter-spacing: 0.08em;
+      }
+
+      .step__actor-name {
+        display: block;
+        margin-top: 6px;
+        font-size: 15px;
+        font-weight: 800;
         line-height: 1.35;
       }
 
-      .route-node--cosh {
-        left: 18px;
+      .step__actor-role {
+        display: block;
+        margin-top: 4px;
+        color: var(--c-text-sub);
+        font-size: 11px;
+        line-height: 1.45;
       }
 
-      .route-node--hook {
-        left: 226px;
+      .step__body {
+        min-width: 0;
+        padding: 15px 17px 16px;
       }
 
-      .route-node--core {
-        left: 434px;
+      .step__title-row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 8px 18px;
+        margin-bottom: 11px;
       }
 
-      .route-node--host {
-        left: 642px;
+      .step__title {
+        margin: 0;
+        font-size: 16px;
+        line-height: 1.35;
       }
 
-      .route-node--provider {
-        left: 850px;
+      .step__schema {
+        color: var(--c-accent);
+        font: 700 11px/1.45 var(--font-mono);
+        overflow-wrap: anywhere;
       }
 
-      .route-node--ledger {
-        left: 1096px;
+      .field-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        border-top: 1px solid var(--c-border);
+        border-left: 1px solid var(--c-border);
       }
 
-      .connectors {
-        position: absolute;
-        left: 0;
-        top: 0;
-        width: 1280px;
-        height: 196px;
-        pointer-events: none;
-        overflow: visible;
+      .field {
+        min-width: 0;
+        padding: 9px 10px 10px;
+        border-right: 1px solid var(--c-border);
+        border-bottom: 1px solid var(--c-border);
+        background: #ffffff;
+      }
+
+      .field--wide {
+        grid-column: span 2;
+      }
+
+      .field--full {
+        grid-column: 1 / -1;
+      }
+
+      .field__name {
+        display: block;
+        margin: 0 0 4px;
+        color: var(--c-accent);
+        font: 700 10px/1.35 var(--font-mono);
+        overflow-wrap: anywhere;
+      }
+
+      .field__value {
+        display: block;
+        margin: 0;
+        color: var(--c-text-main);
+        font: 650 12px/1.48 var(--font-mono);
+        overflow-wrap: anywhere;
+      }
+
+      .field__meaning {
+        display: block;
+        margin-top: 4px;
+        color: var(--c-text-sub);
+        font-size: 11px;
+        line-height: 1.48;
       }
 
       .connector {
-        fill: none;
-        transition: opacity 120ms ease, stroke-width 120ms ease;
+        display: grid;
+        grid-template-columns: 176px minmax(0, 1fr);
+        min-height: 48px;
       }
 
-      .conn {
-        fill: none;
+      .connector__rail {
+        display: flex;
+        justify-content: center;
+        align-items: stretch;
       }
 
-      .conn--flow {
-        stroke: #0f172a;
-        stroke-width: 1.5;
-        marker-end: url(#arrow-request);
+      .connector__rail svg {
+        display: block;
+        width: 24px;
+        height: 48px;
+        overflow: visible;
       }
 
-      .conn--request {
-        stroke: #0f172a;
-        stroke-width: 1.5;
-        marker-end: url(#arrow-request);
+      .connector__label {
+        align-self: center;
+        margin-left: 18px;
+        padding-left: 12px;
+        border-left: 3px solid var(--c-accent);
+        color: var(--c-text-sub);
+        font: 600 11px/1.48 var(--font-mono);
+        overflow-wrap: anywhere;
       }
 
-      .conn--return {
-        stroke: #0f766e;
-        stroke-width: 1.75;
-        marker-end: url(#arrow-return);
+      .decision {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        border: 2px solid var(--c-accent);
+        background: var(--c-accent-soft);
       }
 
-      .conn--event {
-        stroke: #64748b;
-        stroke-width: 1.5;
-        stroke-dasharray: 3 5;
-        marker-end: url(#arrow-audit);
+      .decision__cell {
+        padding: 13px 14px;
+        border-right: 1px solid var(--c-border-strong);
       }
 
-      .legend-conn--request {
-        stroke: #0f172a;
-        marker-end: url(#legend-request);
+      .decision__cell:last-child {
+        border-right: 0;
       }
 
-      .legend-conn--return {
-        stroke: #0f766e;
-        marker-end: url(#legend-return);
+      .decision__label {
+        display: block;
+        margin-bottom: 4px;
+        color: var(--c-accent);
+        font: 800 10px/1.3 var(--font-mono);
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
       }
 
-      .legend-conn--event {
-        stroke: #64748b;
-        marker-end: url(#legend-event);
+      .decision__value {
+        display: block;
+        font-size: 12px;
+        font-weight: 700;
+        line-height: 1.5;
       }
 
-      .connector.is-focus {
-        stroke-width: 3;
+      .boundary-note {
+        margin-top: 22px;
+        padding: 14px 16px;
+        border: 1px solid var(--c-border-strong);
+        border-left: 5px solid var(--c-accent);
+        background: var(--c-panel);
       }
 
-      .connector-label {
-        fill: #64748b;
-        font-family: var(--font-mono);
-        font-size: 9px;
-        transition: opacity 120ms ease;
+      .boundary-note h2 {
+        margin: 0 0 6px;
+        font-size: 13px;
       }
 
-      .connector-label--return {
-        fill: #0f766e;
-      }
-
-      .route-caption {
-        position: absolute;
-        left: 18px;
-        bottom: 10px;
+      .boundary-note p {
         margin: 0;
         color: var(--c-text-sub);
-        font-family: var(--font-mono);
-        font-size: 10px;
+        font-size: 12px;
+        line-height: 1.65;
       }
 
       .legend {
         display: flex;
-        align-items: center;
         flex-wrap: wrap;
-        gap: 18px;
-        padding: 12px 14px;
-        border: 1px solid var(--c-border);
-        border-top: 0;
+        gap: 12px 26px;
+        align-items: center;
+        margin-top: 20px;
+        padding-top: 14px;
+        border-top: 1px solid var(--c-border);
+        color: var(--c-text-sub);
+        font-size: 11px;
       }
 
       .legend__title {
-        color: var(--c-text-sub);
-        font-size: 10px;
-        font-weight: 700;
+        color: var(--c-text-main);
+        font: 800 10px/1.3 var(--font-mono);
         letter-spacing: 0.1em;
         text-transform: uppercase;
       }
 
       .legend__item {
         display: inline-flex;
+        gap: 7px;
         align-items: center;
-        gap: 6px;
-        color: var(--c-text-sub);
-        font-size: 11px;
       }
 
       .legend__item svg {
+        display: block;
         overflow: visible;
       }
 
-      .step-nav {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 6px;
-        margin-bottom: 14px;
-      }
-
-      .step-nav button {
-        min-height: 34px;
-        border: 1px solid var(--c-border-strong);
-        border-radius: 0;
-        padding: 7px 10px;
-        background: #ffffff;
-        color: var(--c-text-main);
-        cursor: pointer;
-        font-family: var(--font-mono);
-        font-size: 10px;
-        font-weight: 650;
-      }
-
-      .step-nav button:hover {
-        border-color: var(--c-accent);
-        color: var(--c-accent);
-      }
-
-      .step-nav button[aria-pressed="true"] {
-        border-color: var(--c-accent);
-        background: var(--c-accent);
-        color: #ffffff;
-      }
-
-      .step-grid {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 12px;
-      }
-
-      .step-card {
-        min-width: 0;
-        border: 1px solid var(--c-border);
-        background: #ffffff;
-        transition: border-color 120ms ease, opacity 120ms ease;
-      }
-
-      .step-card.is-focus {
-        border: 2px solid var(--c-accent);
-      }
-
-      .step-card.is-dim {
-        opacity: 0.2;
-      }
-
-      .step-card__head {
-        display: grid;
-        grid-template-columns: 42px minmax(0, 1fr) auto;
-        align-items: center;
-        min-height: 58px;
-        border-bottom: 1px solid var(--c-border);
-      }
-
-      .step-card__index {
-        display: grid;
-        place-items: center;
-        align-self: stretch;
-        border-right: 1px solid var(--c-border);
-        color: var(--c-accent);
-        font-family: var(--font-mono);
-        font-size: 14px;
-        font-weight: 800;
-      }
-
-      .step-card__title {
-        min-width: 0;
-        padding: 9px 12px;
-      }
-
-      .step-card__title h3 {
-        margin: 0;
-        font-size: 14px;
-      }
-
-      .step-card__route {
-        display: block;
-        margin-top: 4px;
-        color: var(--c-text-sub);
-        font-family: var(--font-mono);
-        font-size: 10px;
-      }
-
-      .step-card__kind {
-        margin-right: 10px;
-        border: 1px solid var(--c-border);
-        padding: 4px 6px;
-        color: var(--c-text-sub);
-        font-family: var(--font-mono);
-        font-size: 9px;
-        font-weight: 700;
-        text-transform: uppercase;
-      }
-
-      .field-table {
-        display: grid;
-      }
-
-      .field-row {
-        display: grid;
-        grid-template-columns: minmax(126px, 0.8fr) minmax(190px, 1.5fr)
-          minmax(180px, 1.2fr);
-        min-width: 0;
-        border-bottom: 1px solid #e2e8f0;
-      }
-
-      .field-row:last-child {
-        border-bottom: 0;
-      }
-
-      .field-name,
-      .field-value,
-      .field-meaning {
-        min-width: 0;
-        padding: 9px 10px;
-        font-size: 11px;
-        line-height: 1.48;
-      }
-
-      .field-name {
-        border-right: 1px solid #e2e8f0;
-        color: var(--c-text-sub);
-        font-family: var(--font-mono);
-        font-weight: 650;
-        overflow-wrap: anywhere;
-      }
-
-      .field-value {
-        border-right: 1px solid #e2e8f0;
-        color: var(--c-text-main);
-        background: var(--c-panel);
-        font-family: var(--font-mono);
-        overflow-wrap: anywhere;
-      }
-
-      .field-value strong {
-        color: var(--c-accent);
-      }
-
-      .field-meaning {
-        color: var(--c-text-sub);
-      }
-
-      .card-foot {
-        padding: 10px 12px;
-        border-top: 1px solid var(--c-border);
-        background: var(--c-accent-soft);
-        color: #115e59;
-        font-size: 11px;
-        line-height: 1.5;
-      }
-
-      details {
-        border-top: 1px solid var(--c-border);
-      }
-
-      summary {
-        padding: 9px 12px;
-        color: var(--c-text-sub);
-        cursor: pointer;
-        font-family: var(--font-mono);
-        font-size: 10px;
-        font-weight: 650;
-      }
-
-      pre {
-        margin: 0;
-        padding: 12px;
-        overflow: auto;
-        border-top: 1px solid #e2e8f0;
-        background: #0f172a;
-        color: #e2e8f0;
-        font-family: var(--font-mono);
-        font-size: 10px;
-        line-height: 1.55;
-        white-space: pre-wrap;
-        overflow-wrap: anywhere;
-      }
-
-      .reference-grid {
-        display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 12px;
-      }
-
-      .reference-card {
-        border: 1px solid var(--c-border);
-        padding: 16px;
-      }
-
-      .reference-card h3 {
-        margin: 0 0 12px;
-        font-size: 13px;
-      }
-
-      .reference-card dl {
-        display: grid;
-        grid-template-columns: max-content minmax(0, 1fr);
-        gap: 8px 12px;
-        margin: 0;
-      }
-
-      .reference-card dt {
-        color: var(--c-text-main);
-        font-family: var(--font-mono);
-        font-size: 10px;
-        font-weight: 700;
-      }
-
-      .reference-card dd {
-        margin: 0;
-        color: var(--c-text-sub);
-        font-size: 11px;
-        line-height: 1.45;
-      }
-
-      .review-note {
-        display: grid;
-        grid-template-columns: 180px minmax(0, 1fr);
-        border: 1px solid var(--c-border-strong);
-      }
-
-      .review-note__label {
-        padding: 16px;
-        border-right: 1px solid var(--c-border-strong);
-        background: var(--c-text-main);
-        color: #ffffff;
-        font-family: var(--font-mono);
-        font-size: 11px;
-        font-weight: 700;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-      }
-
-      .review-note__body {
-        padding: 14px 16px;
-        color: var(--c-text-sub);
-        font-size: 12px;
-        line-height: 1.65;
-      }
-
-      .review-note__body strong {
-        color: var(--c-text-main);
-      }
-
-      .footer {
-        display: flex;
-        justify-content: space-between;
-        gap: 18px;
-        margin-top: 28px;
-        padding-top: 16px;
-        border-top: 1px solid var(--c-border);
-        color: var(--c-text-sub);
-        font-size: 10px;
-        line-height: 1.5;
-      }
-
-      .footer code {
-        font-family: var(--font-mono);
-        overflow-wrap: anywhere;
-      }
-
-      @media (max-width: 1080px) {
+      @media (max-width: 900px) {
         body {
-          padding: 18px;
+          padding: 12px;
         }
 
         .diagram-canvas {
-          padding: 20px;
-        }
-
-        .diagram-header {
-          flex-direction: column;
-        }
-
-        .header-meta {
-          justify-content: flex-start;
-        }
-
-        .fact-strip,
-        .step-grid,
-        .reference-grid {
-          grid-template-columns: 1fr;
-        }
-
-        .fact {
-          border-right: 0;
-          border-bottom: 1px solid var(--c-border);
-        }
-
-        .fact:last-child {
-          border-bottom: 0;
-        }
-      }
-
-      @media (max-width: 720px) {
-        body {
-          padding: 0;
-        }
-
-        .diagram-canvas {
-          border-left: 0;
-          border-right: 0;
-          padding: 16px;
-        }
-
-        .field-row {
-          grid-template-columns: 1fr;
-        }
-
-        .field-name,
-        .field-value {
-          border-right: 0;
-          border-bottom: 1px solid #e2e8f0;
-        }
-
-        .review-note {
-          grid-template-columns: 1fr;
-        }
-
-        .review-note__label {
-          border-right: 0;
-          border-bottom: 1px solid var(--c-border-strong);
-        }
-
-        .footer {
-          flex-direction: column;
-        }
-      }
-
-      @media (prefers-reduced-motion: reduce) {
-        html {
-          scroll-behavior: auto;
-        }
-
-        * {
-          transition: none !important;
+          margin: 0;
         }
       }
 
@@ -735,873 +412,668 @@
           background: #ffffff;
         }
 
+        .page-scroll {
+          overflow: visible;
+        }
+
         .diagram-canvas {
-          border: 0;
-        }
-
-        .step-nav {
-          display: none;
-        }
-
-        .step-card.is-dim,
-        .route-node.is-dim,
-        .connector.is-dim,
-        .connector-label.is-dim {
-          opacity: 1;
+          width: 100%;
+          min-width: 0;
+          border-width: 1px;
         }
       }
     </style>
   </head>
   <body>
-    <main class="page">
+    <main class="page-scroll">
       <article class="diagram-canvas" aria-labelledby="diagram-title">
         <header class="diagram-header">
           <div>
-            <p class="eyebrow">Tokenless / Context Projection / Real fixture</p>
-            <h1 id="diagram-title">一份 Tool Result 如何变成模型可用的压缩结果</h1>
+            <p class="eyebrow">AW Provider / Context Projection / Real Field Trace</p>
+            <h1 id="diagram-title">Tokenless Provider 如何把 693B 工具结果变成最终 438B 上下文</h1>
             <p class="subtitle">
-              同一份 <code>list_recent_builds</code> 数据依次经过 COSH、AW Core、
-              Provider Host 和 Tokenless。每一步直接列出关键字段、真实值与语义；
-              阅读者可以沿编号顺序对照每一次数据变化。
+              从 COSH 已聚合的真实工具结果开始，依次经过 canonical input、Tokenless native
+              request、native response、canonical candidate、Core 校验与规划、COSH 选择采用及无正文审计。
+              每一步只列出决定语义的字段，箭头标签独占连线行。
             </p>
           </div>
-          <div class="header-meta" aria-label="diagram metadata">
-            <span class="badge badge--accent">Drafter blueprint</span>
-            <span class="badge">PR head 42d07649</span>
-            <span class="badge">Advise authority</span>
+          <div class="header-meta" aria-label="图示状态">
+            <span class="badge badge--accent">亮色工程蓝图</span>
+            <span class="badge">示例数据 · 693B → 438B</span>
+            <span class="badge">Provider authority · advise</span>
           </div>
         </header>
 
-        <section class="fact-strip" aria-label="example facts">
+        <section class="fact-strip" aria-label="示例关键事实">
           <div class="fact">
-            <span class="fact__label">Source tool</span>
-            <span class="fact__value">list_recent_builds</span>
+            <span class="fact__label">源正文</span>
+            <span class="fact__value">693 UTF-8 bytes · sha256 01202f4b…7422e1</span>
           </div>
           <div class="fact">
-            <span class="fact__label">Capability</span>
-            <span class="fact__value">context.projection.prepare/v1</span>
+            <span class="fact__label">Token 估算</span>
+            <span class="fact__value">174 → 110 · chain=["toon"]</span>
           </div>
           <div class="fact">
-            <span class="fact__label">Provider</span>
-            <span class="fact__value">tokenless@0.7.14</span>
+            <span class="fact__label">最终正文</span>
+            <span class="fact__value">438 bytes · sha256 6c847696…d3003</span>
           </div>
           <div class="fact">
-            <span class="fact__label">Measured result</span>
-            <span class="fact__value">359 → 110 tokens · saved 69%</span>
+            <span class="fact__label">采用条件</span>
+            <span class="fact__value">schema + identity + digest + lossless</span>
           </div>
         </section>
 
-        <section class="section" aria-labelledby="route-title">
-          <div class="section-head">
-            <h2 class="section-title" id="route-title">1. 请求与结果回流</h2>
-            <p class="section-note">点击节点可聚焦它参与的步骤。</p>
+        <section aria-label="Tokenless 调用时序">
+          <div class="section-label">
+            <span class="section-label__index">PHASE A</span>
+            <span class="section-label__text">COSH 与 AW Core 建立“这次处理的确切正文”</span>
           </div>
-          <div class="route-scroll">
-            <div class="route-canvas">
-              <button
-                class="route-node route-node--cosh"
-                type="button"
-                data-node="cosh"
-                data-steps="1,8"
-              >
-                <span class="route-node__role">Environment</span>
-                <span class="route-node__name">COSH</span>
-                <span class="route-node__desc">Tool 边界与最终采用权</span>
-              </button>
-              <button
-                class="route-node route-node--hook"
-                type="button"
-                data-node="hook"
-                data-steps="1,2,7,8"
-              >
-                <span class="route-node__role">Adapter</span>
-                <span class="route-node__name">AW Hook</span>
-                <span class="route-node__desc">COSH JSON ↔ AW Contract</span>
-              </button>
-              <button
-                class="route-node route-node--core"
-                type="button"
-                data-node="core"
-                data-steps="2,3,5,6,7"
-              >
-                <span class="route-node__role">Policy + routing</span>
-                <span class="route-node__name">AW Core</span>
-                <span class="route-node__desc">Plan、校验与候选决策</span>
-              </button>
-              <button
-                class="route-node route-node--host"
-                type="button"
-                data-node="host"
-                data-steps="3,4,5,6"
-              >
-                <span class="route-node__role">Driver</span>
-                <span class="route-node__name">Provider Host</span>
-                <span class="route-node__desc">映射、执行、Outcome、Receipt</span>
-              </button>
-              <button
-                class="route-node route-node--provider"
-                type="button"
-                data-node="provider"
-                data-steps="3,4"
-              >
-                <span class="route-node__role">Capability Provider</span>
-                <span class="route-node__name">Tokenless</span>
-                <span class="route-node__desc">压缩并返回 native result</span>
-              </button>
-              <button
-                class="route-node route-node--ledger"
-                type="button"
-                data-node="ledger"
-                data-steps="6"
-              >
-                <span class="route-node__role">Audit sink</span>
-                <span class="route-node__name">AW Ledger</span>
-                <span class="route-node__desc">无正文调用事实</span>
-              </button>
 
-              <svg class="connectors" aria-label="typed data-flow connectors">
-                <defs>
-                  <marker
-                    id="arrow-request"
-                    viewBox="0 0 10 10"
-                    refX="10"
-                    refY="5"
-                    markerWidth="7"
-                    markerHeight="7"
-                    orient="auto"
-                  >
-                    <path d="M 0 1 L 10 5 L 0 9 z" fill="#0f172a" />
-                  </marker>
-                  <marker
-                    id="arrow-return"
-                    viewBox="0 0 10 10"
-                    refX="10"
-                    refY="5"
-                    markerWidth="7"
-                    markerHeight="7"
-                    orient="auto"
-                  >
-                    <path d="M 0 1 L 10 5 L 0 9 z" fill="#0f766e" />
-                  </marker>
-                  <marker
-                    id="arrow-audit"
-                    viewBox="0 0 10 10"
-                    refX="10"
-                    refY="5"
-                    markerWidth="7"
-                    markerHeight="7"
-                    orient="auto"
-                  >
-                    <path d="M 0 1 L 10 5 L 0 9 z" fill="#64748b" />
-                  </marker>
-                </defs>
-
-                <line
-                  class="connector conn conn--flow conn--request"
-                  data-step="1"
-                  x1="184"
-                  y1="68"
-                  x2="226"
-                  y2="68"
-                />
-                <rect x="186" y="51" width="38" height="13" fill="#ffffff" />
-                <text class="connector-label" data-step="1" x="205" y="61" text-anchor="middle">
-                  Hook
-                </text>
-
-                <line
-                  class="connector conn conn--flow conn--request"
-                  data-step="2"
-                  x1="392"
-                  y1="68"
-                  x2="434"
-                  y2="68"
-                />
-                <rect x="394" y="51" width="38" height="13" fill="#ffffff" />
-                <text class="connector-label" data-step="2" x="413" y="61" text-anchor="middle">
-                  submit
-                </text>
-
-                <line
-                  class="connector conn conn--flow conn--request"
-                  data-step="3"
-                  x1="600"
-                  y1="68"
-                  x2="642"
-                  y2="68"
-                />
-                <rect x="602" y="51" width="38" height="13" fill="#ffffff" />
-                <text class="connector-label" data-step="3" x="621" y="61" text-anchor="middle">
-                  invoke
-                </text>
-
-                <line
-                  class="connector conn conn--flow conn--request"
-                  data-step="3"
-                  x1="808"
-                  y1="68"
-                  x2="850"
-                  y2="68"
-                />
-                <rect x="810" y="51" width="38" height="13" fill="#ffffff" />
-                <text class="connector-label" data-step="3" x="829" y="61" text-anchor="middle">
-                  stdin
-                </text>
-
-                <line
-                  class="connector conn conn--flow conn--return"
-                  data-step="4"
-                  x1="850"
-                  y1="102"
-                  x2="808"
-                  y2="102"
-                />
-                <rect x="810" y="106" width="38" height="13" fill="#ffffff" />
-                <text
-                  class="connector-label connector-label--return"
-                  data-step="4"
-                  x="829"
-                  y="116"
-                  text-anchor="middle"
-                >
-                  result
-                </text>
-
-                <line
-                  class="connector conn conn--flow conn--return"
-                  data-step="5"
-                  x1="642"
-                  y1="102"
-                  x2="600"
-                  y2="102"
-                />
-                <rect x="602" y="106" width="38" height="13" fill="#ffffff" />
-                <text
-                  class="connector-label connector-label--return"
-                  data-step="5"
-                  x="621"
-                  y="116"
-                  text-anchor="middle"
-                >
-                  outcome
-                </text>
-
-                <line
-                  class="connector conn conn--flow conn--return"
-                  data-step="7"
-                  x1="434"
-                  y1="102"
-                  x2="392"
-                  y2="102"
-                />
-                <rect x="394" y="106" width="38" height="13" fill="#ffffff" />
-                <text
-                  class="connector-label connector-label--return"
-                  data-step="7"
-                  x="413"
-                  y="116"
-                  text-anchor="middle"
-                >
-                  candidate
-                </text>
-
-                <line
-                  class="connector conn conn--flow conn--return"
-                  data-step="8"
-                  x1="226"
-                  y1="102"
-                  x2="184"
-                  y2="102"
-                />
-                <rect x="186" y="106" width="38" height="13" fill="#ffffff" />
-                <text
-                  class="connector-label connector-label--return"
-                  data-step="8"
-                  x="205"
-                  y="116"
-                  text-anchor="middle"
-                >
-                  replace
-                </text>
-
-                <polyline
-                  class="connector conn conn--event"
-                  data-step="6"
-                  points="517,118 517,150 1179,150 1179,118"
-                />
-                <rect x="782" y="141" width="132" height="14" fill="#ffffff" />
-                <text class="connector-label" data-step="6" x="848" y="151" text-anchor="middle">
-                  boundary facts via Hook writer
-                </text>
-              </svg>
-
-              <p class="route-caption">
-                上行黑线为请求；下行绿色为 Provider 结果回流；虚线为无正文审计事实。
-              </p>
+          <article class="step">
+            <div class="step__actor">
+              <span class="step__number">STEP 01</span>
+              <strong class="step__actor-name">COSH</strong>
+              <span class="step__actor-role">工具结果聚合边界</span>
             </div>
-          </div>
-          <div class="legend" aria-label="connector legend">
-            <span class="legend__title">Legend</span>
-            <span class="legend__item">
-              <svg width="42" height="12" aria-hidden="true">
-                <defs>
-                  <marker
-                    id="legend-request"
-                    viewBox="0 0 10 10"
-                    refX="10"
-                    refY="5"
-                    markerWidth="7"
-                    markerHeight="7"
-                    orient="auto"
-                  >
-                    <path d="M 0 1 L 10 5 L 0 9 z" fill="#0f172a" />
-                  </marker>
-                </defs>
-                <line
-                  class="conn conn--flow legend-conn--request"
-                  x1="0"
-                  y1="6"
-                  x2="35"
-                  y2="6"
-                  stroke="#0f172a"
-                  stroke-width="1.5"
-                  marker-end="url(#legend-request)"
-                />
-              </svg>
-              请求 / 调用
-            </span>
-            <span class="legend__item">
-              <svg width="42" height="12" aria-hidden="true">
-                <defs>
-                  <marker
-                    id="legend-return"
-                    viewBox="0 0 10 10"
-                    refX="10"
-                    refY="5"
-                    markerWidth="7"
-                    markerHeight="7"
-                    orient="auto"
-                  >
-                    <path d="M 0 1 L 10 5 L 0 9 z" fill="#0f766e" />
-                  </marker>
-                </defs>
-                <line
-                  class="conn conn--flow legend-conn--return"
-                  x1="0"
-                  y1="6"
-                  x2="35"
-                  y2="6"
-                  stroke="#0f766e"
-                  stroke-width="1.75"
-                  marker-end="url(#legend-return)"
-                />
-              </svg>
-              业务结果回流
-            </span>
-            <span class="legend__item">
-              <svg width="42" height="12" aria-hidden="true">
-                <defs>
-                  <marker
-                    id="legend-event"
-                    viewBox="0 0 10 10"
-                    refX="10"
-                    refY="5"
-                    markerWidth="7"
-                    markerHeight="7"
-                    orient="auto"
-                  >
-                    <path d="M 0 1 L 10 5 L 0 9 z" fill="#64748b" />
-                  </marker>
-                </defs>
-                <line
-                  class="conn conn--event legend-conn--event"
-                  x1="0"
-                  y1="6"
-                  x2="35"
-                  y2="6"
-                  stroke="#64748b"
-                  stroke-width="1.5"
-                  stroke-dasharray="3 5"
-                  marker-end="url(#legend-event)"
-                />
-              </svg>
-              Ledger 事实
-            </span>
-          </div>
-        </section>
-
-        <section class="section" aria-labelledby="steps-title">
-          <div class="section-head">
-            <h2 class="section-title" id="steps-title">2. 八个数据步骤</h2>
-            <p class="section-note">按 1–8 可聚焦；按 Esc 恢复全部。</p>
-          </div>
-
-          <nav class="step-nav" aria-label="sequence step filters">
-            <button type="button" data-filter="all" aria-pressed="true">全部步骤</button>
-            <button type="button" data-filter="1" aria-pressed="false">01 Hook input</button>
-            <button type="button" data-filter="2" aria-pressed="false">02 Canonical input</button>
-            <button type="button" data-filter="3" aria-pressed="false">03 Native request</button>
-            <button type="button" data-filter="4" aria-pressed="false">04 Native response</button>
-            <button type="button" data-filter="5" aria-pressed="false">05 Candidate</button>
-            <button type="button" data-filter="6" aria-pressed="false">06 Receipt</button>
-            <button type="button" data-filter="7" aria-pressed="false">07 Core validation</button>
-            <button type="button" data-filter="8" aria-pressed="false">08 Replacement</button>
-          </nav>
-
-          <div class="step-grid">
-            <section class="step-card" id="step-1" data-step-card="1">
-              <header class="step-card__head">
-                <span class="step-card__index">01</span>
-                <div class="step-card__title">
-                  <h3>COSH 提交 Tool Result</h3>
-                  <span class="step-card__route">COSH → AW Hook</span>
+            <div class="step__body">
+              <div class="step__title-row">
+                <h2 class="step__title">提交 post-tool-use 的源正文、表示与执行 scope</h2>
+                <span class="step__schema">COSH source submission</span>
+              </div>
+              <div class="field-grid">
+                <div class="field field--wide">
+                  <span class="field__name">source.content</span>
+                  <span class="field__value">{"builds":[{"id":"build-101","project":"checkout-service","status":"passed"},…],"page":1,"page_size":6}</span>
+                  <span class="field__meaning">COSH 拥有聚合后的完整 693B 正文；图中只显示安全摘要。</span>
                 </div>
-                <span class="step-card__kind">Hook input</span>
-              </header>
-              <div class="field-table">
-                <div class="field-row">
-                  <div class="field-name">tool_name</div>
-                  <div class="field-value">list_recent_builds</div>
-                  <div class="field-meaning">产生本次结果的工具。</div>
+                <div class="field">
+                  <span class="field__name">source.media_type / origin</span>
+                  <span class="field__value">application/json / api_response</span>
+                  <span class="field__meaning">COSH 描述源表示与来源，不分配 canonical artifact。</span>
                 </div>
-                <div class="field-row">
-                  <div class="field-name">llmContent</div>
-                  <div class="field-value">{"builds":[…]}</div>
-                  <div class="field-meaning">准备进入模型上下文的原始正文。</div>
+                <div class="field">
+                  <span class="field__name">source.tool_name</span>
+                  <span class="field__value">list_recent_builds</span>
+                  <span class="field__meaning">COSH 提供产生本次 Tool Result 的工具名。</span>
                 </div>
-                <div class="field-row">
-                  <div class="field-name">scope.tool_use_id</div>
-                  <div class="field-value">tol_66666666-6666-4666-8666-666666666666</div>
-                  <div class="field-meaning">把调用关联到一个 Tool Use。</div>
+                <div class="field field--wide">
+                  <span class="field__name">execution_scope</span>
+                  <span class="field__value">env_333… · ctx_444… · act_555… · ags_111… · trn_222… · tol_666…</span>
+                  <span class="field__meaning">COSH 提交真实 scope；AW Core 后续把它绑定到 invocation 与 receipt。</span>
+                </div>
+                <div class="field field--wide">
+                  <span class="field__name">reader verification · not a COSH artifact field</span>
+                  <span class="field__value">693B · sha256 01202f4b809e4ffee777b3b7a62ca0d5007b99738c0abbc537fd1cc29d7422e1</span>
+                  <span class="field__meaning">这是读者可独立复算的 source bytes 事实，不表示 COSH 已生成 artifact.digest。</span>
                 </div>
               </div>
-              <p class="card-foot">
-                Hook 只选择 <code>llmContent</code>；<code>returnDisplay</code> 不进入本次投影。
-              </p>
-              <details>
-                <summary>展开完整 scope</summary>
-                <pre>{
-  "environment_id": "env_33333333-3333-4333-8333-333333333333",
-  "execution_context_id": "ctx_44444444-4444-4444-8444-444444444444",
-  "actor_id": "act_55555555-5555-4555-8555-555555555555",
-  "agent_session_id": "ags_11111111-1111-4111-8111-111111111111",
-  "turn_id": "trn_22222222-2222-4222-8222-222222222222",
-  "tool_use_id": "tol_66666666-6666-4666-8666-666666666666"
-}</pre>
-              </details>
-            </section>
-
-            <section class="step-card" id="step-2" data-step-card="2">
-              <header class="step-card__head">
-                <span class="step-card__index">02</span>
-                <div class="step-card__title">
-                  <h3>Core 建立 Provider 无关输入</h3>
-                  <span class="step-card__route">AW Hook → AW Core</span>
-                </div>
-                <span class="step-card__kind">Canonical input</span>
-              </header>
-              <div class="field-table">
-                <div class="field-row">
-                  <div class="field-name">artifact.id</div>
-                  <div class="field-value">art_c8f93696-03b8-804e-923a-1fcf9a4d7ac7</div>
-                  <div class="field-meaning">由 scope 与 source digest 派生的稳定身份。</div>
-                </div>
-                <div class="field-row">
-                  <div class="field-name">artifact.digest</div>
-                  <div class="field-value">612b377d40f7b6d00e03ea08831661702487ecd7f9d21631ea9e8d173da6c88f</div>
-                  <div class="field-meaning">原始模型可见正文的 SHA-256。</div>
-                </div>
-                <div class="field-row">
-                  <div class="field-name">media_type</div>
-                  <div class="field-value">application/json</div>
-                  <div class="field-meaning">告诉 Provider 输入内容的表示形式。</div>
-                </div>
-                <div class="field-row">
-                  <div class="field-name">boundary</div>
-                  <div class="field-value">post_tool</div>
-                  <div class="field-meaning">该数据来自工具执行后的边界。</div>
-                </div>
-              </div>
-              <p class="card-foot">
-                此对象符合 <code>context.projection.prepare.input/v1</code>，不包含 Tokenless 私有字段。
-              </p>
-            </section>
-
-            <section class="step-card" id="step-3" data-step-card="3">
-              <header class="step-card__head">
-                <span class="step-card__index">03</span>
-                <div class="step-card__title">
-                  <h3>Host 按 manifest 映射请求</h3>
-                  <span class="step-card__route">AW Core → Provider Host → Tokenless</span>
-                </div>
-                <span class="step-card__kind">Native request</span>
-              </header>
-              <div class="field-table">
-                <div class="field-row">
-                  <div class="field-name">content</div>
-                  <div class="field-value">← artifact.content</div>
-                  <div class="field-meaning">复制待压缩正文。</div>
-                </div>
-                <div class="field-row">
-                  <div class="field-name">agent_id</div>
-                  <div class="field-value">← env_33333333-3333-4333-8333-333333333333</div>
-                  <div class="field-meaning">当前由 environment_id 映射；语义仍需讨论。</div>
-                </div>
-                <div class="field-row">
-                  <div class="field-name">session_id</div>
-                  <div class="field-value">ags_11111111-1111-4111-8111-111111111111</div>
-                  <div class="field-meaning">Tokenless native session 归因。</div>
-                </div>
-                <div class="field-row">
-                  <div class="field-name">seam</div>
-                  <div class="field-value">post_tool</div>
-                  <div class="field-meaning">由 canonical boundary 重命名。</div>
-                </div>
-                <div class="field-row">
-                  <div class="field-name">capabilities</div>
-                  <div class="field-value">replace_output=true · retrieve=false · text=true</div>
-                  <div class="field-meaning">由 manifest 注入，不由 COSH 自由指定。</div>
-                </div>
-              </div>
-              <p class="card-foot">
-                Host 执行通用 <code>json-map/v1</code>；Core 和 Host 都没有 Tokenless 名称分支。
-              </p>
-            </section>
-
-            <section class="step-card" id="step-4" data-step-card="4">
-              <header class="step-card__head">
-                <span class="step-card__index">04</span>
-                <div class="step-card__title">
-                  <h3>Tokenless 返回真实压缩结果</h3>
-                  <span class="step-card__route">Tokenless → Provider Host</span>
-                </div>
-                <span class="step-card__kind">Native response</span>
-              </header>
-              <div class="field-table">
-                <div class="field-row">
-                  <div class="field-name">disposition</div>
-                  <div class="field-value"><strong>applied</strong></div>
-                  <div class="field-meaning">组件确实产生了压缩输出。</div>
-                </div>
-                <div class="field-row">
-                  <div class="field-name">output</div>
-                  <div class="field-value">builds[6]{id,project,status,duration_ms,owner}: …</div>
-                  <div class="field-meaning">真实候选正文，沿结果路径返回 Core。</div>
-                </div>
-                <div class="field-row">
-                  <div class="field-name">token meters</div>
-                  <div class="field-value"><strong>before=359 · after=110</strong></div>
-                  <div class="field-meaning">heuristic-v1 的估算值，节省约 69%。</div>
-                </div>
-                <div class="field-row">
-                  <div class="field-name">compressor_chain</div>
-                  <div class="field-value">[response-cleanup, toon]</div>
-                  <div class="field-meaning">说明输出经过了哪些变换。</div>
-                </div>
-                <div class="field-row">
-                  <div class="field-name">reversibility</div>
-                  <div class="field-value">lossless</div>
-                  <div class="field-meaning">Provider 声明；当前与 AW 定义存在冲突。</div>
-                </div>
-              </div>
-              <p class="card-foot">
-                这是必须显式返回的业务结果。没有 <code>Tokenless → Host → Core</code>，后续无法采纳。
-              </p>
-            </section>
-
-            <section class="step-card" id="step-5" data-step-card="5">
-              <header class="step-card__head">
-                <span class="step-card__index">05</span>
-                <div class="step-card__title">
-                  <h3>Host 构造 canonical candidate</h3>
-                  <span class="step-card__route">Provider Host → AW Core</span>
-                </div>
-                <span class="step-card__kind">Outcome.output</span>
-              </header>
-              <div class="field-table">
-                <div class="field-row">
-                  <div class="field-name">source_artifact_id</div>
-                  <div class="field-value">art_c8f93696-03b8-804e-923a-1fcf9a4d7ac7</div>
-                  <div class="field-meaning">候选必须明确来自哪个 artifact。</div>
-                </div>
-                <div class="field-row">
-                  <div class="field-name">source_digest</div>
-                  <div class="field-value">612b377d40f7b6d00e03ea08831661702487ecd7f9d21631ea9e8d173da6c88f</div>
-                  <div class="field-meaning">防止把候选错配到另一份正文。</div>
-                </div>
-                <div class="field-row">
-                  <div class="field-name">content</div>
-                  <div class="field-value"><strong>builds[6]{…}</strong></div>
-                  <div class="field-meaning">从 native output 复制的瞬时业务正文。</div>
-                </div>
-                <div class="field-row">
-                  <div class="field-name">media_type</div>
-                  <div class="field-value">text/plain</div>
-                  <div class="field-meaning">压缩结果将以文本形式进入模型。</div>
-                </div>
-                <div class="field-row">
-                  <div class="field-name">transform_chain</div>
-                  <div class="field-value">[response-cleanup, toon]</div>
-                  <div class="field-meaning">由 compressor_chain 映射。</div>
-                </div>
-              </div>
-              <p class="card-foot">
-                Candidate 位于 <code>ProviderInvocationOutcome.output</code>，只走即时返回路径，不写入通用 Receipt。
-              </p>
-            </section>
-
-            <section class="step-card" id="step-6" data-step-card="6">
-              <header class="step-card__head">
-                <span class="step-card__index">06</span>
-                <div class="step-card__title">
-                  <h3>Host 构造无正文 Receipt</h3>
-                  <span class="step-card__route">Provider Host → AW Core → Hook writer → AW Ledger</span>
-                </div>
-                <span class="step-card__kind">Audit facts</span>
-              </header>
-              <div class="field-table">
-                <div class="field-row">
-                  <div class="field-name">provider</div>
-                  <div class="field-value">tokenless@0.7.14</div>
-                  <div class="field-meaning">说明使用了哪个实现版本。</div>
-                </div>
-                <div class="field-row">
-                  <div class="field-name">manifest_digest</div>
-                  <div class="field-value">6b48b57238189360ba5de7f902d76300261d76d1d68af4ef542b044e18b98a32</div>
-                  <div class="field-meaning">绑定本次调用使用的 manifest 修订。</div>
-                </div>
-                <div class="field-row">
-                  <div class="field-name">disposition</div>
-                  <div class="field-value"><strong>produced</strong></div>
-                  <div class="field-meaning">产生候选；不等于候选已经进模型。</div>
-                </div>
-                <div class="field-row">
-                  <div class="field-name">meters</div>
-                  <div class="field-value">source_tokens=359 · prepared_tokens=110</div>
-                  <div class="field-meaning">保存数值事实，不保存压缩正文。</div>
-                </div>
-                <div class="field-row">
-                  <div class="field-name">candidate.content</div>
-                  <div class="field-value">不写入 Receipt</div>
-                  <div class="field-meaning">避免通用审计面复制模型可见内容。</div>
-                </div>
-              </div>
-              <p class="card-foot">
-                Host 返回 Receipt；当前由 Hook 侧过渡 writer 记录 Ledger，并非 Host 自己持久化。
-              </p>
-            </section>
-
-            <section class="step-card" id="step-7" data-step-card="7">
-              <header class="step-card__head">
-                <span class="step-card__index">07</span>
-                <div class="step-card__title">
-                  <h3>Core 验证并提出 replacement</h3>
-                  <span class="step-card__route">AW Core → AW Hook</span>
-                </div>
-                <span class="step-card__kind">Core decision</span>
-              </header>
-              <div class="field-table">
-                <div class="field-row">
-                  <div class="field-name">source identity</div>
-                  <div class="field-value">artifact id + digest 均匹配</div>
-                  <div class="field-meaning">候选不能替换另一份 Tool Result。</div>
-                </div>
-                <div class="field-row">
-                  <div class="field-name">output contract</div>
-                  <div class="field-value">context.projection.prepare.output/v1</div>
-                  <div class="field-meaning">按固定公共类型读取 candidate。</div>
-                </div>
-                <div class="field-row">
-                  <div class="field-name">reversibility gate</div>
-                  <div class="field-value">lossless</div>
-                  <div class="field-meaning">当前 Hook 只采用非空且 lossless 的候选。</div>
-                </div>
-                <div class="field-row">
-                  <div class="field-name">state</div>
-                  <div class="field-value"><strong>Produced ≠ Adopted</strong></div>
-                  <div class="field-meaning">Core 只能提出候选，不能声称最终入模。</div>
-                </div>
-              </div>
-              <p class="card-foot">
-                Core 使用 Host 返回的业务结果做验证；Receipt 单独只能证明调用事实。
-              </p>
-            </section>
-
-            <section class="step-card" id="step-8" data-step-card="8">
-              <header class="step-card__head">
-                <span class="step-card__index">08</span>
-                <div class="step-card__title">
-                  <h3>COSH 接收 replacement 请求</h3>
-                  <span class="step-card__route">AW Hook → COSH</span>
-                </div>
-                <span class="step-card__kind">Hook output</span>
-              </header>
-              <div class="field-table">
-                <div class="field-row">
-                  <div class="field-name">suppressOutput</div>
-                  <div class="field-value">true</div>
-                  <div class="field-meaning">不重复展示旧 Hook 输出。</div>
-                </div>
-                <div class="field-row">
-                  <div class="field-name">updatedToolResponse</div>
-                  <div class="field-value"><strong>builds[6]{id,project,status,duration_ms,owner}: …</strong></div>
-                  <div class="field-meaning">请求用压缩正文替换原 Tool Result。</div>
-                </div>
-                <div class="field-row">
-                  <div class="field-name">systemMessage</div>
-                  <div class="field-value">AW · tokenless · estimated context 359→110 tokens · saved 69%</div>
-                  <div class="field-meaning">向操作者解释本次上下文节省。</div>
-                </div>
-                <div class="field-row">
-                  <div class="field-name">final authority</div>
-                  <div class="field-value">COSH Hook aggregation</div>
-                  <div class="field-meaning">其他 Hook 仍可能覆盖 replacement。</div>
-                </div>
-              </div>
-              <p class="card-foot">
-                只有 COSH 聚合完成并把该文本写入下一次模型上下文，Tokenless Advise 才真正生效。
-              </p>
-            </section>
-          </div>
-        </section>
-
-        <section class="section" aria-labelledby="reference-title">
-          <div class="section-head">
-            <h2 class="section-title" id="reference-title">3. 字段语义速查</h2>
-            <p class="section-note">同名状态处于不同层时，语义不能混用。</p>
-          </div>
-          <div class="reference-grid">
-            <section class="reference-card">
-              <h3>Identity</h3>
-              <dl>
-                <dt>artifact.id</dt>
-                <dd>Core 派生的源对象身份。</dd>
-                <dt>source_digest</dt>
-                <dd>候选引用的源正文字节摘要。</dd>
-                <dt>manifest_digest</dt>
-                <dd>Host 准入的 Provider 配置修订。</dd>
-              </dl>
-            </section>
-            <section class="reference-card">
-              <h3>Transformation</h3>
-              <dl>
-                <dt>boundary</dt>
-                <dd>AW 公共 Tool 边界。</dd>
-                <dt>seam</dt>
-                <dd>Tokenless 对同一边界的 native 表达。</dd>
-                <dt>transform_chain</dt>
-                <dd>形成 candidate 的变换链。</dd>
-              </dl>
-            </section>
-            <section class="reference-card">
-              <h3>Settlement</h3>
-              <dl>
-                <dt>applied</dt>
-                <dd>Tokenless native 调用产生输出。</dd>
-                <dt>produced</dt>
-                <dd>Host 形成 canonical candidate。</dd>
-                <dt>adopted</dt>
-                <dd>Environment 最终采用；当前缺少独立回执。</dd>
-              </dl>
-            </section>
-          </div>
-        </section>
-
-        <section class="section" aria-label="review boundary">
-          <div class="review-note">
-            <div class="review-note__label">Review boundary</div>
-            <div class="review-note__body">
-              <strong>当前跨 Contract 的主要矛盾是 <code>lossless</code>。</strong>
-              AW 将它定义为保留全部 source information；Tokenless 允许删除
-              <code>debug</code>、<code>trace</code> 或空字段后仍称为 lossless。
-              修复时应保留 AW 的强定义，并在发生字段删除时返回不可逆状态或提供可恢复证据。
-              此图展示 PR head 的真实返回值，不表示该语义矛盾已经解决。
             </div>
+          </article>
+
+          <div class="connector" aria-label="COSH 到 AW Core">
+            <div class="connector__rail">
+              <svg viewBox="0 0 24 48" role="img" aria-label="向下数据流">
+                <defs>
+                  <marker id="p-arrow-01" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                    <path d="M 0 1 L 10 5 L 0 9 z" fill="#087f73" />
+                  </marker>
+                </defs>
+                <line class="conn conn--flow" x1="12" y1="0" x2="12" y2="44" stroke="#087f73" stroke-width="2" marker-end="url(#p-arrow-01)" />
+              </svg>
+            </div>
+            <div class="connector__label">COSH → AW Core · exact source bytes + media/origin/tool + scope; no artifact identity yet</div>
+          </div>
+
+          <article class="step">
+            <div class="step__actor">
+              <span class="step__number">STEP 02</span>
+              <strong class="step__actor-name">AW Core</strong>
+              <span class="step__actor-role">observe_tool_result + canonical plan</span>
+            </div>
+            <div class="step__body">
+              <div class="step__title-row">
+                <h2 class="step__title">分配 artifact 身份、计算 source digest，再构造 canonical invocation</h2>
+                <span class="step__schema">context.projection.prepare.input/v1</span>
+              </div>
+              <div class="field-grid">
+                <div class="field">
+                  <span class="field__name">capability</span>
+                  <span class="field__value">context.projection.prepare/v1</span>
+                  <span class="field__meaning">描述需求，不写 Tokenless 私有字段。</span>
+                </div>
+                <div class="field field--wide">
+                  <span class="field__name">AW Core owner · artifact.id / artifact.digest</span>
+                  <span class="field__value">art_9b44b763-ec58-c787-95f5-363ec02f80cb / 01202f4b…7422e1</span>
+                  <span class="field__meaning"><code>observe_tool_result</code> 分配 ID，并从 STEP 01 的 exact source bytes 计算 SHA-256。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">authority / scope</span>
+                  <span class="field__value">advise / tool_call</span>
+                  <span class="field__meaning">Provider 只能提出候选，不能自行改写历史。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">boundary / constraints</span>
+                  <span class="field__value">post_tool / allow_text_reencoding=true</span>
+                  <span class="field__meaning">Core 把处理边界与表示策略写入 canonical input。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">invocation.input.digest</span>
+                  <span class="field__value">9287a029…c4510</span>
+                  <span class="field__meaning">canonical input envelope 的确定性摘要。</span>
+                </div>
+                <div class="field field--wide">
+                  <span class="field__name">input.body.artifact</span>
+                  <span class="field__value">id=art_9b44…80cb · digest=01202f4b…7422e1 · media_type=application/json · content=&lt;693B&gt;</span>
+                  <span class="field__meaning">正文只在瞬时调用中存在；Ledger 不保存正文。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">deadline / limits</span>
+                  <span class="field__value">wall_time ≤ 2000ms</span>
+                  <span class="field__meaning">Core 预算与 manifest 上限共同约束调用。</span>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <div class="connector" aria-label="AW Core 到 Provider Host">
+            <div class="connector__rail">
+              <svg viewBox="0 0 24 48" role="img" aria-label="向下数据流">
+                <defs>
+                  <marker id="p-arrow-02" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                    <path d="M 0 1 L 10 5 L 0 9 z" fill="#087f73" />
+                  </marker>
+                </defs>
+                <line class="conn conn--flow" x1="12" y1="0" x2="12" y2="44" stroke="#087f73" stroke-width="2" marker-end="url(#p-arrow-02)" />
+              </svg>
+            </div>
+            <div class="connector__label">AW Core → Provider Host · canonical invocation + 9287a029…c4510</div>
+          </div>
+
+          <div class="section-label">
+            <span class="section-label__index">PHASE B</span>
+            <span class="section-label__text">Provider Host 通过 manifest codec 与 admitted const 调用真实 Tokenless</span>
+          </div>
+
+          <article class="step">
+            <div class="step__actor">
+              <span class="step__number">STEP 03</span>
+              <strong class="step__actor-name">Provider Host</strong>
+              <span class="step__actor-role">schema admission + json-map/v1</span>
+            </div>
+            <div class="step__body">
+              <div class="step__title-row">
+                <h2 class="step__title">校验 canonical input，再映射为 native request</h2>
+                <span class="step__schema">tokenless-compression-request-v1</span>
+              </div>
+              <div class="field-grid">
+                <div class="field">
+                  <span class="field__name">protocol_version</span>
+                  <span class="field__value">1</span>
+                  <span class="field__meaning">Tokenless native 协议版本。</span>
+                </div>
+                <div class="field field--wide">
+                  <span class="field__name">content</span>
+                  <span class="field__value">&lt;与源 artifact 完全相同的 693B&gt;</span>
+                  <span class="field__meaning">codec 从 <code>/artifact/content</code> 复制；不是截图里的省略文本。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">input_media_type</span>
+                  <span class="field__value">application/json</span>
+                  <span class="field__meaning">codec 从 <code>/artifact/media_type</code> 复制，保留源表示身份。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">agent_id / session_id</span>
+                  <span class="field__value">aw-provider / agent_session_id</span>
+                  <span class="field__meaning"><code>agent_id</code> 是 admitted const，用作稳定的 integration/frontend label；<code>environment_id</code> 只保留在 AW scope/receipt。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">tool_use_id / tool_name</span>
+                  <span class="field__value">tol_66666666-6666-4666-8666-666666666666 / list_recent_builds</span>
+                  <span class="field__meaning">把 native 结果关联回本次工具调用。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">seam / content_origin</span>
+                  <span class="field__value">post_tool / api_response</span>
+                  <span class="field__meaning">声明内容进入模型上下文的位置与来源。</span>
+                </div>
+                <div class="field field--full">
+                  <span class="field__name">capabilities</span>
+                  <span class="field__value">replace_output=true · replace_with_text=true · publish_retrieve_tool=false</span>
+                  <span class="field__meaning">PoC manifest 注入首尾两个常量，并从 <code>allow_text_reencoding</code> 映射中间字段；native Schema 允许省略。</span>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <div class="connector" aria-label="Provider Host 到 Tokenless">
+            <div class="connector__rail">
+              <svg viewBox="0 0 24 48" role="img" aria-label="向下数据流">
+                <defs>
+                  <marker id="p-arrow-03" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                    <path d="M 0 1 L 10 5 L 0 9 z" fill="#087f73" />
+                  </marker>
+                </defs>
+                <line class="conn conn--flow" x1="12" y1="0" x2="12" y2="44" stroke="#087f73" stroke-width="2" marker-end="url(#p-arrow-03)" />
+              </svg>
+            </div>
+            <div class="connector__label">Provider Host → tokenless compress · native JSON over stdin/stdout</div>
+          </div>
+
+          <article class="step">
+            <div class="step__actor">
+              <span class="step__number">STEP 04</span>
+              <strong class="step__actor-name">Tokenless</strong>
+              <span class="step__actor-role">真实一方 Provider</span>
+            </div>
+            <div class="step__body">
+              <div class="step__title-row">
+                <h2 class="step__title">压缩后返回 native response</h2>
+                <span class="step__schema">tokenless-compression-response-v1</span>
+              </div>
+              <div class="field-grid">
+                <div class="field">
+                  <span class="field__name">disposition</span>
+                  <span class="field__value">applied</span>
+                  <span class="field__meaning">native 层表示产生了可用输出。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">before_tokens / after_tokens</span>
+                  <span class="field__value">174 / 110</span>
+                  <span class="field__meaning">均为 <code>heuristic-v1</code> 估算值。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">compressor_chain</span>
+                  <span class="field__value">["toon"]</span>
+                  <span class="field__meaning">按顺序记录实际转换器。</span>
+                </div>
+                <div class="field field--wide">
+                  <span class="field__name">output</span>
+                  <span class="field__value">&lt;压缩后的 438B 文本&gt; · sha256 6c847696…d3003</span>
+                  <span class="field__meaning">这是将要送回 Core 的候选正文，不是最终采用证明。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">output_media_type</span>
+                  <span class="field__value">text/plain</span>
+                  <span class="field__meaning">TOON 改变表示；该值会映射为 candidate.media_type。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">reversibility</span>
+                  <span class="field__value">lossless</span>
+                  <span class="field__meaning">声明候选自身可重建精确源信息。</span>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <div class="connector" aria-label="Tokenless 到 Provider Host">
+            <div class="connector__rail">
+              <svg viewBox="0 0 24 48" role="img" aria-label="向下数据流">
+                <defs>
+                  <marker id="p-arrow-04" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                    <path d="M 0 1 L 10 5 L 0 9 z" fill="#087f73" />
+                  </marker>
+                </defs>
+                <line class="conn conn--flow" x1="12" y1="0" x2="12" y2="44" stroke="#087f73" stroke-width="2" marker-end="url(#p-arrow-04)" />
+              </svg>
+            </div>
+            <div class="connector__label">Tokenless → Provider Host · applied + output + meters + reversibility</div>
+          </div>
+
+          <article class="step">
+            <div class="step__actor">
+              <span class="step__number">STEP 05</span>
+              <strong class="step__actor-name">Provider Host</strong>
+              <span class="step__actor-role">native output validation + canonicalization</span>
+            </div>
+            <div class="step__body">
+              <div class="step__title-row">
+                <h2 class="step__title">生成 canonical candidate 与无正文 receipt</h2>
+                <span class="step__schema">context.projection.prepare.output/v1</span>
+              </div>
+              <div class="field-grid">
+                <div class="field field--wide">
+                  <span class="field__name">candidate.source_artifact_id / source_digest</span>
+                  <span class="field__value">art_9b44b763-ec58-c787-95f5-363ec02f80cb / 01202f4b…7422e1</span>
+                  <span class="field__meaning">候选明确绑定 STEP 02 由 Core 分配的 artifact 与计算出的 source digest。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">candidate.content</span>
+                  <span class="field__value">438B · 6c847696…d3003</span>
+                  <span class="field__meaning">唯一允许进入最终 history 的候选正文。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">candidate.media_type</span>
+                  <span class="field__value">text/plain</span>
+                  <span class="field__meaning">由 native <code>output_media_type</code> 映射，不是 Host 猜测或常量。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">transform_chain / reversibility</span>
+                  <span class="field__value">["toon"] / lossless</span>
+                  <span class="field__meaning">Core 验证声明并写入计划约束；是否选择该候选由 COSH 决定。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">receipt.disposition</span>
+                  <span class="field__value">produced</span>
+                  <span class="field__meaning"><code>applied</code> 经 manifest 映射后的 canonical 状态。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">receipt.input_digest</span>
+                  <span class="field__value">9287a029…c4510</span>
+                  <span class="field__meaning">绑定 STEP 02 的 canonical input。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">receipt.output_digest</span>
+                  <span class="field__value">586a7bdf…b1d890</span>
+                  <span class="field__meaning">Host canonical output envelope 的摘要；也是 adoption 持久关联身份。</span>
+                </div>
+                <div class="field field--full">
+                  <span class="field__name">receipt.meters</span>
+                  <span class="field__value">context.source_tokens=174 · context.prepared_tokens=110 · measurement_kind=estimate · method=heuristic-v1</span>
+                  <span class="field__meaning">receipt 只保留身份、摘要、字节数、计量与状态；不复制 438B 正文。</span>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <div class="connector" aria-label="Provider Host 回到 AW Core">
+            <div class="connector__rail">
+              <svg viewBox="0 0 24 48" role="img" aria-label="向下数据流">
+                <defs>
+                  <marker id="p-arrow-05" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                    <path d="M 0 1 L 10 5 L 0 9 z" fill="#087f73" />
+                  </marker>
+                </defs>
+                <line class="conn conn--flow" x1="12" y1="0" x2="12" y2="44" stroke="#087f73" stroke-width="2" marker-end="url(#p-arrow-05)" />
+              </svg>
+            </div>
+            <div class="connector__label"><strong>Provider Host → AW Core</strong> · canonical candidate（含 438B 压缩结果）+ content-free receipt</div>
+          </div>
+
+          <div class="section-label">
+            <span class="section-label__index">PHASE C</span>
+            <span class="section-label__text">AW Core 只校验并规划；COSH 负责候选选择与最终采用</span>
+          </div>
+
+          <article class="step">
+            <div class="step__actor">
+              <span class="step__number">STEP 06</span>
+              <strong class="step__actor-name">AW Core</strong>
+              <span class="step__actor-role">结果校验 + adoption plan</span>
+            </div>
+            <div class="step__body">
+              <div class="step__title-row">
+                <h2 class="step__title">验证结果来自本次调用，再生成受约束的采用计划</h2>
+                <span class="step__schema">Core validation + plan</span>
+              </div>
+              <div class="field-grid">
+                <div class="field">
+                  <span class="field__name">schema gate</span>
+                  <span class="field__value">canonical output valid</span>
+                  <span class="field__meaning">不接受 schema 外字段、缺字段或跨字段矛盾。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">invocation gate</span>
+                  <span class="field__value">receipt.input_digest == 9287a029…c4510</span>
+                  <span class="field__meaning">防止把别次调用的 receipt 接到本次。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">source gate</span>
+                  <span class="field__value">artifact id + 01202f4b…7422e1 match</span>
+                  <span class="field__meaning">候选必须由这一份 693B 源正文派生。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">output envelope gate</span>
+                  <span class="field__value">sha256(canonical output) == 586a7bdf…b1d890</span>
+                  <span class="field__meaning">检测 Host 的完整输出在传输后是否变化。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">content gate</span>
+                  <span class="field__value">sha256(candidate.content) == 6c847696…d3003</span>
+                  <span class="field__meaning">明确最终替换的是哪 438B。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">plan constraints</span>
+                  <span class="field__value">allow_text_reencoding=true · candidate_envelope_digest=586a7bdf…b1d890</span>
+                  <span class="field__meaning">Core 只把允许的表示变化与候选身份写入计划，不在此处选择候选。</span>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <div class="connector" aria-label="AW Core 到 AW Ledger，先持久化 post-tool-use plan">
+            <div class="connector__rail">
+              <svg viewBox="0 0 24 48" role="img" aria-label="向下数据流">
+                <defs>
+                  <marker id="p-arrow-06" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                    <path d="M 0 1 L 10 5 L 0 9 z" fill="#087f73" />
+                  </marker>
+                </defs>
+                <line class="conn conn--flow" x1="12" y1="0" x2="12" y2="44" stroke="#087f73" stroke-width="2" marker-end="url(#p-arrow-06)" />
+              </svg>
+            </div>
+            <div class="connector__label">AW Core → AW Ledger · append post_tool_use_plan before any COSH history mutation</div>
+          </div>
+
+          <article class="step">
+            <div class="step__actor">
+              <span class="step__number">STEP 07</span>
+              <strong class="step__actor-name">AW Ledger</strong>
+              <span class="step__actor-role">pre-adoption durability gate</span>
+            </div>
+            <div class="step__body">
+              <div class="step__title-row">
+                <h2 class="step__title">先追加可验证的 post_tool_use_plan</h2>
+                <span class="step__schema">aw.ledger.post_tool_use_plan/v1</span>
+              </div>
+              <div class="field-grid">
+                <div class="field">
+                  <span class="field__name">source_artifact_id / source_digest</span>
+                  <span class="field__value">art_9b44…80cb / 01202f4b…7422e1</span>
+                  <span class="field__meaning">绑定 STEP 02 的 Core-owned artifact 与源正文。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">projection.candidate_envelope_digest</span>
+                  <span class="field__value">586a7bdf…b1d890</span>
+                  <span class="field__meaning">绑定 Host 回流且 Core 验证后的完整 candidate envelope。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">projection.candidate_content_digest</span>
+                  <span class="field__value">6c847696…d3003</span>
+                  <span class="field__meaning">为后续 COSH 实际选择的 438B 提供内容身份。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">projection.invocation</span>
+                  <span class="field__value">tokenless · produced · receipt.output_digest=586a7bdf…b1d890</span>
+                  <span class="field__meaning">只持久化调用身份、状态和摘要，不持久化正文。</span>
+                </div>
+                <div class="field field--wide">
+                  <span class="field__name">required assurance</span>
+                  <span class="field__value">append settled → continue · append failed → stop before history write</span>
+                  <span class="field__meaning">Required 模式不能让 COSH 执行一项 Ledger 从未记录的计划。</span>
+                </div>
+                <div class="field field--wide">
+                  <span class="field__name">best_effort / Correlated assurance</span>
+                  <span class="field__value">append failed → ledger_unavailable=true · continue explicitly degraded</span>
+                  <span class="field__meaning">降级是可见状态，不能伪造 plan_event_id 或声称 plan 已落盘。</span>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <div class="connector" aria-label="AW Ledger 计划结果到 COSH history">
+            <div class="connector__rail">
+              <svg viewBox="0 0 24 48" role="img" aria-label="向下数据流">
+                <defs>
+                  <marker id="p-arrow-06b" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                    <path d="M 0 1 L 10 5 L 0 9 z" fill="#087f73" />
+                  </marker>
+                </defs>
+                <line class="conn conn--flow" x1="12" y1="0" x2="12" y2="44" stroke="#087f73" stroke-width="2" marker-end="url(#p-arrow-06b)" />
+              </svg>
+            </div>
+            <div class="connector__label">AW Ledger → COSH · required=durable ack; best_effort=explicit ledger_unavailable degradation</div>
+          </div>
+
+          <article class="step">
+            <div class="step__actor">
+              <span class="step__number">STEP 08</span>
+              <strong class="step__actor-name">COSH History</strong>
+              <span class="step__actor-role">final adoption point</span>
+            </div>
+            <div class="step__body">
+              <div class="step__title-row">
+                <h2 class="step__title">选择候选，再把精确字节写入 Tool Result history slot</h2>
+                <span class="step__schema">effective Tool Result</span>
+              </div>
+              <div class="field-grid">
+                <div class="field field--wide">
+                  <span class="field__name">selection conditions</span>
+                  <span class="field__value">produced · non-empty · lossless · text reencoding allowed</span>
+                  <span class="field__meaning">这些条件由 COSH 在最终 history 边界检查；失败时保留原始 693B。</span>
+                </div>
+                <div class="field field--wide">
+                  <span class="field__name">message.tool_result.content</span>
+                  <span class="field__value">&lt;与 candidate.content 字节完全相同的 438B&gt;</span>
+                  <span class="field__meaning">这一刻才叫“Tokenless 生效”；Provider 返回 applied/produced 还不算。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">effective_digest</span>
+                  <span class="field__value">6c847696…d3003</span>
+                  <span class="field__meaning">证明最终 history 使用了候选正文。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">source_bytes → effective_bytes</span>
+                  <span class="field__value">693 → 438</span>
+                  <span class="field__meaning">字节数与 token 估算是两套计量。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">decision</span>
+                  <span class="field__value">adopted</span>
+                  <span class="field__meaning">若任一选择条件失败，应为 preserved/failed，而不是伪装成功。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">model-visible result</span>
+                  <span class="field__value">438B compressed text</span>
+                  <span class="field__meaning">后续模型轮次读取的是这份有效 Tool Result。</span>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <div class="connector" aria-label="COSH 到 AW Ledger">
+            <div class="connector__rail">
+              <svg viewBox="0 0 24 48" role="img" aria-label="向下数据流">
+                <defs>
+                  <marker id="p-arrow-07" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                    <path d="M 0 1 L 10 5 L 0 9 z" fill="#087f73" />
+                  </marker>
+                </defs>
+                <line class="conn conn--flow" x1="12" y1="0" x2="12" y2="44" stroke="#087f73" stroke-width="2" marker-end="url(#p-arrow-07)" />
+              </svg>
+            </div>
+            <div class="connector__label">COSH → AW Ledger · after exact history write, append context_adoption; never copy content</div>
+          </div>
+
+          <article class="step">
+            <div class="step__actor">
+              <span class="step__number">STEP 09</span>
+              <strong class="step__actor-name">AW Ledger</strong>
+              <span class="step__actor-role">post-adoption durable evidence</span>
+            </div>
+            <div class="step__body">
+              <div class="step__title-row">
+                <h2 class="step__title">在 history write 之后追加 context_adoption 事实</h2>
+                <span class="step__schema">aw.ledger.context_adoption/v1 · typed Rust body</span>
+              </div>
+              <div class="field-grid">
+                <div class="field">
+                  <span class="field__name">plan_event_id</span>
+                  <span class="field__value">STEP 07 durable post_tool_use_plan event</span>
+                  <span class="field__meaning">adoption 必须引用先前已落稳且 scope 一致的 typed plan。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">source_artifact_id / source_digest</span>
+                  <span class="field__value">art_9b44…80cb / 01202f4b…7422e1</span>
+                  <span class="field__meaning">必须与被引用的 plan 完全一致。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">candidate_envelope_digest</span>
+                  <span class="field__value">586a7bdf…b1d890</span>
+                  <span class="field__meaning">按 contract 等于 receipt.output_digest，绑定 Host canonical output envelope。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">effective_digest / effective_byte_count</span>
+                  <span class="field__value">6c847696…d3003 / 438</span>
+                  <span class="field__meaning">绑定 STEP 08 已实际写入 COSH history 的 exact bytes。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">decision / reason</span>
+                  <span class="field__value">adopted / lossless_candidate</span>
+                  <span class="field__meaning">采用事实只属于 COSH，不由 Core 或 Provider 自报。</span>
+                </div>
+                <div class="field field--wide">
+                  <span class="field__name">provider_invocations[]</span>
+                  <span class="field__value">tokenless · produced · output_digest=586a7bdf…b1d890</span>
+                  <span class="field__meaning">引用 plan 消费的 content-free receipt facts，不复制 native 或 canonical 正文。</span>
+                </div>
+                <div class="field field--wide">
+                  <span class="field__name">best_effort degraded path</span>
+                  <span class="field__value">no durable plan_event_id → no false context_adoption claim</span>
+                  <span class="field__meaning">COSH 已写入 history 的事实仍成立，但 Ledger 必须保留显式 unavailable gap。</span>
+                </div>
+                <div class="field">
+                  <span class="field__name">content fields</span>
+                  <span class="field__value">absent</span>
+                  <span class="field__meaning">Ledger 泄露面保持最小。</span>
+                </div>
+              </div>
+            </div>
+          </article>
+        </section>
+
+        <section class="decision" aria-label="三个容易混淆的摘要">
+          <div class="decision__cell">
+            <span class="decision__label">Source content digest</span>
+            <span class="decision__value"><code>01202f4b…7422e1</code> 证明输入的 693B 是哪一份。</span>
+          </div>
+          <div class="decision__cell">
+            <span class="decision__label">Provider output / adoption digest</span>
+            <span class="decision__value"><code>586a7bdf…b1d890</code> 同时写入 receipt.output_digest 与 adoption.candidate_envelope_digest。</span>
+          </div>
+          <div class="decision__cell">
+            <span class="decision__label">Effective content digest</span>
+            <span class="decision__value"><code>6c847696…d3003</code> 证明最终 history 采用了哪 438B。</span>
           </div>
         </section>
 
-        <footer class="footer">
-          <span>
-            Data source: PR head <code>42d07649409ecd5bb023056b28545efbd9325ef2</code>
+        <aside class="boundary-note">
+          <h2>语义边界</h2>
+          <p>
+            Tokenless 只拥有 <code>advise</code> 权限。它可以产生 candidate 和 receipt，不能直接改写
+            COSH history，也不能把自己的 <code>applied</code> 当成最终采用。AW Core 只校验返回身份、
+            摘要和 Schema，再生成约束计划；COSH 独立检查 <code>produced + non-empty + lossless</code>，
+            选择候选并对实际写入 history 的字节给出最终采用证据。条件不满足时，COSH 必须保留
+            原始 693B，且 <code>effective_digest == source_digest</code>。
+          </p>
+        </aside>
+
+        <footer class="legend" aria-label="图例">
+          <span class="legend__title">Legend</span>
+          <span class="legend__item">
+            <svg width="40" height="12" aria-hidden="true">
+              <defs>
+                <marker id="p-legend-arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                  <path d="M 0 1 L 10 5 L 0 9 z" fill="#087f73" />
+                </marker>
+              </defs>
+              <line x1="0" y1="6" x2="36" y2="6" stroke="#087f73" stroke-width="2" marker-end="url(#p-legend-arrow)" />
+            </svg>
+            实际数据或控制流
           </span>
-          <span>
-            Fixture digest: <code>612b377d40f7b6d00e03ea08831661702487ecd7f9d21631ea9e8d173da6c88f</code>
-          </span>
+          <span class="legend__item"><span class="badge badge--accent">PHASE</span> 责任边界</span>
+          <span class="legend__item"><code>digest</code> 均为 SHA-256，小写十六进制</span>
         </footer>
       </article>
     </main>
-
-    <script>
-      (() => {
-        const filterButtons = Array.from(
-          document.querySelectorAll("[data-filter]")
-        );
-        const cards = Array.from(document.querySelectorAll("[data-step-card]"));
-        const nodes = Array.from(document.querySelectorAll("[data-node]"));
-        const connectors = Array.from(
-          document.querySelectorAll(".connector[data-step]")
-        );
-        const labels = Array.from(
-          document.querySelectorAll(".connector-label[data-step]")
-        );
-
-        function setFilter(step, shouldScroll = false) {
-          const showAll = step === "all";
-
-          filterButtons.forEach((button) => {
-            button.setAttribute(
-              "aria-pressed",
-              String(button.dataset.filter === step)
-            );
-          });
-
-          cards.forEach((card) => {
-            const active = showAll || card.dataset.stepCard === step;
-            card.classList.toggle("is-focus", !showAll && active);
-            card.classList.toggle("is-dim", !active);
-          });
-
-          nodes.forEach((node) => {
-            const steps = node.dataset.steps.split(",");
-            const active = showAll || steps.includes(step);
-            node.classList.toggle("is-focus", !showAll && active);
-            node.classList.toggle("is-dim", !active);
-          });
-
-          [...connectors, ...labels].forEach((element) => {
-            const active = showAll || element.dataset.step === step;
-            element.classList.toggle("is-focus", !showAll && active);
-            element.classList.toggle("is-dim", !active);
-          });
-
-          if (!showAll && shouldScroll) {
-            document
-              .querySelector(`[data-step-card="${step}"]`)
-              ?.scrollIntoView({ behavior: "smooth", block: "center" });
-          }
-        }
-
-        filterButtons.forEach((button) => {
-          button.addEventListener("click", () => {
-            setFilter(button.dataset.filter, button.dataset.filter !== "all");
-          });
-        });
-
-        nodes.forEach((node) => {
-          node.addEventListener("click", () => {
-            const firstStep = node.dataset.steps.split(",")[0];
-            setFilter(firstStep, true);
-          });
-        });
-
-        document.addEventListener("keydown", (event) => {
-          if (/^[1-8]$/.test(event.key)) {
-            setFilter(event.key, true);
-          } else if (event.key === "Escape") {
-            setFilter("all");
-          }
-        });
-      })();
-    </script>
   </body>
 </html>
