@@ -34,6 +34,7 @@ pub(super) fn invoke(
     state_root: Option<&Path>,
 ) -> Result<ProviderInvocationResult, ProviderHostError> {
     validate_invocation(provider, capability, invocation)?;
+    validate_invocation_schema(capability, &invocation.input.body)?;
     let canonical_input = canonical_json_v1_bytes(&invocation.input.body).map_err(|error| {
         ProviderHostError::InvocationRejected(format!(
             "input body cannot be encoded as JSON: {error}"
@@ -46,6 +47,7 @@ pub(super) fn invoke(
         ));
     }
     let native_input = map_request(capability, invocation)?;
+    validate_native_input_schema(capability, &native_input)?;
     let input = canonical_json_v1_bytes(&native_input).map_err(|error| {
         ProviderHostError::InvocationRejected(format!(
             "mapped Provider input cannot be encoded as JSON: {error}"
@@ -148,6 +150,24 @@ pub(super) fn invoke(
             );
         }
     };
+    if let Err(reason) = schema_failure_reason(&capability.native_output_schema, &response) {
+        return accepted_failure(
+            provider,
+            capability,
+            invocation,
+            started_at_ms,
+            invalid_response(provider, &format!("native output {reason}"), &response),
+        );
+    }
+    if let Err(reason) = validate_response_correlations(capability, &native_input, &response) {
+        return accepted_failure(
+            provider,
+            capability,
+            invocation,
+            started_at_ms,
+            invalid_response(provider, &reason, &response),
+        );
+    }
     if remaining_until(deadline).is_zero() {
         return accepted_failure(
             provider,
@@ -187,6 +207,61 @@ pub(super) fn invoke(
         }
     };
     Ok(result)
+}
+
+fn validate_response_correlations(
+    capability: &AdmittedCapability,
+    request: &serde_json::Value,
+    response: &serde_json::Value,
+) -> Result<(), String> {
+    for correlation in &capability.codec.response_correlations {
+        let expected = request
+            .pointer(&correlation.request_pointer)
+            .ok_or_else(|| {
+                "response correlation request field is absent after mapping".to_owned()
+            })?;
+        let actual = response
+            .pointer(&correlation.response_pointer)
+            .ok_or_else(|| {
+                "response correlation field is absent from the native response".to_owned()
+            })?;
+        if actual != expected {
+            return Err("native response does not correlate with its request".to_owned());
+        }
+    }
+    Ok(())
+}
+
+fn validate_invocation_schema(
+    capability: &AdmittedCapability,
+    input: &serde_json::Value,
+) -> Result<(), ProviderHostError> {
+    schema_failure_reason(&capability.canonical_input_schema, input).map_err(|reason| {
+        ProviderHostError::InvocationRejected(format!("canonical input {reason}"))
+    })
+}
+
+fn validate_native_input_schema(
+    capability: &AdmittedCapability,
+    input: &serde_json::Value,
+) -> Result<(), ProviderHostError> {
+    schema_failure_reason(&capability.native_input_schema, input).map_err(|reason| {
+        ProviderHostError::InvocationRejected(format!("mapped native input {reason}"))
+    })
+}
+
+fn schema_failure_reason(
+    validator: &jsonschema::Validator,
+    instance: &serde_json::Value,
+) -> Result<(), String> {
+    validator.validate(instance).map_err(|error| {
+        let path = error.instance_path().as_str();
+        if path.is_empty() {
+            "does not satisfy its admitted schema at the document root".to_owned()
+        } else {
+            format!("does not satisfy its admitted schema at `{path}`")
+        }
+    })
 }
 
 fn validate_invocation(
@@ -782,6 +857,15 @@ fn map_response(
                     &response,
                 )
             })?;
+        }
+        if let Err(reason) =
+            schema_failure_reason(&capability.canonical_output_schema, &output_body)
+        {
+            return Err(invalid_response(
+                provider,
+                &format!("canonical output {reason}"),
+                &response,
+            ));
         }
         let encoded = canonical_json_v1_bytes(&output_body).map_err(|error| {
             invalid_response(

@@ -227,6 +227,10 @@ struct ProviderLimits {
 #[derive(Debug)]
 struct AdmittedCapability {
     descriptor: ProviderCapabilityDescriptor,
+    canonical_input_schema: jsonschema::Validator,
+    canonical_output_schema: jsonschema::Validator,
+    native_input_schema: jsonschema::Validator,
+    native_output_schema: jsonschema::Validator,
     codec: JsonMapCodec,
 }
 
@@ -234,8 +238,15 @@ struct AdmittedCapability {
 struct JsonMapCodec {
     request_fields: Vec<RequestFieldMapping>,
     disposition: DispositionMapping,
+    response_correlations: Vec<ResponseCorrelation>,
     output_fields: Vec<OutputFieldMapping>,
     meters: Vec<MeterMapping>,
+}
+
+#[derive(Debug)]
+struct ResponseCorrelation {
+    request_pointer: String,
+    response_pointer: String,
 }
 
 #[derive(Debug)]

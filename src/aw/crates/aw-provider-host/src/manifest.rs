@@ -19,7 +19,7 @@ use super::{
     MissingValueAction, OutputFieldMapping, OutputValueSource, ProviderAdmissionOptions,
     ProviderDataDeclaration, ProviderHostError, ProviderLimits, ProviderManifestSource,
     ProviderNetworkAccess, ProviderPermissionDeclaration, RequestFieldMapping, RequestValueSource,
-    ScopeField, MAX_PROVIDER_MANIFEST_BYTES,
+    ResponseCorrelation, ScopeField, MAX_PROVIDER_MANIFEST_BYTES,
 };
 
 const JSON_MAP_CODEC: &str = "json-map/v1";
@@ -169,9 +169,18 @@ enum ManifestScopeField {
 struct ManifestResponseMapping {
     disposition: ManifestDispositionMapping,
     #[serde(default)]
+    correlations: Vec<ManifestResponseCorrelation>,
+    #[serde(default)]
     output_fields: Vec<ManifestOutputField>,
     #[serde(default)]
     meters: Vec<ManifestMeter>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ManifestResponseCorrelation {
+    request_pointer: String,
+    response_pointer: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -531,25 +540,25 @@ fn validate_capability(
         );
     }
     let capability_id = parse_schema(path, "capability", &capability.capability)?;
-    let input_contract = validate_canonical_contract(
+    let (input_contract, canonical_input_schema) = validate_canonical_contract(
         path,
         manifest_directory,
         "input_contract",
         capability.input_contract,
     )?;
-    let output_contract = validate_canonical_contract(
+    let (output_contract, canonical_output_schema) = validate_canonical_contract(
         path,
         manifest_directory,
         "output_contract",
         capability.output_contract,
     )?;
-    validate_native_contract(
+    let native_input_schema = validate_native_contract(
         path,
         manifest_directory,
         "native_input",
         capability.native_input,
     )?;
-    validate_native_contract(
+    let native_output_schema = validate_native_contract(
         path,
         manifest_directory,
         "native_output",
@@ -616,6 +625,8 @@ fn validate_capability(
         }
     }
     let _ = capability.codec.response.disposition.on_unknown;
+    let response_correlations =
+        validate_response_correlations(path, capability.codec.response.correlations)?;
     let output_fields = validate_output_fields(path, capability.codec.response.output_fields)?;
     if capability
         .codec
@@ -666,16 +677,55 @@ fn validate_capability(
     };
     Ok(AdmittedCapability {
         descriptor,
+        canonical_input_schema,
+        canonical_output_schema,
+        native_input_schema,
+        native_output_schema,
         codec: JsonMapCodec {
             request_fields,
             disposition: DispositionMapping {
                 source: capability.codec.response.disposition.source,
                 values: capability.codec.response.disposition.values,
             },
+            response_correlations,
             output_fields,
             meters,
         },
     })
+}
+
+fn validate_response_correlations(
+    path: &Path,
+    correlations: Vec<ManifestResponseCorrelation>,
+) -> Result<Vec<ResponseCorrelation>, ProviderHostError> {
+    if correlations.len() > 16 {
+        return invalid(path, "response correlations exceed the 16-item limit");
+    }
+    correlations
+        .into_iter()
+        .map(|correlation| {
+            validate_json_pointer(
+                path,
+                "response correlation request pointer",
+                &correlation.request_pointer,
+            )?;
+            validate_json_pointer(
+                path,
+                "response correlation response pointer",
+                &correlation.response_pointer,
+            )?;
+            if correlation.request_pointer.is_empty() || correlation.response_pointer.is_empty() {
+                return invalid(
+                    path,
+                    "response correlations must address fields below the document root",
+                );
+            }
+            Ok(ResponseCorrelation {
+                request_pointer: correlation.request_pointer,
+                response_pointer: correlation.response_pointer,
+            })
+        })
+        .collect()
 }
 
 fn validate_canonical_contract(
@@ -683,16 +733,16 @@ fn validate_canonical_contract(
     manifest_directory: &Path,
     field: &'static str,
     contract: ManifestCanonicalContract,
-) -> Result<SchemaReference, ProviderHostError> {
+) -> Result<(SchemaReference, jsonschema::Validator), ProviderHostError> {
     let schema = parse_schema(manifest_path, field, &contract.schema)?;
-    let digest = validate_schema_resource(
+    let (digest, validator) = validate_schema_resource(
         manifest_path,
         manifest_directory,
         field,
         &contract.resource,
         &contract.sha256,
     )?;
-    Ok(SchemaReference { schema, digest })
+    Ok((SchemaReference { schema, digest }, validator))
 }
 
 fn validate_native_contract(
@@ -700,15 +750,15 @@ fn validate_native_contract(
     manifest_directory: &Path,
     field: &'static str,
     contract: ManifestNativeContract,
-) -> Result<(), ProviderHostError> {
+) -> Result<jsonschema::Validator, ProviderHostError> {
     validate_schema_resource(
         manifest_path,
         manifest_directory,
         field,
         &contract.resource,
         &contract.sha256,
-    )?;
-    Ok(())
+    )
+    .map(|(_, validator)| validator)
 }
 
 fn validate_schema_resource(
@@ -717,7 +767,7 @@ fn validate_schema_resource(
     field: &'static str,
     resource: &str,
     expected_sha256: &str,
-) -> Result<Digest, ProviderHostError> {
+) -> Result<(Digest, jsonschema::Validator), ProviderHostError> {
     let relative = Path::new(resource);
     if resource.is_empty()
         || resource.contains('\0')
@@ -768,12 +818,21 @@ fn validate_schema_resource(
         path: canonical,
         source,
     })?;
-    serde_json::from_slice::<Value>(&bytes).map_err(|error| {
+    let schema = serde_json::from_slice::<Value>(&bytes).map_err(|error| {
         ProviderHostError::InvalidManifest {
             path: manifest_path.to_path_buf(),
             reason: format!("{field}.resource is not valid JSON: {error}"),
         }
     })?;
+    let validator = jsonschema::draft202012::options()
+        .offline()
+        .build(&schema)
+        .map_err(|_| ProviderHostError::InvalidManifest {
+            path: manifest_path.to_path_buf(),
+            reason: format!(
+                "{field}.resource is not a self-contained JSON Schema Draft 2020-12 document"
+            ),
+        })?;
     let expected = Digest::parse(expected_sha256.to_owned()).map_err(|error| {
         ProviderHostError::InvalidManifest {
             path: manifest_path.to_path_buf(),
@@ -787,7 +846,7 @@ fn validate_schema_resource(
             format!("{field}.sha256 does not match the exact resource bytes"),
         );
     }
-    Ok(actual)
+    Ok((actual, validator))
 }
 
 fn validate_request_fields(

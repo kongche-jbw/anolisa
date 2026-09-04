@@ -55,6 +55,9 @@ case "$mode" in
   malformed)
     printf '%s' '{not-json'
     ;;
+  mismatched_response)
+    printf '%s' '{"protocol_version":2,"disposition":"applied","output":"compressed","before_tokens":1200,"after_tokens":180,"meter_method":"fixture-estimator-v1"}'
+    ;;
   oversize)
     i=0
     while [ "$i" -lt 2048 ]; do
@@ -77,7 +80,7 @@ impl Fixture {
         let executable = directory.path().join("fake-provider.sh");
         fs::write(&executable, FAKE_PROVIDER).unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
-        write_schema(directory.path());
+        write_schemas(directory.path());
         let manifest = directory.path().join("provider.toml");
         fs::write(
             &manifest,
@@ -104,6 +107,37 @@ impl Fixture {
             &ProviderAdmissionOptions::default(),
         )
         .unwrap()
+    }
+
+    fn replace_schema(&self, resource: &str, schema: serde_json::Value) {
+        let bytes = serde_json::to_vec(&schema).unwrap();
+        fs::write(self.directory.path().join(resource), &bytes).unwrap();
+        let old = format!(
+            "resource = \"{resource}\", sha256 = \"44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a\""
+        );
+        let new = format!(
+            "resource = \"{resource}\", sha256 = \"{}\"",
+            sha256_digest(&bytes).as_str()
+        );
+        let manifest = fs::read_to_string(&self.manifest).unwrap();
+        assert!(
+            manifest.contains(&old),
+            "fixture schema resource is present"
+        );
+        fs::write(&self.manifest, manifest.replacen(&old, &new, 1)).unwrap();
+    }
+
+    fn correlate_response(&self, request_pointer: &str, response_pointer: &str) {
+        let marker = "[capabilities.codec.response.disposition]\n";
+        let correlation = format!(
+            "[[capabilities.codec.response.correlations]]\nrequest_pointer = \"{request_pointer}\"\nresponse_pointer = \"{response_pointer}\"\n\n{marker}"
+        );
+        let manifest = fs::read_to_string(&self.manifest).unwrap();
+        assert!(
+            manifest.contains(marker),
+            "response mapping marker is present"
+        );
+        fs::write(&self.manifest, manifest.replacen(marker, &correlation, 1)).unwrap();
     }
 }
 
@@ -143,10 +177,10 @@ telemetry = "disabled"
 
 [[capabilities]]
 capability = "{capability}"
-input_contract = {{ schema = "context.projection.prepare.input/v1", resource = "schema.json", sha256 = "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a" }}
-output_contract = {{ schema = "context.projection.prepare.output/v1", resource = "schema.json", sha256 = "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a" }}
-native_input = {{ resource = "schema.json", sha256 = "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a" }}
-native_output = {{ resource = "schema.json", sha256 = "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a" }}
+input_contract = {{ schema = "context.projection.prepare.input/v1", resource = "canonical-input.schema.json", sha256 = "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a" }}
+output_contract = {{ schema = "context.projection.prepare.output/v1", resource = "canonical-output.schema.json", sha256 = "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a" }}
+native_input = {{ resource = "native-input.schema.json", sha256 = "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a" }}
+native_output = {{ resource = "native-output.schema.json", sha256 = "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a" }}
 authority = "advise"
 scopes = ["tool_call"]
 
@@ -201,8 +235,15 @@ value_pointer = "/after_tokens"
     )
 }
 
-fn write_schema(directory: &std::path::Path) {
-    fs::write(directory.join("schema.json"), "{}").unwrap();
+fn write_schemas(directory: &std::path::Path) {
+    for resource in [
+        "canonical-input.schema.json",
+        "canonical-output.schema.json",
+        "native-input.schema.json",
+        "native-output.schema.json",
+    ] {
+        fs::write(directory.join(resource), "{}").unwrap();
+    }
 }
 
 fn schema(id: &str) -> VersionedSchema {
@@ -561,7 +602,7 @@ fn missing_unknown_and_escaping_manifest_inputs_are_rejected() {
     fs::set_permissions(&outside, fs::Permissions::from_mode(0o755)).unwrap();
     let package = fixture.directory.path().join("package");
     fs::create_dir(&package).unwrap();
-    write_schema(&package);
+    write_schemas(&package);
     let manifest = package.join("provider.toml");
     fs::write(
         &manifest,
@@ -600,7 +641,11 @@ fn schema_resources_are_content_addressed_valid_json() {
     ));
 
     let fixture = Fixture::new("success", 4096);
-    fs::write(fixture.directory.path().join("schema.json"), "{not-json").unwrap();
+    fs::write(
+        fixture.directory.path().join("canonical-input.schema.json"),
+        "{not-json",
+    )
+    .unwrap();
     assert!(matches!(
         ProviderCatalog::discover(
             ProviderManifestSource::File(fixture.manifest.clone()),
@@ -608,6 +653,92 @@ fn schema_resources_are_content_addressed_valid_json() {
         ),
         Err(ProviderHostError::InvalidManifest { .. })
     ));
+}
+
+#[test]
+fn schema_resources_must_be_self_contained_draft_2020_12_documents() {
+    let fixture = Fixture::new("success", 4096);
+    fixture.replace_schema(
+        "canonical-input.schema.json",
+        json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$ref": "https://example.invalid/external.schema.json"
+        }),
+    );
+
+    assert!(matches!(
+        ProviderCatalog::discover(
+            ProviderManifestSource::File(fixture.manifest.clone()),
+            &ProviderAdmissionOptions::default(),
+        ),
+        Err(ProviderHostError::InvalidManifest { .. })
+    ));
+}
+
+#[test]
+fn invocation_validates_canonical_and_mapped_native_inputs_before_spawn() {
+    for resource in ["canonical-input.schema.json", "native-input.schema.json"] {
+        let fixture = Fixture::new("success", 4096);
+        fixture.replace_schema(
+            resource,
+            json!({
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "required": ["schema_test_missing"]
+            }),
+        );
+        let catalog = fixture.catalog();
+
+        assert!(matches!(
+            catalog.invoke(&invocation(&catalog), Some(&fixture.state_root)),
+            Err(ProviderHostError::InvocationRejected(_))
+        ));
+        assert!(
+            !fixture.state_root.join("fixture-provider").exists(),
+            "invalid {resource} input must not reach Provider execution"
+        );
+    }
+}
+
+#[test]
+fn invalid_native_and_canonical_outputs_settle_as_failed_receipts() {
+    for resource in ["native-output.schema.json", "canonical-output.schema.json"] {
+        let fixture = Fixture::new("success", 4096);
+        fixture.replace_schema(
+            resource,
+            json!({
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "required": ["schema_test_missing"]
+            }),
+        );
+        let catalog = fixture.catalog();
+        let result = catalog
+            .invoke(&invocation(&catalog), Some(&fixture.state_root))
+            .unwrap();
+
+        assert_failed_receipt(&result);
+        assert_eq!(
+            result.receipt.error.as_ref().unwrap().code.as_str(),
+            "provider_invalid_response"
+        );
+    }
+}
+
+#[test]
+fn native_response_must_correlate_with_the_mapped_request() {
+    let fixture = Fixture::new("mismatched_response", 4096);
+    fixture.correlate_response("/protocol_version", "/protocol_version");
+    let catalog = fixture.catalog();
+    let result = catalog
+        .invoke(&invocation(&catalog), Some(&fixture.state_root))
+        .unwrap();
+
+    assert_failed_receipt(&result);
+    assert_eq!(
+        result.receipt.error.as_ref().unwrap().code.as_str(),
+        "provider_invalid_response"
+    );
 }
 
 #[test]
@@ -621,7 +752,7 @@ fn directory_identity_is_enforced_and_capability_implementations_coexist() {
         let executable = package.join("fake-provider.sh");
         fs::write(&executable, FAKE_PROVIDER).unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
-        write_schema(package);
+        write_schemas(package);
     }
     fs::write(
         same_provider.join("provider.toml"),
