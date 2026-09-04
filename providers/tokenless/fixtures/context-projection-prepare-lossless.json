@@ -1,0 +1,14 @@
+{
+  "artifact": {
+    "id": "art_33333333-3333-4333-8333-333333333333",
+    "digest": "01202f4b809e4ffee777b3b7a62ca0d5007b99738c0abbc537fd1cc29d7422e1",
+    "content": "{\"builds\":[{\"id\":\"build-101\",\"project\":\"checkout-service\",\"status\":\"passed\",\"duration_ms\":48231,\"owner\":\"example-team\"},{\"id\":\"build-102\",\"project\":\"catalog-service\",\"status\":\"passed\",\"duration_ms\":39502,\"owner\":\"example-team\"},{\"id\":\"build-103\",\"project\":\"inventory-service\",\"status\":\"failed\",\"duration_ms\":61402,\"owner\":\"example-team\"},{\"id\":\"build-104\",\"project\":\"payment-service\",\"status\":\"passed\",\"duration_ms\":52710,\"owner\":\"example-team\"},{\"id\":\"build-105\",\"project\":\"notification-service\",\"status\":\"passed\",\"duration_ms\":44617,\"owner\":\"example-team\"},{\"id\":\"build-106\",\"project\":\"reporting-service\",\"status\":\"passed\",\"duration_ms\":37331,\"owner\":\"example-team\"}],\"page\":1,\"page_size\":6}",
+    "media_type": "application/json",
+    "origin": "api_response",
+    "tool_name": "list_recent_builds"
+  },
+  "boundary": "post_tool",
+  "constraints": {
+    "allow_text_reencoding": true
+  }
+}
