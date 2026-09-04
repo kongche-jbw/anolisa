@@ -288,12 +288,14 @@ fn pending_brokered_fixture(
     let operation = BrokeredOperation::WorkspaceCheckpointCreateV1(WorkspaceCheckpointCreateV1 {
         checkpoint_id: CheckpointId::new(),
     });
+    let provider_binding = BoundedOpaque::new("checkpoint-binding-v2").unwrap();
     store
         .create_brokered_approval(
             &command(&actor_id, "create-approval", '4', 13),
             &request,
             &approval_request,
             &operation,
+            Some(&provider_binding),
             &approval,
         )
         .unwrap();
@@ -1072,6 +1074,51 @@ fn run_scoped_started_recovery_is_atomic_and_idempotent() {
             .recover_brokered_executions_for_run(&run_id, 203)
             .unwrap(),
         BrokeredExecutionRecoveryReport::default()
+    );
+}
+
+#[test]
+fn takeover_loads_started_effect_with_original_provider_binding() {
+    let mut store = SqliteTaskStore::open_in_memory().unwrap();
+    let (actor_id, task_id, run_id, approval, lease) = approved_fixture(&mut store);
+    let permit = permit(&approval);
+    store
+        .issue_permit(
+            &command(&actor_id, "issue-evidence-recovery", '6', 30),
+            &permit,
+        )
+        .unwrap();
+    let started = claim_and_start(
+        &mut store,
+        &actor_id,
+        &permit,
+        &lease,
+        "evidence-recovery",
+        40,
+    );
+    let takeover = acquire_lease(
+        &mut store,
+        &actor_id,
+        &task_id,
+        &run_id,
+        "evidence-recovery-takeover",
+        201,
+        400,
+    );
+
+    let candidates = store
+        .load_started_brokered_recovery_candidates(&takeover, 202)
+        .unwrap();
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].execution, started);
+    assert_eq!(candidates[0].request.request.request_id, permit.request_id);
+    assert_eq!(
+        candidates[0]
+            .request
+            .provider_binding
+            .as_ref()
+            .map(BoundedOpaque::as_str),
+        Some("checkpoint-binding-v2")
     );
 }
 

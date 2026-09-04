@@ -1,5 +1,6 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use cosh_gateway_contracts::capability::{
@@ -205,6 +206,7 @@ impl BrokeredExecutionDriver for DenyingDriver {
                 expires_at_ms: context.request.expires_at_ms,
             },
             target_identity_digest: test_digest(),
+            provider_binding: None,
         })
     }
 
@@ -261,6 +263,78 @@ struct UncertainDriver {
 }
 
 #[derive(Clone, Copy)]
+enum RecoveryDriverMode {
+    Conclusive,
+    Unknown,
+}
+
+struct RecoveryDriver {
+    provider_binding: Option<BoundedOpaque>,
+    reconcile_calls: Arc<Mutex<usize>>,
+    mode: RecoveryDriverMode,
+}
+
+impl BrokeredExecutionDriver for RecoveryDriver {
+    fn plan_approval(
+        &mut self,
+        context: BrokeredApprovalContext<'_>,
+    ) -> Result<BrokeredApprovalPlan, ContractError> {
+        Ok(BrokeredApprovalPlan {
+            approval: ApprovalRequest {
+                approval_id: ApprovalId::new(),
+                request_id: context.request.request_id.clone(),
+                task_id: context.request.task_id.clone(),
+                run_id: context.request.run_id.clone(),
+                summary: context.summary.summary.clone(),
+                expires_at_ms: context.request.expires_at_ms,
+            },
+            target_identity_digest: test_digest(),
+            provider_binding: self.provider_binding.clone(),
+        })
+    }
+
+    fn resolve(
+        &mut self,
+        _store: &mut SqliteTaskStore,
+        _context: BrokeredResolutionContext<'_>,
+    ) -> Result<BrokeredResolution, ContractError> {
+        Err(test_contract_error(
+            "recovery fixture must not execute the provider",
+        ))
+    }
+
+    fn reconcile_started(
+        &mut self,
+        context: BrokeredRecoveryContext<'_>,
+    ) -> ExecutionTargetOutcome {
+        *self.reconcile_calls.lock().unwrap() += 1;
+        if context
+            .request
+            .provider_binding
+            .as_ref()
+            .map(BoundedOpaque::as_str)
+            != Some("checkpoint-binding-v2")
+        {
+            return ExecutionTargetOutcome::Unknown {
+                safe_detail: Some(BoundedText::new("Malformed recovery binding").unwrap()),
+            };
+        }
+        assert_eq!(context.execution.state, ExecutionState::Started);
+        match self.mode {
+            RecoveryDriverMode::Conclusive => ExecutionTargetOutcome::Conclusive {
+                succeeded: true,
+                receipt_digest: test_digest(),
+                safe_detail: None,
+                typed_result: Some(durable_success_result(&context.request.operation)),
+            },
+            RecoveryDriverMode::Unknown => ExecutionTargetOutcome::Unknown {
+                safe_detail: Some(BoundedText::new("No exact recovery evidence").unwrap()),
+            },
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 enum ConclusiveDriverMode {
     CompletionUnknownAfterCommit,
     WrongSuccessBeforePrepare,
@@ -288,6 +362,7 @@ impl BrokeredExecutionDriver for ConclusiveDriver {
                 expires_at_ms: context.request.expires_at_ms,
             },
             target_identity_digest: test_digest(),
+            provider_binding: None,
         })
     }
 
@@ -470,6 +545,7 @@ impl BrokeredExecutionDriver for UncertainDriver {
                 expires_at_ms: context.request.expires_at_ms,
             },
             target_identity_digest: test_digest(),
+            provider_binding: None,
         })
     }
 
@@ -810,6 +886,188 @@ struct ConclusiveSchedulerFixture {
     resolve_calls: Arc<Mutex<usize>>,
 }
 
+struct StartedRecoveryFixture {
+    _root: TempDir,
+    database_path: PathBuf,
+    installation: InstallationId,
+    execution_id: ExecutionId,
+    recovery_at_ms: u64,
+}
+
+fn started_recovery_fixture(
+    provider_binding: Option<&str>,
+    submission_key: &str,
+) -> StartedRecoveryFixture {
+    let root = TempDir::new().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let database_path = root.path().join("gateway.db");
+    let installation = InstallationId::new();
+    let mut coordinator =
+        TaskCoordinator::open(&database_path, Some(installation.clone())).unwrap();
+    let actor_id = actor_id_for_uid(&installation, 1000).unwrap();
+    coordinator
+        .submit(&actor_id, submission(submission_key))
+        .unwrap();
+    drop(coordinator);
+
+    let started_at = now_ms().unwrap().saturating_add(LOGICAL_CLOCK_HEADROOM_MS);
+    let mut scheduler = TaskScheduler::open_with_config(
+        &database_path,
+        Some(installation.clone()),
+        BoundedOpaque::new(format!("worker-{submission_key}")).unwrap(),
+        BrokeredFactory {
+            writes: Arc::new(Mutex::new(RuntimeWrites::default())),
+            expires_at_ms: started_at + 10_000,
+            fail_acknowledgement: false,
+            fail_result: false,
+        },
+        TaskSchedulerConfig {
+            lease_duration: Duration::from_millis(1_000),
+            lease_renewal_margin: Duration::from_millis(300),
+            runtime_operation_timeout: Duration::from_millis(500),
+        },
+    )
+    .unwrap()
+    .with_brokered_execution_driver(Box::new(RecoveryDriver {
+        provider_binding: provider_binding.map(|value| BoundedOpaque::new(value).unwrap()),
+        reconcile_calls: Arc::new(Mutex::new(0)),
+        mode: RecoveryDriverMode::Unknown,
+    }));
+    assert!(matches!(
+        scheduler.tick(started_at).unwrap(),
+        SchedulerTick::Started(_)
+    ));
+    assert!(matches!(
+        scheduler.tick(started_at + 1).unwrap(),
+        SchedulerTick::Progressed(TaskView {
+            state: TaskState::WaitingApproval,
+            ..
+        })
+    ));
+
+    let (lease, approval_request, request_id) = {
+        let active = scheduler.active.as_ref().unwrap();
+        let pending = active.pending_brokered.as_ref().unwrap();
+        (
+            active.lease.clone(),
+            pending.approval.clone(),
+            pending.brokered.request_id.clone(),
+        )
+    };
+    let approval = scheduler
+        .coordinator
+        .store
+        .load_approval_record(&approval_request.approval_id)
+        .unwrap();
+    let request = scheduler
+        .coordinator
+        .store
+        .load_brokered_request(&request_id)
+        .unwrap();
+    assert_eq!(
+        request.provider_binding.as_ref().map(BoundedOpaque::as_str),
+        provider_binding
+    );
+    let (permit_id, execution_id) = stable_test_execution_ids(&request_id).unwrap();
+    let permit = match DurableApprovalCoordinator::new(&mut scheduler.coordinator.store)
+        .resolve_once(
+            &request.request,
+            &approval_request,
+            DurableApprovalResolution {
+                resolution_command: &conclusive_driver_command(
+                    &actor_id,
+                    "recovery-resolve",
+                    &approval.approval_id,
+                    started_at + 2,
+                )
+                .unwrap(),
+                permit_command: &conclusive_driver_command(
+                    &actor_id,
+                    "recovery-permit",
+                    &approval.approval_id,
+                    started_at + 2,
+                )
+                .unwrap(),
+                expected_revision: approval.revision,
+                decision: ApprovalDecision::Approve,
+                policy_revision: 1,
+                policy_valid_until_ms: request.request.expires_at_ms,
+                permit_id,
+                execution_id: execution_id.clone(),
+            },
+        )
+        .unwrap()
+    {
+        DurableApprovalOutcome::Permit(permit) => permit.permit,
+        DurableApprovalOutcome::NotPermitted(_) => panic!("recovery fixture must issue a permit"),
+    };
+    let claim = ExecutionClaim {
+        permit_id: permit.permit_id,
+        execution_id: permit.execution_id.clone(),
+        task_id: permit.task_id,
+        run_id: permit.run_id,
+        target: permit.target,
+        target_identity_digest: permit.target_identity_digest,
+        runtime_fence: permit.runtime_fence,
+        operation_digest: permit.operation_digest,
+        input_digest: permit.input_digest,
+        policy_revision: permit.policy_revision,
+        lease,
+    };
+    let claimed = match scheduler
+        .coordinator
+        .store
+        .claim_execution(
+            &conclusive_driver_command(
+                &actor_id,
+                "recovery-claim",
+                &approval.approval_id,
+                started_at + 3,
+            )
+            .unwrap(),
+            &claim,
+        )
+        .unwrap()
+    {
+        LedgerOutcome::Applied(record) => record,
+        LedgerOutcome::Replayed(_) => panic!("recovery fixture claim must be new"),
+    };
+    let started = match scheduler
+        .coordinator
+        .store
+        .start_claimed_execution(
+            &conclusive_driver_command(
+                &actor_id,
+                "recovery-start",
+                &approval.approval_id,
+                started_at + 4,
+            )
+            .unwrap(),
+            &execution_id,
+            claimed.revision,
+            &SecurityAuditProof {
+                proof_digest: test_digest(),
+                persisted_at_ms: started_at + 3,
+            },
+        )
+        .unwrap()
+    {
+        LedgerOutcome::Applied(record) => record,
+        LedgerOutcome::Replayed(_) => panic!("recovery fixture start must be new"),
+    };
+    assert_eq!(started.state, ExecutionState::Started);
+    let recovery_at_ms = scheduler.active.as_ref().unwrap().lease_expires_at_ms;
+    drop(scheduler);
+
+    StartedRecoveryFixture {
+        _root: root,
+        database_path,
+        installation,
+        execution_id,
+        recovery_at_ms,
+    }
+}
+
 #[test]
 fn default_task_only_driver_rejects_before_approval() {
     let root = TempDir::new().unwrap();
@@ -859,6 +1117,126 @@ fn default_task_only_driver_rejects_before_approval() {
     let writes = writes.lock().unwrap();
     assert!(writes.acknowledgements.is_empty());
     assert!(writes.results.is_empty());
+}
+
+#[test]
+fn restart_commits_conclusive_provider_evidence_without_replay() {
+    let fixture = started_recovery_fixture(
+        Some("checkpoint-binding-v2"),
+        "conclusive-recovery-evidence",
+    );
+    let calls = Arc::new(Mutex::new(0));
+    let writes = Arc::new(Mutex::new(RuntimeWrites::default()));
+    let mut scheduler = TaskScheduler::open_with_config(
+        &fixture.database_path,
+        Some(fixture.installation),
+        BoundedOpaque::new("worker-conclusive-recovery").unwrap(),
+        BrokeredFactory {
+            writes,
+            expires_at_ms: fixture.recovery_at_ms + 10_000,
+            fail_acknowledgement: false,
+            fail_result: false,
+        },
+        TaskSchedulerConfig {
+            lease_duration: Duration::from_millis(1_000),
+            lease_renewal_margin: Duration::from_millis(300),
+            runtime_operation_timeout: Duration::from_millis(500),
+        },
+    )
+    .unwrap()
+    .with_brokered_execution_driver(Box::new(RecoveryDriver {
+        provider_binding: None,
+        reconcile_calls: Arc::clone(&calls),
+        mode: RecoveryDriverMode::Conclusive,
+    }));
+
+    assert!(matches!(
+        scheduler.tick(fixture.recovery_at_ms).unwrap(),
+        SchedulerTick::Settled(TaskView {
+            state: TaskState::Failed,
+            ..
+        })
+    ));
+    assert_eq!(*calls.lock().unwrap(), 1);
+    assert_eq!(
+        scheduler
+            .coordinator
+            .store
+            .load_execution_record(&fixture.execution_id)
+            .unwrap()
+            .state,
+        ExecutionState::Succeeded
+    );
+    assert!(scheduler
+        .coordinator
+        .store
+        .load_brokered_execution_result(&fixture.execution_id)
+        .is_ok());
+
+    assert!(matches!(
+        scheduler.tick(fixture.recovery_at_ms + 1).unwrap(),
+        SchedulerTick::Idle
+    ));
+    assert_eq!(*calls.lock().unwrap(), 1);
+}
+
+#[test]
+fn missing_or_malformed_recovery_binding_remains_unknown() {
+    for (index, provider_binding) in [None, Some("malformed-binding")].into_iter().enumerate() {
+        let fixture = started_recovery_fixture(
+            provider_binding,
+            &format!("unknown-recovery-binding-{index}"),
+        );
+        let calls = Arc::new(Mutex::new(0));
+        let mut scheduler = TaskScheduler::open_with_config(
+            &fixture.database_path,
+            Some(fixture.installation),
+            BoundedOpaque::new(format!("worker-unknown-recovery-{index}")).unwrap(),
+            BrokeredFactory {
+                writes: Arc::new(Mutex::new(RuntimeWrites::default())),
+                expires_at_ms: fixture.recovery_at_ms + 10_000,
+                fail_acknowledgement: false,
+                fail_result: false,
+            },
+            TaskSchedulerConfig {
+                lease_duration: Duration::from_millis(1_000),
+                lease_renewal_margin: Duration::from_millis(300),
+                runtime_operation_timeout: Duration::from_millis(500),
+            },
+        )
+        .unwrap()
+        .with_brokered_execution_driver(Box::new(RecoveryDriver {
+            provider_binding: None,
+            reconcile_calls: Arc::clone(&calls),
+            mode: RecoveryDriverMode::Unknown,
+        }));
+
+        assert!(matches!(
+            scheduler.tick(fixture.recovery_at_ms).unwrap(),
+            SchedulerTick::Settled(TaskView {
+                state: TaskState::Suspended,
+                ..
+            })
+        ));
+        assert_eq!(
+            *calls.lock().unwrap(),
+            usize::from(provider_binding.is_some())
+        );
+        assert_eq!(
+            scheduler
+                .coordinator
+                .store
+                .load_execution_record(&fixture.execution_id)
+                .unwrap()
+                .state,
+            ExecutionState::Uncertain
+        );
+        assert!(scheduler
+            .coordinator
+            .store
+            .load_brokered_execution_result(&fixture.execution_id)
+            .is_err());
+    }
 }
 
 fn conclusive_scheduler(
