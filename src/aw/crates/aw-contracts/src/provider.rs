@@ -7,6 +7,8 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest as _, Sha256};
+use thiserror::Error;
 
 use crate::{
     common::{BoundedName, BoundedOpaque, BoundedText, Digest, IdempotencyKey, TargetRef},
@@ -372,6 +374,10 @@ pub struct ProviderReceipt {
     pub provider_generation: Option<u64>,
     /// Capability served by the Provider.
     pub capability: VersionedSchema,
+    /// Canonical input schema copied from the accepted invocation.
+    pub input_schema: VersionedSchema,
+    /// Digest of the canonical input body accepted for this invocation.
+    pub input_digest: Digest,
     /// Scope copied from the admitted invocation.
     pub scope: ExecutionScope,
     /// Terminal classification independently interpreted by Core.
@@ -402,6 +408,253 @@ pub struct ProviderInvocationResult {
     pub outcome: ProviderInvocationOutcome,
     /// Content-free facts safe for the generic Provider receipt ledger.
     pub receipt: ProviderReceipt,
+}
+
+/// Cross-field failure in content-free Provider receipt facts.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum ProviderReceiptValidationError {
+    /// Only part of the output identity tuple was recorded.
+    #[error("output schema, digest, and byte count must be present or absent together")]
+    IncompleteOutputIdentity,
+    /// A JSON output cannot have an empty canonical encoding.
+    #[error("output byte count must be non-zero")]
+    ZeroOutputBytes,
+    /// A produced candidate did not identify its transient output.
+    #[error("{disposition:?} disposition requires output identity")]
+    MissingOutputIdentity {
+        /// Disposition whose required output identity was absent.
+        disposition: ProviderDisposition,
+    },
+    /// A terminal state that cannot return output claimed one.
+    #[error("{disposition:?} disposition must not carry output identity")]
+    UnexpectedOutputIdentity {
+        /// Disposition that contradicted the output identity.
+        disposition: ProviderDisposition,
+    },
+    /// A failure-like terminal state omitted its safe error.
+    #[error("{disposition:?} disposition requires an error")]
+    MissingError {
+        /// Disposition whose required error was absent.
+        disposition: ProviderDisposition,
+    },
+    /// A successful or bypassed terminal state carried an error.
+    #[error("{disposition:?} disposition must not carry an error")]
+    UnexpectedError {
+        /// Disposition that contradicted the attached error.
+        disposition: ProviderDisposition,
+    },
+    /// Receipt timestamps ran backwards.
+    #[error("receipt completion timestamp precedes its start timestamp")]
+    CompletionBeforeStart,
+    /// A receipt fact did not match the invocation accepted by Core.
+    #[error("receipt {field} does not match the accepted invocation")]
+    InvocationIdentityMismatch {
+        /// Stable field name suitable for a content-free diagnostic.
+        field: &'static str,
+    },
+}
+
+/// Cross-field failure between transient output and its durable receipt.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum ProviderInvocationResultValidationError {
+    /// Content-free receipt facts contradict one another.
+    #[error(transparent)]
+    Receipt(#[from] ProviderReceiptValidationError),
+    /// The transient output and receipt disagree about whether output exists.
+    #[error("transient output presence does not match receipt output identity")]
+    OutputPresenceMismatch,
+    /// The transient schema differs from the content-free receipt schema.
+    #[error("transient output schema does not match the receipt")]
+    OutputSchemaMismatch,
+    /// The transient digest differs from the content-free receipt digest.
+    #[error("transient output digest does not match the receipt")]
+    OutputDigestMismatch,
+    /// The transient body does not match its own canonical digest.
+    #[error("transient output body does not match its payload digest")]
+    OutputBodyDigestMismatch,
+    /// Canonical output JSON could not be encoded.
+    #[error("transient output body cannot be encoded as canonical JSON")]
+    OutputEncodingFailed,
+    /// Canonical output size cannot be represented by the receipt contract.
+    #[error("transient output byte count cannot be represented as u64")]
+    OutputSizeOverflow,
+    /// The transient canonical byte count differs from its receipt.
+    #[error("transient output has {actual} canonical bytes but receipt records {recorded}")]
+    OutputBytesMismatch {
+        /// Byte count recorded in the receipt.
+        recorded: u64,
+        /// Actual canonical JSON byte count.
+        actual: u64,
+    },
+}
+
+impl ProviderReceipt {
+    /// Verifies that terminal state, output identity, error, and time agree.
+    ///
+    /// `EffectApplied` may carry an output because an effectful Capability can
+    /// also return a transient response. Every other disposition has one
+    /// unambiguous output rule.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a terminal fact contradicts another receipt fact.
+    pub fn validate(&self) -> Result<(), ProviderReceiptValidationError> {
+        let has_schema = self.output_schema.is_some();
+        let has_digest = self.output_digest.is_some();
+        let has_bytes = self.output_bytes.is_some();
+        if has_schema != has_digest || has_schema != has_bytes {
+            return Err(ProviderReceiptValidationError::IncompleteOutputIdentity);
+        }
+        if self.output_bytes == Some(0) {
+            return Err(ProviderReceiptValidationError::ZeroOutputBytes);
+        }
+
+        let has_output = has_schema;
+        match self.disposition {
+            ProviderDisposition::Produced if !has_output => {
+                return Err(ProviderReceiptValidationError::MissingOutputIdentity {
+                    disposition: self.disposition,
+                });
+            }
+            ProviderDisposition::Bypassed
+            | ProviderDisposition::Denied
+            | ProviderDisposition::Failed
+            | ProviderDisposition::Uncertain
+                if has_output =>
+            {
+                return Err(ProviderReceiptValidationError::UnexpectedOutputIdentity {
+                    disposition: self.disposition,
+                });
+            }
+            _ => {}
+        }
+
+        let requires_error = matches!(
+            self.disposition,
+            ProviderDisposition::Denied
+                | ProviderDisposition::Failed
+                | ProviderDisposition::Uncertain
+        );
+        if requires_error && self.error.is_none() {
+            return Err(ProviderReceiptValidationError::MissingError {
+                disposition: self.disposition,
+            });
+        }
+        if !requires_error && self.error.is_some() {
+            return Err(ProviderReceiptValidationError::UnexpectedError {
+                disposition: self.disposition,
+            });
+        }
+        if self.completed_at_ms < self.started_at_ms {
+            return Err(ProviderReceiptValidationError::CompletionBeforeStart);
+        }
+        Ok(())
+    }
+
+    /// Verifies that content-free receipt identity came from one invocation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for contradictory receipt fields or any identity that
+    /// differs from the invocation accepted by Core.
+    pub fn validate_for_invocation(
+        &self,
+        invocation: &CapabilityInvocation,
+    ) -> Result<(), ProviderReceiptValidationError> {
+        self.validate()?;
+        for (matches, field) in [
+            (
+                self.invocation_id == invocation.invocation_id,
+                "invocation_id",
+            ),
+            (
+                self.provider_id == invocation.provider.provider_id,
+                "provider_id",
+            ),
+            (
+                self.provider_version == invocation.provider.provider_version,
+                "provider_version",
+            ),
+            (
+                self.manifest_digest == invocation.provider.manifest_digest,
+                "manifest_digest",
+            ),
+            (self.binding_id == invocation.binding_id, "binding_id"),
+            (self.capability == invocation.capability, "capability"),
+            (self.scope == invocation.scope, "scope"),
+            (self.input_schema == invocation.input.schema, "input_schema"),
+            (self.input_digest == invocation.input.digest, "input_digest"),
+        ] {
+            if !matches {
+                return Err(ProviderReceiptValidationError::InvocationIdentityMismatch { field });
+            }
+        }
+        Ok(())
+    }
+}
+
+impl ProviderInvocationResult {
+    /// Verifies that transient output has the exact identity in its receipt.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for contradictory receipt facts, output presence,
+    /// schema, digest, canonical body digest, or canonical byte count.
+    pub fn validate(&self) -> Result<(), ProviderInvocationResultValidationError> {
+        self.receipt.validate()?;
+        let Some(output) = &self.outcome.output else {
+            return if self.receipt.output_schema.is_none() {
+                Ok(())
+            } else {
+                Err(ProviderInvocationResultValidationError::OutputPresenceMismatch)
+            };
+        };
+        let (Some(output_schema), Some(output_digest), Some(output_bytes)) = (
+            &self.receipt.output_schema,
+            &self.receipt.output_digest,
+            self.receipt.output_bytes,
+        ) else {
+            return Err(ProviderInvocationResultValidationError::OutputPresenceMismatch);
+        };
+        if &output.schema != output_schema {
+            return Err(ProviderInvocationResultValidationError::OutputSchemaMismatch);
+        }
+        if &output.digest != output_digest {
+            return Err(ProviderInvocationResultValidationError::OutputDigestMismatch);
+        }
+        let canonical = crate::canonical::canonical_json_v1_bytes(&output.body)
+            .map_err(|_| ProviderInvocationResultValidationError::OutputEncodingFailed)?;
+        let actual_digest = format!("{:x}", Sha256::digest(&canonical));
+        if output.digest.as_str() != actual_digest {
+            return Err(ProviderInvocationResultValidationError::OutputBodyDigestMismatch);
+        }
+        let actual_bytes = u64::try_from(canonical.len())
+            .map_err(|_| ProviderInvocationResultValidationError::OutputSizeOverflow)?;
+        if actual_bytes != output_bytes {
+            return Err(
+                ProviderInvocationResultValidationError::OutputBytesMismatch {
+                    recorded: output_bytes,
+                    actual: actual_bytes,
+                },
+            );
+        }
+        Ok(())
+    }
+
+    /// Verifies result consistency and binds its receipt to one invocation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error from [`Self::validate`] or when receipt identity differs
+    /// from the invocation accepted by Core.
+    pub fn validate_for_invocation(
+        &self,
+        invocation: &CapabilityInvocation,
+    ) -> Result<(), ProviderInvocationResultValidationError> {
+        self.validate()?;
+        self.receipt.validate_for_invocation(invocation)?;
+        Ok(())
+    }
 }
 
 /// Query used after ambiguity or restart to determine the real invocation state.
@@ -582,17 +835,21 @@ pub struct ProviderResultEnvelope {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+    use sha2::{Digest as _, Sha256};
 
     use super::{
         CapabilityInvocation, ExecutionScope, ProviderApiVersion, ProviderAuthority,
         ProviderCapabilityDescriptor, ProviderCommand, ProviderCommandEnvelope, ProviderDescriptor,
         ProviderDisposition, ProviderDriver, ProviderInvocationBudget, ProviderInvocationOutcome,
-        ProviderInvocationResult, ProviderLifecycle, ProviderPayload, ProviderReceipt,
-        ProviderResult, ProviderResultEnvelope, ProviderScopeKind, ProviderSelection,
-        ReconcileQuery, ReconcileResult, SchemaReference, VersionedSchema,
+        ProviderInvocationResult, ProviderInvocationResultValidationError, ProviderLifecycle,
+        ProviderPayload, ProviderReceipt, ProviderReceiptValidationError, ProviderResult,
+        ProviderResultEnvelope, ProviderScopeKind, ProviderSelection, ReconcileQuery,
+        ReconcileResult, SchemaReference, VersionedSchema,
     };
     use crate::{
+        canonical::canonical_json_v1_bytes,
         common::{BoundedName, BoundedOpaque, Digest, IdempotencyKey, TargetRef},
+        error::{ContractError, ErrorCategory},
         ids::{
             ActorId, AgentSessionId, EnvironmentId, ExecutionContextId, ProviderInvocationId,
             RequestId, ToolUseId, TurnId,
@@ -668,6 +925,49 @@ mod tests {
         }
     }
 
+    fn valid_invocation_result() -> (CapabilityInvocation, ProviderInvocationResult) {
+        let invocation = invocation();
+        let body = json!({"output": "sensitive candidate"});
+        let encoded = canonical_json_v1_bytes(&body).expect("test output is canonical JSON");
+        let output_digest = Digest::parse(format!("{:x}", Sha256::digest(&encoded)))
+            .expect("SHA-256 output is canonical");
+        let output = ProviderPayload {
+            schema: schema("context.projection.prepare.output"),
+            digest: output_digest.clone(),
+            body,
+        };
+        let receipt = ProviderReceipt {
+            invocation_id: invocation.invocation_id.clone(),
+            provider_id: invocation.provider.provider_id.clone(),
+            provider_version: invocation.provider.provider_version.clone(),
+            manifest_digest: invocation.provider.manifest_digest.clone(),
+            binding_id: invocation.binding_id.clone(),
+            provider_generation: None,
+            capability: invocation.capability.clone(),
+            input_schema: invocation.input.schema.clone(),
+            input_digest: invocation.input.digest.clone(),
+            scope: invocation.scope.clone(),
+            disposition: ProviderDisposition::Produced,
+            output_schema: Some(output.schema.clone()),
+            output_digest: Some(output_digest),
+            output_bytes: Some(encoded.len() as u64),
+            error: None,
+            meters: Vec::new(),
+            evidence: Vec::new(),
+            started_at_ms: 1_700_000_000_000,
+            completed_at_ms: 1_700_000_000_010,
+        };
+        (
+            invocation,
+            ProviderInvocationResult {
+                outcome: ProviderInvocationOutcome {
+                    output: Some(output),
+                },
+                receipt,
+            },
+        )
+    }
+
     #[test]
     fn exec_json_invocation_preserves_typed_payload_and_identity() {
         let invocation = invocation();
@@ -721,6 +1021,8 @@ mod tests {
             binding_id: None,
             provider_generation: Some(1),
             capability: invocation.capability.clone(),
+            input_schema: invocation.input.schema.clone(),
+            input_digest: invocation.input.digest.clone(),
             scope: invocation.scope.clone(),
             disposition: ProviderDisposition::Produced,
             output_schema: Some(schema("context.projection.prepare.output")),
@@ -768,41 +1070,15 @@ mod tests {
 
     #[test]
     fn invocation_output_is_transient_and_receipt_is_content_free() {
-        let invocation = invocation();
-        let output = ProviderPayload {
-            schema: schema("context.projection.prepare.output"),
-            digest: digest('b'),
-            body: json!({"output": "sensitive candidate"}),
-        };
-        let receipt = ProviderReceipt {
-            invocation_id: invocation.invocation_id,
-            provider_id: BoundedName::new("tokenless").expect("test provider ID is bounded"),
-            provider_version: BoundedName::new("0.1.0").expect("test version is bounded"),
-            manifest_digest: digest('c'),
-            binding_id: None,
-            provider_generation: None,
-            capability: invocation.capability,
-            scope: invocation.scope,
-            disposition: ProviderDisposition::Produced,
-            output_schema: Some(output.schema.clone()),
-            output_digest: Some(output.digest.clone()),
-            output_bytes: Some(40),
-            error: None,
-            meters: Vec::new(),
-            evidence: Vec::new(),
-            started_at_ms: 1_700_000_000_000,
-            completed_at_ms: 1_700_000_000_010,
-        };
+        let (_, invocation_result) = valid_invocation_result();
+        invocation_result
+            .validate()
+            .expect("wire fixture is internally consistent");
         let result = ProviderResultEnvelope {
             api_version: ProviderApiVersion::V1,
             request_id: RequestId::new(),
             result: ProviderResult::Invoked {
-                invocation: Box::new(ProviderInvocationResult {
-                    outcome: ProviderInvocationOutcome {
-                        output: Some(output),
-                    },
-                    receipt,
-                }),
+                invocation: Box::new(invocation_result),
             },
         };
 
@@ -813,7 +1089,161 @@ mod tests {
         );
         let receipt_value = &encoded["result"]["invocation"]["receipt"];
         assert!(receipt_value.get("output").is_none());
-        assert_eq!(receipt_value["output_bytes"], 40);
+        assert!(receipt_value["output_bytes"]
+            .as_u64()
+            .is_some_and(|size| size > 0));
+    }
+
+    #[test]
+    fn invocation_result_validation_accepts_exact_output_and_input_identity() {
+        let (invocation, result) = valid_invocation_result();
+
+        result.validate().expect("result facts agree");
+        result
+            .validate_for_invocation(&invocation)
+            .expect("receipt belongs to the accepted invocation");
+        assert_eq!(result.receipt.input_schema, invocation.input.schema);
+        assert_eq!(result.receipt.input_digest, invocation.input.digest);
+    }
+
+    #[test]
+    fn receipt_validation_rejects_terminal_state_contradictions() {
+        let (_, result) = valid_invocation_result();
+
+        let mut receipt = result.receipt.clone();
+        receipt.output_digest = None;
+        assert_eq!(
+            receipt.validate(),
+            Err(ProviderReceiptValidationError::IncompleteOutputIdentity)
+        );
+
+        let mut receipt = result.receipt.clone();
+        receipt.output_schema = None;
+        receipt.output_digest = None;
+        receipt.output_bytes = None;
+        assert_eq!(
+            receipt.validate(),
+            Err(ProviderReceiptValidationError::MissingOutputIdentity {
+                disposition: ProviderDisposition::Produced,
+            })
+        );
+
+        let mut receipt = result.receipt.clone();
+        receipt.disposition = ProviderDisposition::Bypassed;
+        assert_eq!(
+            receipt.validate(),
+            Err(ProviderReceiptValidationError::UnexpectedOutputIdentity {
+                disposition: ProviderDisposition::Bypassed,
+            })
+        );
+
+        let mut receipt = result.receipt.clone();
+        receipt.disposition = ProviderDisposition::Failed;
+        receipt.output_schema = None;
+        receipt.output_digest = None;
+        receipt.output_bytes = None;
+        assert_eq!(
+            receipt.validate(),
+            Err(ProviderReceiptValidationError::MissingError {
+                disposition: ProviderDisposition::Failed,
+            })
+        );
+
+        let mut receipt = result.receipt.clone();
+        receipt.error = Some(
+            ContractError::new(
+                "unexpected",
+                ErrorCategory::Internal,
+                false,
+                "unexpected error",
+            )
+            .expect("test error is bounded"),
+        );
+        assert_eq!(
+            receipt.validate(),
+            Err(ProviderReceiptValidationError::UnexpectedError {
+                disposition: ProviderDisposition::Produced,
+            })
+        );
+
+        let mut receipt = result.receipt;
+        receipt.completed_at_ms = receipt.started_at_ms - 1;
+        assert_eq!(
+            receipt.validate(),
+            Err(ProviderReceiptValidationError::CompletionBeforeStart)
+        );
+    }
+
+    #[test]
+    fn invocation_result_validation_rejects_output_identity_mismatches() {
+        let (_, result) = valid_invocation_result();
+
+        let mut missing_output = result.clone();
+        missing_output.outcome.output = None;
+        assert_eq!(
+            missing_output.validate(),
+            Err(ProviderInvocationResultValidationError::OutputPresenceMismatch)
+        );
+
+        let mut wrong_schema = result.clone();
+        wrong_schema.receipt.output_schema = Some(schema("context.projection.other.output"));
+        assert_eq!(
+            wrong_schema.validate(),
+            Err(ProviderInvocationResultValidationError::OutputSchemaMismatch)
+        );
+
+        let mut wrong_receipt_digest = result.clone();
+        wrong_receipt_digest.receipt.output_digest = Some(digest('f'));
+        assert_eq!(
+            wrong_receipt_digest.validate(),
+            Err(ProviderInvocationResultValidationError::OutputDigestMismatch)
+        );
+
+        let mut modified_body = result.clone();
+        modified_body
+            .outcome
+            .output
+            .as_mut()
+            .expect("valid fixture has output")
+            .body = json!({"output": "modified after digest"});
+        assert_eq!(
+            modified_body.validate(),
+            Err(ProviderInvocationResultValidationError::OutputBodyDigestMismatch)
+        );
+
+        let mut wrong_size = result;
+        wrong_size.receipt.output_bytes = wrong_size.receipt.output_bytes.map(|size| size + 1);
+        assert!(matches!(
+            wrong_size.validate(),
+            Err(ProviderInvocationResultValidationError::OutputBytesMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn receipt_validation_rejects_cross_invocation_input_identity() {
+        let (invocation, result) = valid_invocation_result();
+
+        let mut wrong_schema = result.clone();
+        wrong_schema.receipt.input_schema = schema("context.projection.other.input");
+        assert_eq!(
+            wrong_schema.validate_for_invocation(&invocation),
+            Err(ProviderInvocationResultValidationError::Receipt(
+                ProviderReceiptValidationError::InvocationIdentityMismatch {
+                    field: "input_schema",
+                }
+            ))
+        );
+
+        let mut wrong_digest = result;
+        wrong_digest.receipt.input_digest = digest('f');
+        assert_eq!(
+            wrong_digest.validate_for_invocation(&invocation),
+            Err(ProviderInvocationResultValidationError::Receipt(
+                ProviderReceiptValidationError::InvocationIdentityMismatch {
+                    field: "input_digest",
+                }
+            ))
+        );
     }
 
     #[test]

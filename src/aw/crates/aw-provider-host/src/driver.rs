@@ -908,30 +908,11 @@ fn map_response(
                         &response,
                     )
                 })?;
-            let method = mapping
-                .method_pointer
-                .as_ref()
-                .map(|pointer| {
-                    let value = response
-                        .pointer(pointer)
-                        .and_then(serde_json::Value::as_str)
-                        .ok_or_else(|| {
-                            invalid_response(
-                                provider,
-                                "meter method pointer is absent or not text",
-                                &response,
-                            )
-                        })?;
-                    aw_contracts::common::BoundedName::new(value).map_err(|_| {
-                        invalid_response(provider, "meter method is not bounded", &response)
-                    })
-                })
-                .transpose()?;
             Ok(ProviderMeter {
                 meter_id: mapping.meter_id.clone(),
                 unit: mapping.unit.clone(),
                 measurement_kind: mapping.measurement_kind,
-                method,
+                method: mapping.method.clone(),
                 value,
             })
         })
@@ -947,6 +928,8 @@ fn map_response(
         binding_id: invocation.binding_id.clone(),
         provider_generation: None,
         capability: invocation.capability.clone(),
+        input_schema: invocation.input.schema.clone(),
+        input_digest: invocation.input.digest.clone(),
         scope: invocation.scope.clone(),
         disposition,
         output_schema,
@@ -1025,6 +1008,8 @@ fn accepted_failure(
             binding_id: invocation.binding_id.clone(),
             provider_generation: None,
             capability: invocation.capability.clone(),
+            input_schema: invocation.input.schema.clone(),
+            input_digest: invocation.input.digest.clone(),
             scope: invocation.scope.clone(),
             disposition,
             output_schema: None,

@@ -193,6 +193,12 @@ pub enum ProviderHostError {
         /// SHA-256 of the rejected native stdout.
         output_sha256: String,
     },
+    /// Host-constructed terminal facts contradict the public result contract.
+    #[error("Provider invocation result violates its contract: {reason}")]
+    InvalidInvocationResult {
+        /// Content-free invariant failure suitable for operator diagnostics.
+        reason: String,
+    },
 }
 
 /// Deterministically admitted Provider set and Capability index.
@@ -310,7 +316,7 @@ struct MeterMapping {
     unit: aw_contracts::common::BoundedName,
     measurement_kind: aw_contracts::provider::ProviderMeasurementKind,
     value_pointer: String,
-    method_pointer: Option<String>,
+    method: Option<aw_contracts::common::BoundedName>,
 }
 
 impl ProviderCatalog {
@@ -405,7 +411,13 @@ impl ProviderCatalog {
                 invocation.provider.provider_id.as_str()
             )));
         }
-        driver::invoke(provider, capability, invocation, state_root)
+        let result = driver::invoke(provider, capability, invocation, state_root)?;
+        result
+            .validate_for_invocation(invocation)
+            .map_err(|error| ProviderHostError::InvalidInvocationResult {
+                reason: error.to_string(),
+            })?;
+        Ok(result)
     }
 
     /// Returns admitted descriptors in deterministic Provider identity order.

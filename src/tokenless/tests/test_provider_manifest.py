@@ -146,8 +146,8 @@ class ProviderManifestTest(unittest.TestCase):
             all(field["when_disposition"] == ["produced"] for field in response["output_fields"])
         )
         self.assertEqual(
-            [meter["method_pointer"] for meter in response["meters"]],
-            ["/tokenizer_id", "/tokenizer_id"],
+            [meter["method"] for meter in response["meters"]],
+            ["heuristic-v1", "heuristic-v1"],
         )
         self.assertTrue(
             all(meter["measurement_kind"] == "estimate" for meter in response["meters"])

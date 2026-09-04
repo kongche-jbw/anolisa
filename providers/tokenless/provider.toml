@@ -150,11 +150,11 @@ meter_id = "context.source_tokens"
 unit = "tokens"
 measurement_kind = "estimate"
 value_pointer = "/before_tokens"
-method_pointer = "/tokenizer_id"
+method = "heuristic-v1"
 
 [[capabilities.codec.response.meters]]
 meter_id = "context.prepared_tokens"
 unit = "tokens"
 measurement_kind = "estimate"
 value_pointer = "/after_tokens"
-method_pointer = "/tokenizer_id"
+method = "heuristic-v1"

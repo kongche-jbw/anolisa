@@ -218,13 +218,23 @@ fn tokenless_manifest_admits_and_maps_with_a_stub_executable() {
         value.pointer("/result/invocation/outcome/output/body/candidate/content"),
         Some(&json!("compressed by stub"))
     );
+    let receipt = value.pointer("/result/invocation/receipt").unwrap();
+    let meters = receipt
+        .pointer("/meters")
+        .and_then(Value::as_array)
+        .unwrap();
+    assert_eq!(meters.len(), 2);
+    assert!(meters
+        .iter()
+        .all(|meter| { meter.pointer("/method").and_then(Value::as_str) == Some("heuristic-v1") }));
     assert_eq!(
-        value
-            .pointer("/result/invocation/receipt/meters")
-            .and_then(Value::as_array)
-            .map(Vec::len),
-        Some(2)
+        receipt.pointer("/input_schema/id").and_then(Value::as_str),
+        Some("context.projection.prepare.input")
     );
+    assert!(receipt
+        .pointer("/input_digest")
+        .and_then(Value::as_str)
+        .is_some_and(|digest| digest.len() == 64));
 }
 
 #[test]
@@ -298,12 +308,9 @@ fn tokenless_manifest_runs_through_the_generic_headless_host() {
         .and_then(Value::as_array)
         .unwrap();
     assert_eq!(meters.len(), 2);
-    assert!(meters.iter().all(|meter| {
-        meter
-            .pointer("/method")
-            .and_then(Value::as_str)
-            .is_some_and(|method| !method.is_empty())
-    }));
+    assert!(meters
+        .iter()
+        .all(|meter| { meter.pointer("/method").and_then(Value::as_str) == Some("heuristic-v1") }));
     assert!(!directory.path().join("tokenless").exists());
 }
 

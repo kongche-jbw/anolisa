@@ -220,7 +220,7 @@ struct ManifestMeter {
     unit: String,
     measurement_kind: ProviderMeasurementKind,
     #[serde(default)]
-    method_pointer: Option<String>,
+    method: Option<String>,
     value_pointer: String,
 }
 
@@ -649,14 +649,14 @@ fn validate_capability(
         .into_iter()
         .map(|meter| {
             validate_json_pointer(path, "meter value pointer", &meter.value_pointer)?;
-            if let Some(pointer) = &meter.method_pointer {
-                validate_json_pointer(path, "meter method pointer", pointer)?;
-            }
             Ok(MeterMapping {
                 meter_id: bounded_name(path, "meter_id", meter.meter_id)?,
                 unit: bounded_name(path, "meter unit", meter.unit)?,
                 measurement_kind: meter.measurement_kind,
-                method_pointer: meter.method_pointer,
+                method: meter
+                    .method
+                    .map(|method| bounded_name(path, "meter method", method))
+                    .transpose()?,
                 value_pointer: meter.value_pointer,
             })
         })

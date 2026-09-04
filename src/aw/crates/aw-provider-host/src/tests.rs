@@ -58,6 +58,9 @@ case "$mode" in
   mismatched_response)
     printf '%s' '{"protocol_version":2,"disposition":"applied","output":"compressed","before_tokens":1200,"after_tokens":180,"meter_method":"fixture-estimator-v1"}'
     ;;
+  hostile_meter_method)
+    printf '%s' '{"disposition":"applied","output":"compressed","before_tokens":1200,"after_tokens":180,"meter_method":"runtime secret with spaces"}'
+    ;;
   oversize)
     i=0
     while [ "$i" -lt 2048 ]; do
@@ -222,14 +225,14 @@ when_disposition = ["produced"]
 meter_id = "input_tokens"
 unit = "tokens"
 measurement_kind = "estimate"
-method_pointer = "/meter_method"
+method = "fixture-estimator-v1"
 value_pointer = "/before_tokens"
 
 [[capabilities.codec.response.meters]]
 meter_id = "output_tokens"
 unit = "tokens"
 measurement_kind = "estimate"
-method_pointer = "/meter_method"
+method = "fixture-estimator-v1"
 value_pointer = "/after_tokens"
 "#
     )
@@ -359,8 +362,9 @@ fn graph_and_success_receipt_preserve_admitted_identity() {
         .filesystem_write
         .contains(&"{provider_state_dir}".to_owned()));
 
+    let invocation = invocation(&catalog);
     let result = catalog
-        .invoke(&invocation(&catalog), Some(&fixture.state_root))
+        .invoke(&invocation, Some(&fixture.state_root))
         .unwrap();
     assert_eq!(result.receipt.disposition, ProviderDisposition::Produced);
     assert_eq!(result.receipt.provider_version.as_str(), "1.2.3");
@@ -370,10 +374,65 @@ fn graph_and_success_receipt_preserve_admitted_identity() {
     assert!(result.receipt.output_schema.is_some());
     assert!(result.receipt.output_digest.is_some());
     assert!(result.receipt.output_bytes.is_some());
+    assert_eq!(result.receipt.input_schema, invocation.input.schema);
+    assert_eq!(result.receipt.input_digest, invocation.input.digest);
+    result
+        .validate_for_invocation(&invocation)
+        .expect("Host returns one internally consistent result");
     let receipt = serde_json::to_string(&result.receipt).unwrap();
     assert!(!receipt.contains("large tool output"));
     assert!(!receipt.contains("compressed"));
     assert!(fixture.state_root.join("fixture-provider").is_dir());
+}
+
+#[test]
+fn meter_method_is_an_admitted_constant_not_native_content() {
+    let fixture = Fixture::new("hostile_meter_method", 4096);
+    let catalog = fixture.catalog();
+    let result = catalog
+        .invoke(&invocation(&catalog), Some(&fixture.state_root))
+        .unwrap();
+
+    assert!(result.receipt.meters.iter().all(|meter| {
+        meter
+            .method
+            .as_ref()
+            .is_some_and(|method| method.as_str() == "fixture-estimator-v1")
+    }));
+    assert!(!serde_json::to_string(&result.receipt)
+        .unwrap()
+        .contains("runtime secret"));
+}
+
+#[test]
+fn manifest_rejects_runtime_meter_method_pointers_and_unbounded_constants() {
+    let pointer = Fixture::new("success", 4096);
+    let manifest = fs::read_to_string(&pointer.manifest).unwrap().replace(
+        "method = \"fixture-estimator-v1\"",
+        "method_pointer = \"/meter_method\"",
+    );
+    fs::write(&pointer.manifest, manifest).unwrap();
+    assert!(matches!(
+        ProviderCatalog::discover(
+            ProviderManifestSource::File(pointer.manifest.clone()),
+            &ProviderAdmissionOptions::default(),
+        ),
+        Err(ProviderHostError::ManifestParse { .. })
+    ));
+
+    let unbounded = Fixture::new("success", 4096);
+    let manifest = fs::read_to_string(&unbounded.manifest).unwrap().replace(
+        "method = \"fixture-estimator-v1\"",
+        "method = \"runtime method with spaces\"",
+    );
+    fs::write(&unbounded.manifest, manifest).unwrap();
+    assert!(matches!(
+        ProviderCatalog::discover(
+            ProviderManifestSource::File(unbounded.manifest.clone()),
+            &ProviderAdmissionOptions::default(),
+        ),
+        Err(ProviderHostError::InvalidManifest { .. })
+    ));
 }
 
 #[test]
@@ -470,10 +529,22 @@ fn wall_time_covers_pipe_drain_and_kills_the_process_group() {
 fn accepted_malformed_and_oversized_stdout_return_content_free_failed_receipts() {
     let malformed = Fixture::new("malformed", 4096);
     let catalog = malformed.catalog();
+    let accepted_invocation = invocation(&catalog);
     let result = catalog
-        .invoke(&invocation(&catalog), Some(&malformed.state_root))
+        .invoke(&accepted_invocation, Some(&malformed.state_root))
         .unwrap();
     assert_failed_receipt(&result);
+    assert_eq!(
+        result.receipt.input_schema,
+        accepted_invocation.input.schema
+    );
+    assert_eq!(
+        result.receipt.input_digest,
+        accepted_invocation.input.digest
+    );
+    result
+        .validate_for_invocation(&accepted_invocation)
+        .expect("accepted failures preserve invocation identity");
     assert!(!serde_json::to_string(&result)
         .unwrap()
         .contains("{not-json"));

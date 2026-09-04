@@ -1140,6 +1140,8 @@ mod tests {
             binding_id: None,
             provider_generation: None,
             capability: schema("context.projection.prepare"),
+            input_schema: schema("context.projection.prepare.input"),
+            input_digest: digest('a'),
             scope: aw_contracts::provider::ExecutionScope {
                 target: local_host_target("test-host").expect("target is valid"),
                 environment_id: EnvironmentId::new(),
