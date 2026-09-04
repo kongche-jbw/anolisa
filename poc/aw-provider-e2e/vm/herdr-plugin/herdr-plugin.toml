@@ -1,0 +1,44 @@
+id = "anolisa.aw-provider-poc"
+name = "AW Provider E2E PoC"
+version = "0.1.0"
+min_herdr_version = "0.8.2"
+description = "Run and inspect real AW Provider adoption and checkpoint evidence"
+platforms = ["linux"]
+
+[[actions]]
+id = "run-provider-trace"
+title = "Run the real Agent Sec and Tokenless trace"
+contexts = ["global"]
+command = ["/opt/anolisa-mvp/aw-provider-poc/current/bin/aw-provider-demo"]
+
+[[actions]]
+id = "run-cosh-final-adoption"
+title = "Prove COSH final adoption and Ledger evidence"
+contexts = ["global"]
+command = ["/opt/anolisa-mvp/aw-provider-poc/current/bin/aw-cosh-adoption-demo"]
+
+[[actions]]
+id = "run-governed-checkpoint"
+title = "Create one demo-approved Guarded V2 checkpoint"
+contexts = ["global"]
+command = ["/opt/anolisa-mvp/aw-provider-poc/current/bin/aw-checkpoint-demo"]
+
+[[actions]]
+id = "run-complete-e2e"
+title = "Run Provider, adoption, and checkpoint E2E"
+contexts = ["global"]
+command = ["/opt/anolisa-mvp/aw-provider-poc/current/bin/aw-provider-e2e"]
+
+[[actions]]
+id = "verify-latest"
+title = "Verify the latest AW Ledger"
+contexts = ["global"]
+command = ["/opt/anolisa-mvp/aw-provider-poc/current/bin/aw-provider-dashboard", "--verify"]
+
+[[panes]]
+id = "provider-trace"
+title = "AW Provider E2E evidence"
+placement = "popup"
+width = "92%"
+height = "88%"
+command = ["/opt/anolisa-mvp/aw-provider-poc/current/bin/aw-provider-dashboard"]

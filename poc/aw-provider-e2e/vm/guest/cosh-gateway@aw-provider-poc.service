@@ -1,0 +1,54 @@
+[Unit]
+Description=ANOLISA AW Provider and Checkpoint PoC Gateway
+After=ws-ckpt-agent-work.service
+Requires=ws-ckpt-agent-work.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=anolisa
+Environment=HOME=/var/lib/anolisa-aw-provider-poc/home
+Environment=COSH_LOG=info
+WorkingDirectory=/var/lib/anolisa-aw-provider-poc
+ExecStart=/opt/anolisa-mvp/aw-provider-poc/current/bin/cosh-gateway serve \
+    --systemd-unit=cosh-gateway@aw-provider-poc.service \
+    --socket=/run/anolisa-aw-provider-poc/gateway.sock \
+    --database=/var/lib/anolisa-aw-provider-poc/gateway.sqlite \
+    --capability-profile=workspace-checkpoint-v1 \
+    --checkpoint-socket=/run/ws-ckpt-agent-work/ws-ckpt.sock \
+    --security-audit=/var/lib/anolisa-aw-provider-poc/checkpoint-security.jsonl \
+    --core-executable=/opt/anolisa-mvp/aw-provider-poc/current/bin/cosh-core \
+    --workspace=/var/lib/anolisa-agent-work/workspaces/interactive-agent \
+    --output=jsonl
+RuntimeDirectory=anolisa-aw-provider-poc
+RuntimeDirectoryMode=0700
+StateDirectory=anolisa-aw-provider-poc
+StateDirectoryMode=0700
+UMask=0077
+KillMode=control-group
+SendSIGKILL=yes
+FinalKillSignal=SIGKILL
+Delegate=no
+TimeoutStopSec=15
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+TemporaryFileSystem=/dev/shm:ro,nosuid,nodev,noexec
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/var/lib/anolisa-agent-work
+BindReadOnlyPaths=/opt/anolisa-mvp/aw-provider-poc/current/config/cosh-system.toml:/etc/copilot-shell/config.toml
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+InaccessiblePaths=/run/user
+# systemd implements RestrictSUIDSGID with a seccomp rule that also rejects
+# openat2, which cosh-core requires to pin the admitted workspace securely.
+RestrictSUIDSGID=false
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,27 @@
+{
+  "session_id": "11111111-1111-4111-8111-111111111111",
+  "run_id": "run-aw-provider-poc",
+  "cwd": "/var/lib/anolisa-agent-work/workspaces/interactive-agent",
+  "hook_event_name": "PostToolUse",
+  "timestamp": "2026-09-07T01:00:00Z",
+  "transcript_path": "/home/anolisa/.local/state/aw-provider-poc/transcript.jsonl",
+  "tool_use_id": "provider-call-builds-001",
+  "tool_name": "list_recent_builds",
+  "tool_input": {
+    "page": 1,
+    "page_size": 6
+  },
+  "tool_response_is_error": false,
+  "tool_response": {
+    "llmContent": "{\"builds\":[{\"id\":\"build-101\",\"project\":\"checkout-service\",\"status\":\"passed\",\"duration_ms\":48231,\"owner\":\"example-team\"},{\"id\":\"build-102\",\"project\":\"catalog-service\",\"status\":\"passed\",\"duration_ms\":39502,\"owner\":\"example-team\"},{\"id\":\"build-103\",\"project\":\"inventory-service\",\"status\":\"failed\",\"duration_ms\":61402,\"owner\":\"example-team\"},{\"id\":\"build-104\",\"project\":\"payment-service\",\"status\":\"passed\",\"duration_ms\":52710,\"owner\":\"example-team\"},{\"id\":\"build-105\",\"project\":\"notification-service\",\"status\":\"passed\",\"duration_ms\":44617,\"owner\":\"example-team\"},{\"id\":\"build-106\",\"project\":\"reporting-service\",\"status\":\"passed\",\"duration_ms\":37331,\"owner\":\"example-team\"}],\"page\":1,\"page_size\":6}",
+    "returnDisplay": "The operator sees the original six-build JSON response."
+  },
+  "execution_scope": {
+    "environment_id": "env_33333333-3333-4333-8333-333333333333",
+    "execution_context_id": "ctx_44444444-4444-4444-8444-444444444444",
+    "actor_id": "act_55555555-5555-4555-8555-555555555555",
+    "agent_session_id": "ags_11111111-1111-4111-8111-111111111111",
+    "turn_id": "trn_22222222-2222-4222-8222-222222222222",
+    "tool_use_id": "tol_66666666-6666-4666-8666-666666666666"
+  }
+}

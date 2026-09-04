@@ -1,0 +1,41 @@
+#!/bin/sh
+
+set -eu
+
+readonly POC_ROOT="$(readlink -f /opt/anolisa-mvp/aw-provider-poc/current)"
+case "$POC_ROOT" in
+    /opt/anolisa-mvp/aw-provider-poc/releases/*) ;;
+    *) printf 'agent-sec-cli: unsafe release path: %s\n' "$POC_ROOT" >&2; exit 1 ;;
+esac
+readonly PYTHON_ROOT="$POC_ROOT/python"
+readonly RUNTIME_ROOT=/opt/anolisa-mvp/sec-core
+readonly PYTHON_RUNTIME="$RUNTIME_ROOT/lib/anolisa/sec-core/python3.11/runtime"
+readonly SITE_PACKAGES="$RUNTIME_ROOT/lib/anolisa/sec-core/python3.11/site-packages"
+readonly PYTHON="$PYTHON_RUNTIME/bin/python3.11"
+
+for directory in "$PYTHON_ROOT" "$PYTHON_RUNTIME" "$SITE_PACKAGES"; do
+    if [ ! -d "$directory" ] || [ -L "$directory" ]; then
+        printf 'agent-sec-cli: unsafe Python directory: %s\n' "$directory" >&2
+        exit 1
+    fi
+done
+if [ ! -f "$PYTHON" ] || [ ! -x "$PYTHON" ] || [ -L "$PYTHON" ]; then
+    printf 'agent-sec-cli: unsafe Python runtime: %s\n' "$PYTHON" >&2
+    exit 1
+fi
+version="$(
+    PYTHONHOME="$PYTHON_RUNTIME" PYTHONNOUSERSITE=1 \
+        "$PYTHON" -c 'import platform; print(platform.python_version())'
+)"
+if [ "$version" != 3.11.6 ]; then
+    printf 'agent-sec-cli: Python runtime must be 3.11.6, found %s\n' "$version" >&2
+    exit 1
+fi
+
+PYTHONHOME="$PYTHON_RUNTIME" \
+PYTHONNOUSERSITE=1 \
+PYTHONDONTWRITEBYTECODE=1 \
+PYTHONPATH="$PYTHON_ROOT:$SITE_PACKAGES" \
+    exec "$PYTHON" \
+    -c 'import sys; from agent_sec_cli.aw_provider.runner import run_provider; run_provider(sys.stdin, sys.stdout)' \
+    "$@"

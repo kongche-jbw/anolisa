@@ -1,0 +1,233 @@
+#!/usr/bin/env python3
+"""Render a compact view of the latest AW and checkpoint evidence in Herdr."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+from pathlib import Path
+from typing import Any
+
+
+POC_LINK = Path("/opt/anolisa-mvp/aw-provider-poc/current")
+POC_ROOT = POC_LINK.resolve(strict=True)
+if POC_ROOT.parent != POC_LINK.parent / "releases":
+    raise RuntimeError(f"unsafe PoC release path: {POC_ROOT}")
+STATE_ROOT = Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state")))
+EVIDENCE_ROOT = STATE_ROOT / "aw-provider-poc"
+PROVIDER_RUNS = EVIDENCE_ROOT / "runs"
+ADOPTION_RUNS = EVIDENCE_ROOT / "adoption"
+CHECKPOINT_RUNS = EVIDENCE_ROOT / "checkpoints"
+PROVIDER_SCHEMA = "aw.provider.vm-demo-summary/v1"
+ADOPTION_SCHEMA = "aw.provider.cosh-final-adoption-vm-demo/v1"
+CHECKPOINT_SCHEMA = "aw.provider.checkpoint-vm-demo/v1"
+
+
+def latest_summary(
+    root: Path, expected_schema: str
+) -> tuple[Path, dict[str, Any]] | None:
+    """Return the newest complete summary below one owned evidence root."""
+    if not root.is_dir() or root.is_symlink():
+        return None
+    summaries = [
+        path
+        for path in root.glob("run.*/summary.json")
+        if path.is_file() and not path.is_symlink() and not path.parent.is_symlink()
+    ]
+    latest = max(summaries, key=lambda path: path.stat().st_mtime, default=None)
+    if latest is None:
+        return None
+    value = json.loads(latest.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise RuntimeError(f"summary is not an object: {latest}")
+    if value.get("schema") != expected_schema:
+        raise RuntimeError(f"summary has an unexpected schema: {latest}")
+    return latest.parent, value
+
+
+def value(document: dict[str, Any], *keys: str) -> Any:
+    """Read one required nested summary field."""
+    current: Any = document
+    for key in keys:
+        current = current[key]
+    return current
+
+
+def short_digest(digest: str) -> str:
+    """Keep both ends of a digest visible in a compact terminal pane."""
+    return f"{digest[:12]}…{digest[-8:]}"
+
+
+def verify_ledger(path: Path, allowed_run: Path) -> str:
+    """Verify a Ledger only when it belongs to the selected evidence run."""
+    resolved = path.resolve(strict=True)
+    if not resolved.is_relative_to(allowed_run.resolve(strict=True)):
+        raise RuntimeError(f"Ledger is outside the selected evidence run: {resolved}")
+    command = [
+        str(POC_ROOT / "bin/aw-ledger"),
+        "--ledger",
+        str(resolved),
+        "verify",
+    ]
+    completed = subprocess.run(
+        command,
+        check=True,
+        text=True,
+        capture_output=True,
+        timeout=15,
+    )
+    return completed.stdout.strip()
+
+
+def show_provider(run: Path, summary: dict[str, Any]) -> None:
+    """Show the standalone canonical field trace without claiming adoption."""
+    print("1  CANONICAL PROVIDER TRACE")
+    print(f"   Evidence    {run}")
+    print(
+        "   Discovery   "
+        f"{value(summary, 'discovery', 'status')} · "
+        f"providers={','.join(value(summary, 'discovery', 'provider_ids'))} · "
+        f"capabilities={value(summary, 'discovery', 'capability_count')}"
+    )
+    print(
+        "   Source      "
+        f"tool={value(summary, 'input', 'tool_name')} · "
+        f"media={value(summary, 'input', 'media_type')} · "
+        f"{value(summary, 'input', 'source_bytes')}B · "
+        f"sha256={short_digest(value(summary, 'input', 'source_digest'))}"
+    )
+    print(
+        "   Security    "
+        f"command={value(summary, 'command_check', 'command_bytes')}B/"
+        f"{value(summary, 'command_check', 'findings')} finding(s) · "
+        f"gate={value(summary, 'command_check', 'core_gate')}"
+    )
+    print(
+        "   Tokenless   "
+        f"{value(summary, 'projection', 'before_tokens')}→"
+        f"{value(summary, 'projection', 'after_tokens')} tokens · "
+        f"candidate={value(summary, 'projection', 'replacement_bytes')}B · "
+        f"media={value(summary, 'projection', 'media_type')} · "
+        f"sha256={short_digest(value(summary, 'projection', 'replacement_digest'))}"
+    )
+    structured_media = value(
+        summary,
+        "native_protocol_replay",
+        "structured_control",
+        "output_media_type",
+    )
+    structured_disposition = value(
+        summary,
+        "native_protocol_replay",
+        "structured_control",
+        "disposition",
+    )
+    print(
+        "   Control     replace_with_text=false · "
+        f"{structured_disposition} · media={structured_media}"
+    )
+    print("   Boundary    candidate offered; this trace alone does not prove adoption")
+
+
+def show_adoption(run: Path, summary: dict[str, Any]) -> None:
+    """Show the real CoshCore history and two-record Ledger proof."""
+    ledger_root = Path(value(summary, "ledger", "root"))
+    verification = verify_ledger(ledger_root, run)
+    print("2  COSH FINAL ADOPTION")
+    print(f"   Evidence    {run}")
+    print(
+        "   Source      "
+        f"{value(summary, 'source', 'bytes')}B · "
+        f"sha256={short_digest(value(summary, 'source', 'digest'))}"
+    )
+    print(
+        "   History     "
+        f"candidate={value(summary, 'candidate', 'bytes')}B · "
+        f"sha256={short_digest(value(summary, 'candidate', 'digest'))}"
+    )
+    print(
+        "   Ledger      "
+        f"plan={value(summary, 'ledger', 'plan_records')} · "
+        f"adoption={value(summary, 'ledger', 'adoption_records')} · "
+        f"decision={value(summary, 'ledger', 'decision')}"
+    )
+    print(f"   Verify      {verification}")
+    print("   Meaning     Provider Host → AW Core → COSH history → final adoption")
+
+
+def show_checkpoint(run: Path, summary: dict[str, Any]) -> None:
+    """Show the governed State Provider effect and exact identities."""
+    print("3  GOVERNED CHECKPOINT")
+    print(f"   Evidence    {run}")
+    print(
+        "   Profile     "
+        f"{value(summary, 'gateway', 'profile_id')} · "
+        f"manifest={short_digest(value(summary, 'gateway', 'manifest_digest'))}"
+    )
+    print(
+        "   Task        "
+        f"{value(summary, 'task', 'task_id')} · "
+        f"state={value(summary, 'task', 'state')}"
+    )
+    print(
+        f"   Approval    {value(summary, 'task', 'approval_id')} · "
+        f"decision={value(summary, 'task', 'approval_decision')} (demo runner)"
+    )
+    print(
+        f"   Execution   {value(summary, 'task', 'execution_id')} · "
+        f"permit={value(summary, 'task', 'permit_id')}"
+    )
+    print(f"   Snapshot    {value(summary, 'checkpoint', 'id')}")
+    print(
+        "   Binding     "
+        f"operation={short_digest(value(summary, 'security_audit', 'operation_digest'))} · "
+        f"target={short_digest(value(summary, 'security_audit', 'target_identity_digest'))}"
+    )
+    print("   Coverage    governed create + recovery fields; no fault injection")
+
+
+def main() -> None:
+    """Print a stable, bright-terminal-friendly evidence view."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--verify",
+        action="store_true",
+        help="verify the latest Cosh final-adoption Ledger and exit",
+    )
+    args = parser.parse_args()
+
+    provider = latest_summary(PROVIDER_RUNS, PROVIDER_SCHEMA)
+    adoption = latest_summary(ADOPTION_RUNS, ADOPTION_SCHEMA)
+    checkpoint = latest_summary(CHECKPOINT_RUNS, CHECKPOINT_SCHEMA)
+    if args.verify:
+        if adoption is None:
+            raise SystemExit("no final-adoption evidence; run the complete E2E action first")
+        print(verify_ledger(Path(value(adoption[1], "ledger", "root")), adoption[0]))
+        return
+
+    print("AW PROVIDER + STATE PROVIDER E2E")
+    print("=" * 78)
+    if provider is None and adoption is None and checkpoint is None:
+        print("No evidence yet.")
+        print("Run Herdr action: Run Provider, adoption, and checkpoint E2E")
+        return
+    if provider is not None:
+        show_provider(*provider)
+    else:
+        print("1  CANONICAL PROVIDER TRACE · not run")
+    print("-" * 78)
+    if adoption is not None:
+        show_adoption(*adoption)
+    else:
+        print("2  COSH FINAL ADOPTION · not run")
+    print("-" * 78)
+    if checkpoint is not None:
+        show_checkpoint(*checkpoint)
+    else:
+        print("3  GOVERNED CHECKPOINT · not run")
+
+
+if __name__ == "__main__":
+    main()

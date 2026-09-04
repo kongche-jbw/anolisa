@@ -1,0 +1,20 @@
+[ai]
+active_provider = "aw-poc-mock"
+active_model = "mock-workspace-checkpoint-roundtrip"
+
+[ai.providers.aw-poc-mock]
+type = "mock"
+model = "mock-workspace-checkpoint-roundtrip"
+
+[aw.effective_bytes]
+enabled = true
+provider_root = "/opt/anolisa-mvp/aw-provider-poc/current/providers"
+executable_roots = ["/opt/anolisa-mvp/aw-provider-poc/current/bin"]
+target_identifier = "ubuntu-vm-aw-provider-poc"
+preferred_projection_provider = "tokenless"
+provider_wall_time_ms = 10000
+allow_unenforced_providers = true
+
+[aw.effective_bytes.ledger]
+root = "/var/lib/anolisa-aw-provider-poc/ledger"
+assurance = "required"

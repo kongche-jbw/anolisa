@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+IFS=$'\n\t'
+umask 077
+
+readonly POC_ROOT="$(readlink -f /opt/anolisa-mvp/aw-provider-poc/current)"
+case "$POC_ROOT" in
+    /opt/anolisa-mvp/aw-provider-poc/releases/*) ;;
+    *) printf 'aw-provider-demo: unsafe release path: %s\n' "$POC_ROOT" >&2; exit 1 ;;
+esac
+readonly STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/aw-provider-poc"
+
+mkdir -p "$STATE_ROOT"
+AW_PROVIDER_DIR="$POC_ROOT/providers" \
+AW_PROVIDER_HOST_BIN="$POC_ROOT/bin/aw-provider-host" \
+AW_COSH_HOOK_BIN="$POC_ROOT/bin/aw-cosh-hook" \
+AW_LEDGER_BIN="$POC_ROOT/bin/aw-ledger" \
+AW_TOKENLESS_BIN="$POC_ROOT/bin/tokenless" \
+AW_EXECUTABLE_ROOTS="$POC_ROOT/bin" \
+AW_DEMO_FIXTURE="$POC_ROOT/fixtures/post-tool-use-builds.json" \
+AW_DEMO_OUTPUT_ROOT="$STATE_ROOT/runs" \
+    "$POC_ROOT/scripts/run-provider-demo.sh"
