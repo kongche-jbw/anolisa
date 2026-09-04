@@ -22,9 +22,7 @@ impl GatewayDaemon {
     /// Returns a fail-closed path, storage, socket, or already-running error.
     pub fn bind(config: GatewayDaemonConfig) -> Result<Self, GatewayDaemonError> {
         let admitted_target = config.capability_profile.governed_target();
-        if config.capability_profile != GatewayCapabilityProfile::task_only_v1()
-            || !supported_daemon_runtime(&config.runtime)
-        {
+        if !supported_daemon_runtime(&config.runtime) {
             return Err(GatewayDaemonError::Protocol(
                 "daemon capability profile or Runtime selector is not supported".to_owned(),
             ));
@@ -105,20 +103,21 @@ impl GatewayDaemon {
         let request = match read_frame::<GatewayRequest>(&mut stream) {
             Ok(request) => request,
             Err(error) => {
-                let response = error_response(None, &error);
+                let response = error_response(None, GATEWAY_API_VERSION, &error);
                 let _ = write_frame(&mut stream, &response);
                 return Err(error);
             }
         };
         let request_id = request.request_id().clone();
+        let response_api_version = request.api_version().to_owned();
         let result = self.dispatch(&actor, request);
         let response = match result {
             Ok(result) => GatewayResponse {
-                api_version: GATEWAY_API_VERSION.to_owned(),
+                api_version: response_api_version.clone(),
                 request_id: Some(request_id),
                 outcome: GatewayResponseOutcome::Ok { result },
             },
-            Err(error) => error_response(Some(request_id), &error),
+            Err(error) => error_response(Some(request_id), &response_api_version, &error),
         };
         write_frame(&mut stream, &response)
     }
@@ -128,10 +127,15 @@ impl GatewayDaemon {
         actor: &ActorRef,
         request: GatewayRequest,
     ) -> Result<GatewayResult, GatewayDaemonError> {
+        let snapshot = GatewayAdmission {
+            installation_id: self.coordinator.installation_id.clone(),
+            capability_profile: self.capability_profile.identity(),
+            target: self.admitted_target.clone(),
+            workspace: self.admitted_workspace.clone(),
+            runtime: self.admitted_runtime.clone(),
+        };
         let admission = TaskAdmission {
-            target: &self.admitted_target,
-            workspace: &self.admitted_workspace,
-            runtime: &self.admitted_runtime,
+            snapshot: &snapshot,
         };
         let mut ports = DaemonTaskPorts {
             coordinator: &mut self.coordinator,

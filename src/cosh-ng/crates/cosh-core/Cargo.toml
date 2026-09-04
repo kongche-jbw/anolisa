@@ -12,6 +12,9 @@ path = "src/main.rs"
 
 [dependencies]
 aw-contracts = { path = "../../../aw/crates/aw-contracts" }
+aw-core = { path = "../../../aw/crates/aw-core" }
+aw-ledger = { path = "../../../aw/crates/aw-ledger" }
+aw-provider-host = { path = "../../../aw/crates/aw-provider-host" }
 clap.workspace = true
 atty = "0.2"
 cosh-types = { path = "../cosh-types" }
@@ -48,6 +51,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-appender.workspace = true
 wait-timeout.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

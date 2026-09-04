@@ -52,6 +52,9 @@ fn create_provider(config: &CoreConfig) -> Box<dyn provider::ContentGenerator> {
                 "## Objective and constraints\n- deterministic mock summary",
             ));
         }
+        if resolved.model == "mock-workspace-checkpoint-roundtrip" {
+            return Box::new(provider::mock::MockProvider::workspace_checkpoint_roundtrip());
+        }
         return Box::new(provider::mock::MockProvider::history_echo());
     }
     // Aliyun provider uses AK/SK, not API key
@@ -137,6 +140,10 @@ async fn run_until_sigint() {
 async fn run() {
     let args = cli::CliArgs::parse();
     let agent_headless = is_agent_headless_mode(&args);
+    if !args.execution_profile.is_brokered() && args.capability_profile.is_some() {
+        eprintln!("[cosh-core] --capability-profile is only valid with gateway-brokered-v1");
+        std::process::exit(2);
+    }
     if args.execution_profile.is_brokered()
         && (!agent_headless
             || args.is_session_control()

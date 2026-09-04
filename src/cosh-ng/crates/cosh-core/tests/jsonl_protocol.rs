@@ -1,9 +1,138 @@
-use std::io::Write;
-use std::process::Stdio;
+use std::io::{BufRead, BufReader, Write};
+use std::process::{Child, ChildStdin, Stdio};
+use std::sync::mpsc::{self, Receiver};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
 mod common;
+
+struct InteractiveCore {
+    child: Child,
+    stdin: Option<ChildStdin>,
+    frames: Receiver<Result<Value, String>>,
+    reader: Option<JoinHandle<()>>,
+}
+
+impl InteractiveCore {
+    fn spawn(home: &std::path::Path, workspace: &std::path::Path) -> Self {
+        let mut command = common::cosh_core_command(home);
+        command
+            .args([
+                "--headless",
+                "--execution-profile",
+                "gateway-brokered-v1",
+                "--capability-profile",
+                "workspace-checkpoint-v1",
+                "--workspace",
+            ])
+            .arg(workspace)
+            .env_remove("COSH_MODEL")
+            .env_remove("COSH_AI_PROVIDER")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit());
+        for variable in [
+            "OPENAI_API_KEY",
+            "OPENAI_BASE_URL",
+            "DASHSCOPE_API_KEY",
+            "ALIBABA_CLOUD_ACCESS_KEY_ID",
+            "ALIBABA_CLOUD_ACCESS_KEY_SECRET",
+            "ALIBABA_CLOUD_SECURITY_TOKEN",
+        ] {
+            command.env_remove(variable);
+        }
+        let mut child = command.spawn().unwrap_or_else(|error| {
+            panic!(
+                "failed to spawn {}: {error}",
+                common::binary_path().display()
+            )
+        });
+        let stdin = child.stdin.take().expect("checkpoint Core stdin");
+        let stdout = child.stdout.take().expect("checkpoint Core stdout");
+        let (sender, frames) = mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                let frame = line.map_err(|error| error.to_string()).and_then(|line| {
+                    serde_json::from_str(&line).map_err(|error| error.to_string())
+                });
+                if sender.send(frame).is_err() {
+                    return;
+                }
+            }
+        });
+        Self {
+            child,
+            stdin: Some(stdin),
+            frames,
+            reader: Some(reader),
+        }
+    }
+
+    fn send(&mut self, value: Value) {
+        let stdin = self.stdin.as_mut().expect("checkpoint Core stdin open");
+        writeln!(stdin, "{value}").expect("write checkpoint Core frame");
+        stdin.flush().expect("flush checkpoint Core frame");
+    }
+
+    fn receive_matching(&self, description: &str, predicate: impl Fn(&Value) -> bool) -> Value {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let frame = self
+                .frames
+                .recv_timeout(remaining)
+                .unwrap_or_else(|error| panic!("timed out waiting for {description}: {error}"))
+                .unwrap_or_else(|error| {
+                    panic!("invalid Core JSONL while waiting for {description}: {error}")
+                });
+            if predicate(&frame) {
+                return frame;
+            }
+        }
+    }
+
+    fn shutdown(mut self) {
+        self.send(serde_json::json!({
+            "type": "control_request",
+            "request_id": "shutdown-checkpoint-test",
+            "request": {"subtype": "shutdown"}
+        }));
+        self.stdin.take();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if self
+                .child
+                .try_wait()
+                .expect("poll checkpoint Core")
+                .is_some()
+            {
+                if let Some(reader) = self.reader.take() {
+                    reader.join().expect("join checkpoint Core reader");
+                }
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        self.child.kill().expect("kill timed-out checkpoint Core");
+        self.child.wait().expect("reap timed-out checkpoint Core");
+        panic!("checkpoint Core did not stop after shutdown");
+    }
+}
+
+impl Drop for InteractiveCore {
+    fn drop(&mut self) {
+        self.stdin.take();
+        if self.child.try_wait().ok().flatten().is_none() {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+        if let Some(reader) = self.reader.take() {
+            let _ = reader.join();
+        }
+    }
+}
 
 fn private_wire_corpus() -> Value {
     serde_json::from_str(include_str!("fixtures/cosh-private-wire-dual-version.json"))
@@ -301,6 +430,121 @@ startup_timeout_ms = 1000
         .any(|message| message["hook_name"] == "must-not-run"));
     assert!(!hook_marker.exists());
     assert!(!mcp_marker.exists());
+}
+
+#[test]
+fn checkpoint_profile_roundtrips_a_typed_gateway_result_through_real_core() {
+    let home = tempfile::tempdir().expect("temp home");
+    let workspace = tempfile::tempdir().expect("temp workspace");
+    let config_dir = home.path().join(".copilot-shell");
+    std::fs::create_dir_all(&config_dir).expect("create mock config directory");
+    std::fs::write(
+        config_dir.join("config.toml"),
+        r#"[ai]
+active_provider = "mock"
+active_model = "mock-workspace-checkpoint-roundtrip"
+
+[ai.providers.mock]
+type = "mock"
+"#,
+    )
+    .expect("write checkpoint mock config");
+
+    let mut core = InteractiveCore::spawn(home.path(), workspace.path());
+    core.send(serde_json::json!({
+        "type": "control_request",
+        "request_id": "checkpoint-init",
+        "request": {
+            "subtype": "initialize",
+            "fire_session_start": false,
+            "protocol_version": 3,
+            "execution_profile": "gateway_brokered_v1",
+            "capability_profile": {
+                "profile_id": "workspace-checkpoint-v1",
+                "manifest_digest": "6b3e7093e7b8656d4a7cf21faa85b9eed761ef415d002623cfc442f3ef3c8ae1"
+            }
+        }
+    }));
+
+    let acknowledgement = core.receive_matching("checkpoint initialize acknowledgement", |frame| {
+        frame["type"] == "control_response" && frame["response"]["request_id"] == "checkpoint-init"
+    });
+    let negotiated = &acknowledgement["response"]["response"];
+    assert_eq!(negotiated["protocol_version"], 3);
+    assert_eq!(negotiated["execution_profile"], "gateway_brokered_v1");
+    assert_eq!(
+        negotiated["capability_profile"]["profile_id"],
+        "workspace-checkpoint-v1"
+    );
+    assert_eq!(
+        negotiated["runtime_tools"],
+        serde_json::json!(["ask_user_question", "workspace_checkpoint_create"])
+    );
+    assert_eq!(
+        negotiated["capabilities"]["can_handle_hosted_checkpoint_create"],
+        true
+    );
+    let system_init = core.receive_matching("checkpoint system inventory", |frame| {
+        frame["type"] == "system" && frame["subtype"] == "init"
+    });
+    assert_eq!(
+        system_init["tools"],
+        serde_json::json!(["ask_user_question", "workspace_checkpoint_create"])
+    );
+
+    core.send(serde_json::json!({
+        "type": "user",
+        "message": {"role": "user", "content": "create a governed checkpoint"}
+    }));
+    let request = core.receive_matching("checkpoint can_use_tool", |frame| {
+        frame["type"] == "control_request" && frame["request"]["subtype"] == "can_use_tool"
+    });
+    assert_eq!(
+        request["request"]["tool_name"],
+        "workspace_checkpoint_create"
+    );
+    assert_eq!(request["request"]["input"], serde_json::json!({}));
+    assert_eq!(request["request"]["tool_use_id"], "checkpoint-call");
+    assert!(!request["request"]["hook_requires_approval"]
+        .as_bool()
+        .unwrap_or(false));
+    let request_id = request["request_id"]
+        .as_str()
+        .expect("private checkpoint request id")
+        .to_string();
+    core.send(serde_json::json!({
+        "type": "approval_receipt",
+        "request_id": request_id
+    }));
+    core.send(serde_json::json!({
+        "type": "control_response",
+        "response": {
+            "subtype": "success",
+            "request_id": request_id,
+            "response": {
+                "behavior": "host_executed_checkpoint_create",
+                "checkpointResult": {
+                    "checkpoint_id": "ckp_123e4567-e89b-12d3-a456-426614174000",
+                    "outcome": {"status": "created", "snapshot_id": "snap-real-core-1"}
+                }
+            }
+        }
+    }));
+
+    let echoed = core.receive_matching("provider-visible settled checkpoint result", |frame| {
+        frame
+            .to_string()
+            .contains("gateway checkpoint result: Created checkpoint")
+    });
+    let echoed = echoed.to_string();
+    assert!(echoed.contains("ckp_123e4567-e89b-12d3-a456-426614174000"));
+    assert!(echoed.contains("snap-real-core-1"));
+    let terminal = core.receive_matching("checkpoint turn terminal", |frame| {
+        frame["type"] == "result"
+    });
+    assert_eq!(terminal["is_error"], false);
+    assert_eq!(terminal["result"], "completed");
+    core.shutdown();
 }
 
 #[test]

@@ -2,6 +2,7 @@ use super::*;
 use crate::provider::mock::MockProvider;
 use crate::tool::{Tool, ToolResult};
 use async_trait::async_trait;
+use sha2::{Digest as _, Sha256};
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc, Mutex,
@@ -10,6 +11,680 @@ use tokio::io::BufReader;
 
 async fn empty_reader() -> tokio::io::Lines<BufReader<&'static [u8]>> {
     BufReader::new(&b""[..]).lines()
+}
+
+struct SensitiveOutputTool;
+
+#[async_trait]
+impl Tool for SensitiveOutputTool {
+    fn name(&self) -> &str {
+        "sensitive_output"
+    }
+
+    fn description(&self) -> &str {
+        "returns a result containing a redaction fixture"
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type": "object"})
+    }
+
+    fn kind(&self) -> ToolKind {
+        ToolKind::Other
+    }
+
+    async fn invoke(
+        &self,
+        _params: serde_json::Value,
+        _ctx: &ToolContext,
+    ) -> Result<ToolResult, String> {
+        Ok(ToolResult::success(
+            "AWS_ACCESS_KEY_ID=AKIA1234567890ABCDEF",
+        ))
+    }
+}
+
+struct FixedOutputTool {
+    name: &'static str,
+    output: String,
+}
+
+#[async_trait]
+impl Tool for FixedOutputTool {
+    fn name(&self) -> &str {
+        self.name
+    }
+
+    fn description(&self) -> &str {
+        "returns one deterministic Provider integration fixture"
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type": "object"})
+    }
+
+    fn kind(&self) -> ToolKind {
+        ToolKind::Other
+    }
+
+    async fn invoke(
+        &self,
+        _params: serde_json::Value,
+        _ctx: &ToolContext,
+    ) -> Result<ToolResult, String> {
+        Ok(ToolResult::success(self.output.clone()))
+    }
+}
+
+struct RecordingEffectiveBytesBoundary {
+    sources: Arc<Mutex<Vec<String>>>,
+    reversibility: aw_contracts::context::ContextReversibility,
+    ledger: cosh_core::aw_effective::EffectiveBytesLedgerState,
+    adoptions: Arc<Mutex<Vec<aw_contracts::ledger::ContextAdoptionBody>>>,
+    fail_adoption: bool,
+}
+
+#[async_trait]
+impl cosh_core::aw_effective::EffectiveBytesBoundary for RecordingEffectiveBytesBoundary {
+    async fn prepare(
+        &self,
+        request: cosh_core::aw_effective::EffectiveBytesRequest,
+    ) -> Result<
+        cosh_core::aw_effective::EffectiveBytesOutcome,
+        cosh_core::aw_effective::EffectiveBytesError,
+    > {
+        self.sources.lock().unwrap().push(request.content.clone());
+        let source_artifact_id = aw_contracts::ids::ArtifactId::new();
+        let source_digest = aw_contracts::common::Digest::parse(format!(
+            "{:x}",
+            Sha256::digest(request.content.as_bytes())
+        ))
+        .unwrap();
+        let candidate = aw_contracts::context::ContextProjectionCandidate {
+            source_artifact_id: source_artifact_id.clone(),
+            source_digest: source_digest.clone(),
+            content: "aw-effective".to_owned(),
+            media_type: aw_contracts::common::BoundedName::new("text/plain").unwrap(),
+            content_type: None,
+            transform_chain: vec![aw_contracts::common::BoundedName::new("fake-lossless").unwrap()],
+            reversibility: self.reversibility,
+        };
+        let candidate_value = serde_json::json!({"candidate": &candidate});
+        let candidate_bytes =
+            aw_contracts::canonical::canonical_json_v1_bytes(&candidate_value).unwrap();
+        let candidate_digest =
+            aw_contracts::common::Digest::parse(format!("{:x}", Sha256::digest(candidate_bytes)))
+                .unwrap();
+        let (selection, effective_bytes) =
+            if self.reversibility == aw_contracts::context::ContextReversibility::Lossless {
+                (
+                    cosh_core::aw_effective::EffectiveBytesSelection::Candidate,
+                    candidate.content.as_bytes(),
+                )
+            } else {
+                (
+                    cosh_core::aw_effective::EffectiveBytesSelection::SourceCandidateNotLossless,
+                    request.content.as_bytes(),
+                )
+            };
+        let effective_digest =
+            aw_contracts::common::Digest::parse(format!("{:x}", Sha256::digest(effective_bytes)))
+                .unwrap();
+        Ok(cosh_core::aw_effective::EffectiveBytesOutcome {
+            source_artifact_id,
+            source_digest,
+            candidate: Some(candidate),
+            candidate_digest: Some(candidate_digest),
+            selection,
+            effective_digest,
+            receipts: Vec::new(),
+            ledger: self.ledger.clone(),
+        })
+    }
+
+    async fn record_adoption(
+        &self,
+        body: aw_contracts::ledger::ContextAdoptionBody,
+        _scope: aw_contracts::ledger::LedgerTraceScope,
+    ) -> Result<aw_contracts::ids::LedgerEventId, cosh_core::aw_effective::EffectiveBytesError>
+    {
+        self.adoptions.lock().unwrap().push(body);
+        if self.fail_adoption {
+            Err(cosh_core::aw_effective::EffectiveBytesError::LedgerNotConfigured)
+        } else {
+            Ok(aw_contracts::ids::LedgerEventId::new())
+        }
+    }
+}
+
+struct RequiredPlanLedgerFailureBoundary;
+
+#[async_trait]
+impl cosh_core::aw_effective::EffectiveBytesBoundary for RequiredPlanLedgerFailureBoundary {
+    async fn prepare(
+        &self,
+        _request: cosh_core::aw_effective::EffectiveBytesRequest,
+    ) -> Result<
+        cosh_core::aw_effective::EffectiveBytesOutcome,
+        cosh_core::aw_effective::EffectiveBytesError,
+    > {
+        Err(cosh_core::aw_effective::EffectiveBytesError::LedgerStore {
+            assurance: cosh_core::aw_effective::EffectiveBytesLedgerAssurance::Required,
+            source: aw_ledger::StoreError::Io(std::io::Error::other(
+                "injected content-free plan failure",
+            )),
+        })
+    }
+}
+
+#[tokio::test]
+async fn aw_boundary_receives_settled_post_hook_bytes_before_history() {
+    let provider = MockProvider::new(vec![
+        vec![
+            GenerateEvent::ToolCallStart {
+                index: 0,
+                id: "call-sensitive".to_owned(),
+                name: "sensitive_output".to_owned(),
+            },
+            GenerateEvent::ToolCallDelta {
+                index: 0,
+                arguments_delta: "{}".to_owned(),
+            },
+            GenerateEvent::ToolCallEnd { index: 0 },
+            GenerateEvent::MessageEnd,
+        ],
+        vec![
+            GenerateEvent::TextDelta("done".to_owned()),
+            GenerateEvent::MessageEnd,
+        ],
+    ]);
+    let mut config = CoreConfig::default();
+    config.agent.approval_mode = ApprovalMode::Trust;
+    config.hooks.enabled = true;
+    config.hooks.post_tool_use = vec![crate::config::HookDefinition {
+        command: r#"python3 -c 'import json,sys; d=json.load(sys.stdin); value=d["tool_response"]["llmContent"]; updated="hook-exposed" if "AKIA1234567890ABCDEF" in value else "hook-redacted"; print(json.dumps({"hook_specific_output":{"updatedToolResponse":updated}}))'"#.to_owned(),
+        name: Some("redaction-probe".to_owned()),
+        matcher: Some("sensitive_output".to_owned()),
+        timeout: Some(5_000),
+        sequential: Some(true),
+        fail_open: false,
+        env: Default::default(),
+    }];
+    let mut tools = ToolRegistry::new();
+    tools.register(Box::new(SensitiveOutputTool));
+    let mut core = CoshCore::new_legacy(config, Box::new(provider), tools);
+    let sources = Arc::new(Mutex::new(Vec::new()));
+    let adoptions = Arc::new(Mutex::new(Vec::new()));
+    core.set_effective_bytes_boundary(Arc::new(RecordingEffectiveBytesBoundary {
+        sources: Arc::clone(&sources),
+        reversibility: aw_contracts::context::ContextReversibility::Lossless,
+        ledger: cosh_core::aw_effective::EffectiveBytesLedgerState::Ready {
+            plan_event_id: aw_contracts::ids::LedgerEventId::new(),
+            assurance: cosh_core::aw_effective::EffectiveBytesLedgerAssurance::Required,
+        },
+        adoptions: Arc::clone(&adoptions),
+        fail_adoption: false,
+    }));
+    let mut reader = empty_reader().await;
+    let mut output = Vec::new();
+
+    core.handle_user_message("return the fixture", &mut reader, &mut output)
+        .await
+        .unwrap();
+
+    assert_eq!(sources.lock().unwrap().as_slice(), ["hook-redacted"]);
+    assert_eq!(tool_result_text(&core, "call-sensitive"), "aw-effective");
+    let adoption = adoptions.lock().unwrap();
+    assert_eq!(adoption.len(), 1);
+    assert_eq!(adoption[0].effective_byte_count, 12);
+    assert_eq!(
+        adoption[0].effective_digest.as_str(),
+        format!("{:x}", Sha256::digest(b"aw-effective"))
+    );
+    assert_eq!(
+        adoption[0].decision,
+        aw_contracts::ledger::ContextAdoptionDecision::Adopted
+    );
+    let encoded = serde_json::to_string(&adoption[0]).unwrap();
+    assert!(!encoded.contains("aw-effective"));
+    assert!(!encoded.contains("hook-redacted"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+#[ignore = "requires built Tokenless and agent-sec-core Provider executables"]
+async fn real_providers_commit_effective_history_and_adoption_evidence() {
+    let repository = std::env::var_os("AW_E2E_REPOSITORY_ROOT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .ancestors()
+                .nth(4)
+                .expect("cosh-core is nested under the repository")
+                .to_path_buf()
+        });
+    let repository = repository
+        .canonicalize()
+        .expect("the E2E repository root is canonical");
+    let tokenless = repository.join("src/tokenless/target/debug/tokenless");
+    let agent_sec = repository.join("src/agent-sec-core/agent-sec-cli/.venv/bin/agent-sec-cli");
+    assert!(tokenless.is_file(), "build Tokenless before this test");
+    assert!(
+        agent_sec.is_file(),
+        "create the agent-sec-core virtual environment before this test"
+    );
+
+    let fixture: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(
+            repository
+                .join("providers/tokenless/fixtures/context-projection-prepare-lossless.json"),
+        )
+        .expect("fixture is readable"),
+    )
+    .expect("fixture is JSON");
+    let source = fixture
+        .pointer("/artifact/content")
+        .and_then(serde_json::Value::as_str)
+        .expect("fixture has artifact content")
+        .to_owned();
+    assert_eq!(source.len(), 693);
+
+    let provider = MockProvider::new(vec![
+        vec![
+            GenerateEvent::ToolCallStart {
+                index: 0,
+                id: "call-real-aw".to_owned(),
+                name: "list_recent_builds".to_owned(),
+            },
+            GenerateEvent::ToolCallDelta {
+                index: 0,
+                arguments_delta: "{}".to_owned(),
+            },
+            GenerateEvent::ToolCallEnd { index: 0 },
+            GenerateEvent::MessageEnd,
+        ],
+        vec![
+            GenerateEvent::TextDelta("done".to_owned()),
+            GenerateEvent::MessageEnd,
+        ],
+    ]);
+    let mut config = CoreConfig::default();
+    config.agent.approval_mode = ApprovalMode::Trust;
+    let mut tools = ToolRegistry::new();
+    tools.register(Box::new(FixedOutputTool {
+        name: "list_recent_builds",
+        output: source.clone(),
+    }));
+    let mut core = CoshCore::new_legacy(config, Box::new(provider), tools);
+    let ledger_temp = if std::env::var_os("AW_E2E_LEDGER_ROOT").is_none() {
+        Some(tempfile::tempdir().expect("Ledger directory is created"))
+    } else {
+        None
+    };
+    let ledger_root = std::env::var_os("AW_E2E_LEDGER_ROOT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            ledger_temp
+                .as_ref()
+                .expect("temporary Ledger exists")
+                .path()
+                .to_path_buf()
+        });
+    std::fs::create_dir_all(&ledger_root).expect("Ledger root is available");
+    let boundary = cosh_core::aw_effective::AwEffectiveBytesBoundary::new(
+        cosh_core::aw_effective::AwEffectiveBytesConfig {
+            provider_root: repository.join("providers"),
+            executable_roots: vec![
+                repository.join("src/tokenless/target/debug"),
+                repository.join("src/agent-sec-core/agent-sec-cli/.venv/bin"),
+            ],
+            target_identifier: "cosh-real-provider-history-test".to_owned(),
+            preferred_projection_provider: Some("tokenless".to_owned()),
+            provider_wall_time_ms: 10_000,
+            allow_unenforced_providers: true,
+            ledger: Some(cosh_core::aw_effective::EffectiveBytesLedgerConfig {
+                root: ledger_root.clone(),
+                assurance: cosh_core::aw_effective::EffectiveBytesLedgerAssurance::Required,
+            }),
+        },
+    )
+    .expect("real Provider boundary is configured");
+    core.set_effective_bytes_boundary(Arc::new(boundary));
+    let mut reader = empty_reader().await;
+    let mut output = Vec::new();
+
+    core.handle_user_message("list recent builds", &mut reader, &mut output)
+        .await
+        .expect("the real Provider turn settles");
+
+    let effective = tool_result_text(&core, "call-real-aw");
+    assert_ne!(effective, source);
+    assert_eq!(effective.len(), 438);
+    assert_eq!(
+        format!("{:x}", Sha256::digest(effective.as_bytes())),
+        "6c847696df69b21a2997cf599d6caf2bb5af76f418869c16cf07c0dc7e2d3003"
+    );
+
+    let store = aw_ledger::LedgerStore::open(&ledger_root).expect("Ledger reopens");
+    assert_eq!(aw_ledger::verify_chain(&store).expect("chain verifies"), 2);
+    let plans = store
+        .events_by_kind(aw_contracts::ledger::LedgerEventKind::PostToolUsePlan)
+        .expect("plan query succeeds");
+    let adoptions = store
+        .events_by_kind(aw_contracts::ledger::LedgerEventKind::ContextAdoption)
+        .expect("adoption query succeeds");
+    assert_eq!(plans.len(), 1);
+    assert_eq!(adoptions.len(), 1);
+    let body: aw_contracts::ledger::ContextAdoptionBody = serde_json::from_slice(
+        &store
+            .record_body_bytes(&adoptions[0].header.id)
+            .expect("adoption body is readable"),
+    )
+    .expect("adoption body is typed");
+    assert_eq!(
+        body.decision,
+        aw_contracts::ledger::ContextAdoptionDecision::Adopted
+    );
+    assert_eq!(body.effective_byte_count, 438);
+    assert_eq!(
+        body.effective_digest.as_str(),
+        "6c847696df69b21a2997cf599d6caf2bb5af76f418869c16cf07c0dc7e2d3003"
+    );
+    println!(
+        "AW_E2E_SUMMARY={}",
+        serde_json::json!({
+            "source_bytes": source.len(),
+            "source_digest": format!("{:x}", Sha256::digest(source.as_bytes())),
+            "candidate_bytes": effective.len(),
+            "candidate_digest": body.effective_digest,
+            "plan_records": plans.len(),
+            "adoption_records": adoptions.len(),
+            "decision": body.decision,
+            "ledger_root": ledger_root,
+        })
+    );
+}
+
+#[tokio::test]
+async fn aw_boundary_preserves_source_for_a_lossy_candidate() {
+    let mut core = make_core(MockProvider::new(Vec::new()));
+    let sources = Arc::new(Mutex::new(Vec::new()));
+    core.set_effective_bytes_boundary(Arc::new(RecordingEffectiveBytesBoundary {
+        sources: Arc::clone(&sources),
+        reversibility: aw_contracts::context::ContextReversibility::Unrecoverable,
+        ledger: cosh_core::aw_effective::EffectiveBytesLedgerState::Disabled,
+        adoptions: Arc::new(Mutex::new(Vec::new())),
+        fail_adoption: false,
+    }));
+    let scope = core
+        .execution_scope_context
+        .tool_call_scope("22222222-2222-4222-8222-222222222222", "call-lossy");
+
+    let (result, outcome) = core
+        .prepare_effective_tool_result(
+            "sensitive_output",
+            &scope,
+            ToolResult::success("provisional"),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(sources.lock().unwrap().as_slice(), ["provisional"]);
+    assert_eq!(result.output, "provisional");
+    let outcome = outcome.expect("a rejected offer still has a settled AW plan");
+    assert!(outcome.candidate.is_some());
+    assert_eq!(
+        outcome.selection,
+        cosh_core::aw_effective::EffectiveBytesSelection::SourceCandidateNotLossless
+    );
+}
+
+#[tokio::test]
+async fn required_adoption_failure_rolls_back_effective_history_bytes() {
+    let provider = MockProvider::new(vec![vec![
+        GenerateEvent::ToolCallStart {
+            index: 0,
+            id: "call-required-ledger".to_owned(),
+            name: "sensitive_output".to_owned(),
+        },
+        GenerateEvent::ToolCallDelta {
+            index: 0,
+            arguments_delta: "{}".to_owned(),
+        },
+        GenerateEvent::ToolCallEnd { index: 0 },
+        GenerateEvent::MessageEnd,
+    ]]);
+    let mut config = CoreConfig::default();
+    config.agent.approval_mode = ApprovalMode::Trust;
+    let mut tools = ToolRegistry::new();
+    tools.register(Box::new(SensitiveOutputTool));
+    let mut core = CoshCore::new_legacy(config, Box::new(provider), tools);
+    let adoptions = Arc::new(Mutex::new(Vec::new()));
+    core.set_effective_bytes_boundary(Arc::new(RecordingEffectiveBytesBoundary {
+        sources: Arc::new(Mutex::new(Vec::new())),
+        reversibility: aw_contracts::context::ContextReversibility::Lossless,
+        ledger: cosh_core::aw_effective::EffectiveBytesLedgerState::Ready {
+            plan_event_id: aw_contracts::ids::LedgerEventId::new(),
+            assurance: cosh_core::aw_effective::EffectiveBytesLedgerAssurance::Required,
+        },
+        adoptions: Arc::clone(&adoptions),
+        fail_adoption: true,
+    }));
+    let mut reader = empty_reader().await;
+    let mut output = Vec::new();
+
+    let error = core
+        .handle_user_message("return the fixture", &mut reader, &mut output)
+        .await
+        .unwrap_err();
+
+    assert!(error.contains("required AW adoption evidence"));
+    assert_eq!(adoptions.lock().unwrap().len(), 1);
+    let history = tool_result_text(&core, "call-required-ledger");
+    assert_eq!(history, AW_WITHHELD_RESULT);
+    assert!(!history.contains("aw-effective"));
+    assert!(!history.contains("AKIA1234567890ABCDEF"));
+}
+
+#[tokio::test]
+async fn required_plan_write_failure_withholds_source_before_history_commit() {
+    let provider = MockProvider::new(vec![vec![
+        GenerateEvent::ToolCallStart {
+            index: 0,
+            id: "call-required-plan".to_owned(),
+            name: "sensitive_output".to_owned(),
+        },
+        GenerateEvent::ToolCallDelta {
+            index: 0,
+            arguments_delta: "{}".to_owned(),
+        },
+        GenerateEvent::ToolCallEnd { index: 0 },
+        GenerateEvent::MessageEnd,
+    ]]);
+    let mut config = CoreConfig::default();
+    config.agent.approval_mode = ApprovalMode::Trust;
+    let mut tools = ToolRegistry::new();
+    tools.register(Box::new(SensitiveOutputTool));
+    let mut core = CoshCore::new_legacy(config, Box::new(provider), tools);
+    core.set_effective_bytes_boundary(Arc::new(RequiredPlanLedgerFailureBoundary));
+    let mut reader = empty_reader().await;
+    let mut output = Vec::new();
+
+    let error = core
+        .handle_user_message("return the fixture", &mut reader, &mut output)
+        .await
+        .unwrap_err();
+
+    assert!(error.contains("enabled AW effective-bytes policy"));
+    let history = tool_result_text(&core, "call-required-plan");
+    assert_eq!(history, AW_WITHHELD_RESULT);
+    assert!(!history.contains("AKIA1234567890ABCDEF"));
+}
+
+#[tokio::test]
+async fn best_effort_adoption_failure_keeps_effective_history_bytes() {
+    let provider = MockProvider::new(vec![
+        vec![
+            GenerateEvent::ToolCallStart {
+                index: 0,
+                id: "call-best-effort-ledger".to_owned(),
+                name: "sensitive_output".to_owned(),
+            },
+            GenerateEvent::ToolCallDelta {
+                index: 0,
+                arguments_delta: "{}".to_owned(),
+            },
+            GenerateEvent::ToolCallEnd { index: 0 },
+            GenerateEvent::MessageEnd,
+        ],
+        vec![GenerateEvent::MessageEnd],
+    ]);
+    let mut config = CoreConfig::default();
+    config.agent.approval_mode = ApprovalMode::Trust;
+    let mut tools = ToolRegistry::new();
+    tools.register(Box::new(SensitiveOutputTool));
+    let mut core = CoshCore::new_legacy(config, Box::new(provider), tools);
+    let adoptions = Arc::new(Mutex::new(Vec::new()));
+    core.set_effective_bytes_boundary(Arc::new(RecordingEffectiveBytesBoundary {
+        sources: Arc::new(Mutex::new(Vec::new())),
+        reversibility: aw_contracts::context::ContextReversibility::Lossless,
+        ledger: cosh_core::aw_effective::EffectiveBytesLedgerState::Ready {
+            plan_event_id: aw_contracts::ids::LedgerEventId::new(),
+            assurance: cosh_core::aw_effective::EffectiveBytesLedgerAssurance::BestEffort,
+        },
+        adoptions: Arc::clone(&adoptions),
+        fail_adoption: true,
+    }));
+    let mut reader = empty_reader().await;
+    let mut output = Vec::new();
+
+    core.handle_user_message("return the fixture", &mut reader, &mut output)
+        .await
+        .unwrap();
+
+    assert_eq!(adoptions.lock().unwrap().len(), 1);
+    assert_eq!(
+        tool_result_text(&core, "call-best-effort-ledger"),
+        "aw-effective"
+    );
+}
+
+#[tokio::test]
+async fn best_effort_plan_degradation_keeps_selection_without_adoption_claim() {
+    let provider = MockProvider::new(vec![
+        vec![
+            GenerateEvent::ToolCallStart {
+                index: 0,
+                id: "call-best-effort-plan".to_owned(),
+                name: "sensitive_output".to_owned(),
+            },
+            GenerateEvent::ToolCallDelta {
+                index: 0,
+                arguments_delta: "{}".to_owned(),
+            },
+            GenerateEvent::ToolCallEnd { index: 0 },
+            GenerateEvent::MessageEnd,
+        ],
+        vec![GenerateEvent::MessageEnd],
+    ]);
+    let mut config = CoreConfig::default();
+    config.agent.approval_mode = ApprovalMode::Trust;
+    let mut tools = ToolRegistry::new();
+    tools.register(Box::new(SensitiveOutputTool));
+    let mut core = CoshCore::new_legacy(config, Box::new(provider), tools);
+    let adoptions = Arc::new(Mutex::new(Vec::new()));
+    core.set_effective_bytes_boundary(Arc::new(RecordingEffectiveBytesBoundary {
+        sources: Arc::new(Mutex::new(Vec::new())),
+        reversibility: aw_contracts::context::ContextReversibility::Lossless,
+        ledger: cosh_core::aw_effective::EffectiveBytesLedgerState::Degraded,
+        adoptions: Arc::clone(&adoptions),
+        fail_adoption: false,
+    }));
+    let mut reader = empty_reader().await;
+    let mut output = Vec::new();
+
+    core.handle_user_message("return the fixture", &mut reader, &mut output)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        tool_result_text(&core, "call-best-effort-plan"),
+        "aw-effective"
+    );
+    assert!(adoptions.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn enabled_aw_with_invalid_system_config_fails_closed() {
+    let provider = MockProvider::new(vec![vec![
+        GenerateEvent::ToolCallStart {
+            index: 0,
+            id: "call-invalid-aw-config".to_owned(),
+            name: "sensitive_output".to_owned(),
+        },
+        GenerateEvent::ToolCallDelta {
+            index: 0,
+            arguments_delta: "{}".to_owned(),
+        },
+        GenerateEvent::ToolCallEnd { index: 0 },
+        GenerateEvent::MessageEnd,
+    ]]);
+    let mut config = CoreConfig::default();
+    config.agent.approval_mode = ApprovalMode::Trust;
+    config.aw.effective_bytes.enabled = true;
+    config.aw.effective_bytes.provider_root = None;
+    let mut tools = ToolRegistry::new();
+    tools.register(Box::new(SensitiveOutputTool));
+    let mut core = CoshCore::new_legacy(config, Box::new(provider), tools);
+    let mut reader = empty_reader().await;
+    let mut output = Vec::new();
+
+    let error = core
+        .handle_user_message("return the fixture", &mut reader, &mut output)
+        .await
+        .unwrap_err();
+
+    assert!(error.contains("enabled AW effective-bytes policy"));
+    let history = tool_result_text(&core, "call-invalid-aw-config");
+    assert_eq!(history, AW_WITHHELD_RESULT);
+    assert!(!history.contains("AKIA1234567890ABCDEF"));
+}
+
+#[tokio::test]
+async fn enabled_aw_with_failed_lazy_initialization_fails_closed() {
+    let provider = MockProvider::new(vec![vec![
+        GenerateEvent::ToolCallStart {
+            index: 0,
+            id: "call-unavailable-aw-root".to_owned(),
+            name: "sensitive_output".to_owned(),
+        },
+        GenerateEvent::ToolCallDelta {
+            index: 0,
+            arguments_delta: "{}".to_owned(),
+        },
+        GenerateEvent::ToolCallEnd { index: 0 },
+        GenerateEvent::MessageEnd,
+    ]]);
+    let provider_parent = tempfile::tempdir().unwrap();
+    let mut config = CoreConfig::default();
+    config.agent.approval_mode = ApprovalMode::Trust;
+    config.aw.effective_bytes.enabled = true;
+    config.aw.effective_bytes.provider_root = Some(provider_parent.path().join("missing"));
+    let mut tools = ToolRegistry::new();
+    tools.register(Box::new(SensitiveOutputTool));
+    let mut core = CoshCore::new_legacy(config, Box::new(provider), tools);
+    let mut reader = empty_reader().await;
+    let mut output = Vec::new();
+
+    let error = core
+        .handle_user_message("return the fixture", &mut reader, &mut output)
+        .await
+        .unwrap_err();
+
+    assert!(error.contains("enabled AW effective-bytes policy"));
+    let history = tool_result_text(&core, "call-unavailable-aw-root");
+    assert_eq!(history, AW_WITHHELD_RESULT);
+    assert!(!history.contains("AKIA1234567890ABCDEF"));
 }
 
 fn make_core(provider: MockProvider) -> CoshCore {
@@ -1570,7 +2245,7 @@ async fn request_id_skips_mismatched() {
     let mut reader = BufReader::new(input.as_bytes()).lines();
 
     let result = core
-        .wait_for_approval("expected-id", None, &mut reader)
+        .wait_for_approval("expected-id", None, None, &mut reader)
         .await;
     assert!(matches!(result, ApprovalResult::Denied(_)));
 }
@@ -1594,6 +2269,32 @@ fn brokered_profile_denies_the_removed_checkpoint_tool() {
         .any(|name| name == "workspace_checkpoint_create"));
 }
 
+#[test]
+fn checkpoint_profile_only_brokers_an_empty_typed_request() {
+    let core = CoshCore::new_with_profile(
+        CoreConfig::default(),
+        Box::new(MockProvider::text_only("")),
+        ToolRegistry::gateway_brokered_checkpoint_v1(),
+        crate::cli::ExecutionProfile::GatewayBrokeredV1,
+    );
+
+    assert_eq!(
+        core.classify_tool("workspace_checkpoint_create", &serde_json::json!({})),
+        Outcome::RequireApproval
+    );
+    assert_eq!(
+        core.classify_tool(
+            "workspace_checkpoint_create",
+            &serde_json::json!({"checkpoint_id": "runtime-chosen"}),
+        ),
+        Outcome::Deny
+    );
+    assert_eq!(
+        core.tool_names(),
+        vec!["ask_user_question", "workspace_checkpoint_create"]
+    );
+}
+
 #[tokio::test]
 async fn brokered_profile_rejects_a_checkpoint_execution_result() {
     let core = make_core_with_profile(
@@ -1605,12 +2306,220 @@ async fn brokered_profile_rejects_a_checkpoint_execution_result() {
     let mut reader = BufReader::new(input.as_bytes()).lines();
 
     let result = core
-        .wait_for_approval("expected-id", Some(ToolKind::HostedSideEffect), &mut reader)
+        .wait_for_approval(
+            "expected-id",
+            Some("workspace_checkpoint_create"),
+            Some(ToolKind::HostedSideEffect),
+            &mut reader,
+        )
         .await;
     assert!(matches!(
         result,
         ApprovalResult::Denied(Some(reason)) if reason == "unknown response"
     ));
+}
+
+#[tokio::test]
+async fn checkpoint_profile_accepts_only_typed_terminal_results() {
+    let core = CoshCore::new_with_profile(
+        CoreConfig::default(),
+        Box::new(MockProvider::text_only("")),
+        ToolRegistry::gateway_brokered_checkpoint_v1(),
+        crate::cli::ExecutionProfile::GatewayBrokeredV1,
+    );
+    let input = r#"{"type":"control_response","response":{"subtype":"success","request_id":"expected-id","response":{"behavior":"host_executed_checkpoint_create","checkpointResult":{"checkpoint_id":"ckp_123e4567-e89b-12d3-a456-426614174000","outcome":{"status":"created","snapshot_id":"snap-1"}}}}}
+"#;
+    let mut reader = BufReader::new(input.as_bytes()).lines();
+
+    let result = core
+        .wait_for_approval(
+            "expected-id",
+            Some("workspace_checkpoint_create"),
+            Some(ToolKind::HostedSideEffect),
+            &mut reader,
+        )
+        .await;
+    assert!(matches!(
+        result,
+        ApprovalResult::HostExecutedCheckpoint { result }
+            if !result.is_error
+                && result.output.contains("ckp_123e4567-e89b-12d3-a456-426614174000")
+                && result.output.contains("snap-1")
+    ));
+
+    let input = r#"{"type":"control_response","response":{"subtype":"success","request_id":"expected-id","response":{"behavior":"host_executed_checkpoint_error","checkpointError":{"outcome":"uncertain","code":"checkpoint_unknown","message":"Exact evidence was not available"}}}}
+"#;
+    let mut reader = BufReader::new(input.as_bytes()).lines();
+    let result = core
+        .wait_for_approval(
+            "expected-id",
+            Some("workspace_checkpoint_create"),
+            Some(ToolKind::HostedSideEffect),
+            &mut reader,
+        )
+        .await;
+    assert!(matches!(
+        result,
+        ApprovalResult::HostExecutedCheckpoint { result }
+            if result.is_error
+                && result.output.contains("uncertain")
+                && result.output.contains("checkpoint_unknown")
+                && result
+                    .output
+                    .contains("Do not retry without Gateway reconciliation.")
+    ));
+
+    let input = r#"{"type":"control_response","response":{"subtype":"success","request_id":"expected-id","response":{"behavior":"host_executed_checkpoint_create","checkpointResult":{"checkpoint_id":"not-a-checkpoint-id","outcome":{"status":"created","snapshot_id":"snap-1"}}}}}
+"#;
+    let mut reader = BufReader::new(input.as_bytes()).lines();
+    let result = core
+        .wait_for_approval(
+            "expected-id",
+            Some("workspace_checkpoint_create"),
+            Some(ToolKind::HostedSideEffect),
+            &mut reader,
+        )
+        .await;
+    assert!(matches!(result, ApprovalResult::Denied(Some(_))));
+
+    let input = r#"{"type":"control_response","response":{"subtype":"success","request_id":"expected-id","response":{"behavior":"host_executed_checkpoint_create","checkpointResult":{"checkpoint_id":"ckp_123e4567-e89b-12d3-a456-426614174000","outcome":{"status":"created","snapshot_id":"snap-1"}},"hiddenAuthority":"forbidden"}}}
+"#;
+    let mut reader = BufReader::new(input.as_bytes()).lines();
+    let result = core
+        .wait_for_approval(
+            "expected-id",
+            Some("workspace_checkpoint_create"),
+            Some(ToolKind::HostedSideEffect),
+            &mut reader,
+        )
+        .await;
+    assert!(matches!(result, ApprovalResult::Denied(Some(_))));
+}
+
+#[tokio::test]
+async fn checkpoint_profile_never_executes_the_hosted_tool_locally() {
+    let provider = MockProvider::new(vec![
+        vec![
+            GenerateEvent::ToolCallStart {
+                index: 0,
+                id: "checkpoint-call".to_string(),
+                name: "workspace_checkpoint_create".to_string(),
+            },
+            GenerateEvent::ToolCallDelta {
+                index: 0,
+                arguments_delta: "{}".to_string(),
+            },
+            GenerateEvent::ToolCallEnd { index: 0 },
+            GenerateEvent::MessageEnd,
+        ],
+        vec![GenerateEvent::MessageEnd],
+    ]);
+    let mut core = CoshCore::new_with_profile(
+        CoreConfig::default(),
+        Box::new(provider),
+        ToolRegistry::gateway_brokered_checkpoint_v1(),
+        crate::cli::ExecutionProfile::GatewayBrokeredV1,
+    );
+    let input = r#"{"type":"approval_receipt","request_id":"req-0"}
+{"type":"control_response","response":{"subtype":"success","request_id":"req-0","response":{"behavior":"host_executed_checkpoint_create","checkpointResult":{"checkpoint_id":"ckp_123e4567-e89b-12d3-a456-426614174000","outcome":{"status":"skipped","reason":"An exact checkpoint already exists"}}}}}
+"#;
+    let mut reader = BufReader::new(input.as_bytes()).lines();
+    let mut output = Vec::new();
+
+    core.handle_user_message("checkpoint", &mut reader, &mut output)
+        .await
+        .unwrap();
+
+    let messages = String::from_utf8(output).unwrap();
+    assert!(messages.contains(r#""subtype":"can_use_tool""#));
+    assert!(messages.contains(r#""tool_name":"workspace_checkpoint_create""#));
+    assert!(!messages.contains(r#""hook_requires_approval":true"#));
+    let tool_result = core
+        .messages
+        .iter()
+        .find(|message| message.role == "tool")
+        .unwrap();
+    assert!(matches!(
+        &tool_result.content,
+        crate::provider::MessageContent::Text(content)
+            if content.contains("safely skipped")
+    ));
+}
+
+#[tokio::test]
+async fn checkpoint_result_settles_through_post_tool_and_aw_adoption() {
+    let provider = MockProvider::new(vec![
+        vec![
+            GenerateEvent::ToolCallStart {
+                index: 0,
+                id: "checkpoint-aw-call".to_owned(),
+                name: "workspace_checkpoint_create".to_owned(),
+            },
+            GenerateEvent::ToolCallDelta {
+                index: 0,
+                arguments_delta: "{}".to_owned(),
+            },
+            GenerateEvent::ToolCallEnd { index: 0 },
+            GenerateEvent::MessageEnd,
+        ],
+        vec![GenerateEvent::MessageEnd],
+    ]);
+    let mut core = CoshCore::new_with_profile(
+        CoreConfig::default(),
+        Box::new(provider),
+        ToolRegistry::gateway_brokered_checkpoint_v1(),
+        crate::cli::ExecutionProfile::GatewayBrokeredV1,
+    );
+    let sources = Arc::new(Mutex::new(Vec::new()));
+    let adoptions = Arc::new(Mutex::new(Vec::new()));
+    core.set_effective_bytes_boundary(Arc::new(RecordingEffectiveBytesBoundary {
+        sources: Arc::clone(&sources),
+        reversibility: aw_contracts::context::ContextReversibility::Lossless,
+        ledger: cosh_core::aw_effective::EffectiveBytesLedgerState::Ready {
+            plan_event_id: aw_contracts::ids::LedgerEventId::new(),
+            assurance: cosh_core::aw_effective::EffectiveBytesLedgerAssurance::Required,
+        },
+        adoptions: Arc::clone(&adoptions),
+        fail_adoption: false,
+    }));
+    let input = r#"{"type":"approval_receipt","request_id":"req-0"}
+{"type":"control_response","response":{"subtype":"success","request_id":"req-0","response":{"behavior":"host_executed_checkpoint_create","checkpointResult":{"checkpoint_id":"ckp_123e4567-e89b-12d3-a456-426614174000","outcome":{"status":"created","snapshot_id":"snap-aw-1"}}}}}
+"#;
+    let mut reader = BufReader::new(input.as_bytes()).lines();
+    let mut output = Vec::new();
+
+    core.handle_user_message("checkpoint", &mut reader, &mut output)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        sources.lock().unwrap().as_slice(),
+        ["Created checkpoint ckp_123e4567-e89b-12d3-a456-426614174000 as snapshot snap-aw-1."]
+    );
+    assert_eq!(
+        tool_result_text(&core, "checkpoint-aw-call"),
+        "aw-effective"
+    );
+    let adoption = adoptions.lock().unwrap();
+    assert_eq!(adoption.len(), 1);
+    assert_eq!(
+        adoption[0].source_digest.as_str(),
+        format!(
+            "{:x}",
+            Sha256::digest(
+                b"Created checkpoint ckp_123e4567-e89b-12d3-a456-426614174000 as snapshot snap-aw-1."
+            )
+        )
+    );
+    assert_eq!(
+        adoption[0].effective_digest.as_str(),
+        format!("{:x}", Sha256::digest(b"aw-effective"))
+    );
+    assert_eq!(adoption[0].effective_byte_count, 12);
+    assert_eq!(
+        adoption[0].decision,
+        aw_contracts::ledger::ContextAdoptionDecision::Adopted
+    );
 }
 
 /// Serializes the two tests that mutate the process-wide
@@ -1646,7 +2555,7 @@ async fn unanswered_approval_times_out_instead_of_hanging_forever() {
     let mut reader = BufReader::new(client).lines();
 
     let result = core
-        .wait_for_approval("expected-id", None, &mut reader)
+        .wait_for_approval("expected-id", None, None, &mut reader)
         .await;
     std::env::remove_var("COSH_CORE_APPROVAL_TIMEOUT_SECS");
     assert!(matches!(result, ApprovalResult::TimedOut));
@@ -1674,7 +2583,7 @@ async fn answered_approval_beats_the_residual_timeout() {
     let mut reader = BufReader::new(&mut client).lines();
 
     let result = core
-        .wait_for_approval("expected-id", None, &mut reader)
+        .wait_for_approval("expected-id", None, None, &mut reader)
         .await;
     std::env::remove_var("COSH_CORE_APPROVAL_TIMEOUT_SECS");
     assert!(matches!(result, ApprovalResult::Allowed));
@@ -1711,7 +2620,7 @@ async fn approval_receipt_disarms_the_residual_timeout_for_a_pending_card() {
     let mut reader = BufReader::new(&mut client).lines();
 
     let result = core
-        .wait_for_approval("expected-id", None, &mut reader)
+        .wait_for_approval("expected-id", None, None, &mut reader)
         .await;
     std::env::remove_var("COSH_CORE_APPROVAL_TIMEOUT_SECS");
     assert!(matches!(result, ApprovalResult::Allowed));
@@ -1748,7 +2657,12 @@ async fn approval_receipt_disarms_the_residual_timeout_for_a_slow_host_command()
     let mut reader = BufReader::new(&mut client).lines();
 
     let result = core
-        .wait_for_approval("expected-id", Some(ToolKind::ShellExec), &mut reader)
+        .wait_for_approval(
+            "expected-id",
+            Some("shell"),
+            Some(ToolKind::ShellExec),
+            &mut reader,
+        )
         .await;
     std::env::remove_var("COSH_CORE_APPROVAL_TIMEOUT_SECS");
     assert!(matches!(
@@ -1783,7 +2697,7 @@ async fn approval_receipt_for_a_different_request_keeps_the_residual_timeout() {
     let mut reader = BufReader::new(&mut client).lines();
 
     let result = core
-        .wait_for_approval("expected-id", None, &mut reader)
+        .wait_for_approval("expected-id", None, None, &mut reader)
         .await;
     std::env::remove_var("COSH_CORE_APPROVAL_TIMEOUT_SECS");
     assert!(matches!(result, ApprovalResult::TimedOut));

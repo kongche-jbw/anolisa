@@ -1,6 +1,8 @@
 //! Stateful encoder and decoder for private cosh-core JSONL frames.
 
-use cosh_gateway_contracts::profile::{GatewayCapabilityProfile, GatewayCapabilityProfileIdentity};
+use cosh_gateway_contracts::profile::{
+    GatewayCapabilityProfile, GatewayCapabilityProfileId, GatewayCapabilityProfileIdentity,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -46,10 +48,11 @@ impl CoshCoreJsonlCodec {
     pub fn new_gateway_brokered(
         initialize_request_id: impl Into<String>,
         max_frame_bytes: usize,
+        capability_profile: GatewayCapabilityProfile,
     ) -> Result<Self, CoshCoreCodecError> {
         let mut codec = Self::new(initialize_request_id, max_frame_bytes)?;
         codec.profile = CoshCoreExecutionProfile::GatewayBrokeredV1;
-        codec.capability_profile = Some(GatewayCapabilityProfile::task_only_v1().identity());
+        codec.capability_profile = Some(capability_profile.identity());
         Ok(codec)
     }
 
@@ -212,12 +215,86 @@ impl CoshCoreJsonlCodec {
         )
     }
 
+    /// Encodes a typed terminal result for one Gateway-hosted checkpoint request.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-phase, profile, serialization, or frame-bound error.
+    pub fn brokered_checkpoint_result_frame(
+        &self,
+        request_id: &str,
+        delivery: &cosh_gateway_contracts::runtime::BrokeredExecutionDelivery,
+    ) -> Result<String, CoshCoreCodecError> {
+        use cosh_gateway_contracts::runtime::{BrokeredExecutionOutcome, BrokeredOperationResult};
+
+        if !self.hosts_checkpoint() {
+            return Err(CoshCoreCodecError::ProfileMismatch {
+                operation: "brokered_checkpoint_result_frame",
+            });
+        }
+        if self.phase != CoshCoreProtocolPhase::Ready {
+            return Err(self.invalid_phase("brokered_checkpoint_result_frame"));
+        }
+        let response = match &delivery.outcome {
+            BrokeredExecutionOutcome::Denied { safe_message, .. } => {
+                BrokeredCheckpointControlResponseBody::Deny {
+                    behavior: "deny",
+                    message: safe_message.as_str(),
+                }
+            }
+            BrokeredExecutionOutcome::Succeeded { result, .. } => {
+                let BrokeredOperationResult::WorkspaceCheckpointCreateV1(result) = result;
+                BrokeredCheckpointControlResponseBody::Created {
+                    behavior: "host_executed_checkpoint_create",
+                    checkpoint_result: result,
+                }
+            }
+            BrokeredExecutionOutcome::Failed { error, .. } => {
+                BrokeredCheckpointControlResponseBody::Error {
+                    behavior: "host_executed_checkpoint_error",
+                    checkpoint_error: BrokeredCheckpointError {
+                        outcome: "failed",
+                        code: error.code.as_str(),
+                        message: error.safe_message.as_str(),
+                    },
+                }
+            }
+            BrokeredExecutionOutcome::Uncertain { error, .. } => {
+                BrokeredCheckpointControlResponseBody::Error {
+                    behavior: "host_executed_checkpoint_error",
+                    checkpoint_error: BrokeredCheckpointError {
+                        outcome: "uncertain",
+                        code: error.code.as_str(),
+                        message: error.safe_message.as_str(),
+                    },
+                }
+            }
+        };
+        encode_frame(
+            &BrokeredCheckpointControlResponseInput {
+                message_type: "control_response",
+                response: BrokeredCheckpointControlResponse {
+                    subtype: "success",
+                    request_id,
+                    response,
+                },
+            },
+            self.max_frame_bytes,
+        )
+    }
+
     fn require_brokered(&self, operation: &'static str) -> Result<(), CoshCoreCodecError> {
         if self.profile == CoshCoreExecutionProfile::GatewayBrokeredV1 {
             Ok(())
         } else {
             Err(CoshCoreCodecError::ProfileMismatch { operation })
         }
+    }
+
+    fn hosts_checkpoint(&self) -> bool {
+        self.capability_profile.as_ref().is_some_and(|profile| {
+            profile.profile_id == GatewayCapabilityProfileId::WorkspaceCheckpointV1
+        })
     }
 
     fn control_frame(
@@ -360,7 +437,11 @@ impl CoshCoreJsonlCodec {
                 .as_ref()
                 .ok_or(CoshCoreCodecError::InitializeCapabilitiesMissing)?;
             let runtime_tools = runtime_tools.iter().map(String::as_str).collect::<Vec<_>>();
-            GatewayCapabilityProfile::task_only_v1()
+            self.capability_profile
+                .as_ref()
+                .ok_or(CoshCoreCodecError::InitializeProfileMismatch)?
+                .profile_id
+                .profile()
                 .verify_runtime_tools(&runtime_tools)
                 .map_err(|_| CoshCoreCodecError::InitializeCapabilitiesInvalid)?;
         }
@@ -374,7 +455,7 @@ impl CoshCoreJsonlCodec {
                 || capabilities.can_handle_host_executed_shell_tool_result
                 || capabilities.can_handle_shell_evidence_tool
                 || !capabilities.can_handle_approval_receipt
-                || capabilities.can_handle_hosted_checkpoint_create
+                || capabilities.can_handle_hosted_checkpoint_create != self.hosts_checkpoint()
                 || !capabilities.can_handle_brokered_ask_user)
         {
             return Err(CoshCoreCodecError::InitializeCapabilitiesInvalid);
@@ -537,6 +618,46 @@ enum BrokeredControlResponseBody<'a> {
         behavior: &'static str,
         answer: &'a str,
     },
+}
+
+#[derive(Serialize)]
+struct BrokeredCheckpointControlResponseInput<'a> {
+    #[serde(rename = "type")]
+    message_type: &'static str,
+    response: BrokeredCheckpointControlResponse<'a>,
+}
+
+#[derive(Serialize)]
+struct BrokeredCheckpointControlResponse<'a> {
+    subtype: &'static str,
+    request_id: &'a str,
+    response: BrokeredCheckpointControlResponseBody<'a>,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum BrokeredCheckpointControlResponseBody<'a> {
+    Deny {
+        behavior: &'static str,
+        message: &'a str,
+    },
+    Created {
+        behavior: &'static str,
+        #[serde(rename = "checkpointResult")]
+        checkpoint_result: &'a cosh_gateway_contracts::runtime::WorkspaceCheckpointCreateV1Result,
+    },
+    Error {
+        behavior: &'static str,
+        #[serde(rename = "checkpointError")]
+        checkpoint_error: BrokeredCheckpointError<'a>,
+    },
+}
+
+#[derive(Serialize)]
+struct BrokeredCheckpointError<'a> {
+    outcome: &'static str,
+    code: &'a str,
+    message: &'a str,
 }
 
 #[derive(Serialize)]

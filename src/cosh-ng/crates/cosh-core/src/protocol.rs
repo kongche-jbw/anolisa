@@ -198,6 +198,10 @@ pub struct ControlResponseBody {
     pub behavior: Option<String>,
     pub message: Option<String>,
     pub result: Option<HostExecutedShellResult>,
+    #[serde(default, rename = "checkpointResult")]
+    pub checkpoint_result: Option<Value>,
+    #[serde(default, rename = "checkpointError")]
+    pub checkpoint_error: Option<Value>,
     #[serde(rename = "toolUseID")]
     pub tool_use_id: Option<String>,
     #[serde(default, rename = "updatedPermissions")]
@@ -210,6 +214,41 @@ pub struct ControlResponseBody {
     #[serde(default)]
     pub values: Option<HashMap<String, String>>,
     pub persist: Option<bool>,
+    #[serde(default, flatten)]
+    pub unknown_fields: HashMap<String, Value>,
+}
+
+/// Typed successful result returned only by the Gateway checkpoint target.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct HostExecutedCheckpointCreateResult {
+    pub checkpoint_id: String,
+    pub outcome: HostExecutedCheckpointCreateOutcome,
+}
+
+/// Target-reported terminal outcome for a hosted checkpoint creation.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum HostExecutedCheckpointCreateOutcome {
+    Created { snapshot_id: String },
+    Skipped { reason: String },
+}
+
+/// Typed known-failure or uncertain result returned by Gateway.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct HostExecutedCheckpointError {
+    pub outcome: HostExecutedCheckpointErrorOutcome,
+    pub code: String,
+    pub message: String,
+}
+
+/// Stable terminal classification for a hosted checkpoint error.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HostExecutedCheckpointErrorOutcome {
+    Failed,
+    Uncertain,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -331,6 +370,9 @@ pub struct CoreControlCapabilities {
     /// sends receipts to a core that understands them; older or mock
     /// providers without this capability never see receipt lines.
     pub can_handle_approval_receipt: bool,
+    /// Core accepts a typed checkpoint terminal result from Gateway.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub can_handle_hosted_checkpoint_create: bool,
     /// Brokered control can suspend one side-effect-free question for Gateway resolution.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub can_handle_brokered_ask_user: bool,
@@ -555,6 +597,9 @@ impl OutputMessage {
         runtime_tools: Option<Vec<String>>,
         can_handle_shell_evidence_tool: bool,
     ) -> Self {
+        let can_handle_hosted_checkpoint_create = capability_profile
+            .as_ref()
+            .is_some_and(|profile| profile.verify_workspace_checkpoint_v1().is_ok());
         Self::ControlResponse {
             response: CoreControlResponsePayload {
                 subtype: "success".to_string(),
@@ -570,6 +615,7 @@ impl OutputMessage {
                         can_handle_host_executed_shell_tool_result: execution_profile.is_none(),
                         can_handle_shell_evidence_tool,
                         can_handle_approval_receipt: true,
+                        can_handle_hosted_checkpoint_create,
                         can_handle_brokered_ask_user: execution_profile.is_some(),
                     }),
                     error: None,

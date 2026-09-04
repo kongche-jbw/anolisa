@@ -97,6 +97,135 @@ pub struct CoreConfig {
     pub session: SessionConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
+    /// Trusted AW settings captured only from the system configuration layer.
+    #[serde(skip)]
+    pub(crate) aw: AwConfig,
+}
+
+/// System-owned AW integration settings.
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AwConfig {
+    /// Final model-history preparation boundary.
+    #[serde(default)]
+    pub effective_bytes: AwEffectiveBytesConfig,
+}
+
+/// Configuration for COSH's trusted post-hook AW boundary.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AwEffectiveBytesConfig {
+    /// Disabled unless the system administrator opts in explicitly.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Directory whose direct children are Provider packages.
+    pub provider_root: Option<PathBuf>,
+    /// Trusted executable search roots used during Provider admission.
+    #[serde(default)]
+    pub executable_roots: Vec<PathBuf>,
+    /// Opaque host identity carried in AW execution scope.
+    #[serde(default = "default_aw_target_identifier")]
+    pub target_identifier: String,
+    /// Explicit projection route when several Providers implement it.
+    pub preferred_projection_provider: Option<String>,
+    /// Core-side upper bound for each Provider process invocation.
+    #[serde(default = "default_aw_provider_wall_time_ms")]
+    pub provider_wall_time_ms: u64,
+    /// Temporary PoC opt-in until Provider isolation declarations are enforced.
+    #[serde(default)]
+    pub allow_unenforced_providers: bool,
+    /// Optional system-owned Ledger. Absence keeps durable recording off.
+    pub ledger: Option<AwEffectiveBytesLedgerConfig>,
+}
+
+/// System-owned durability settings for effective-byte plans and adoption.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AwEffectiveBytesLedgerConfig {
+    /// Directory that owns `ledger.db`.
+    pub root: PathBuf,
+    /// Whether a failed write withholds the history decision.
+    #[serde(default)]
+    pub assurance: AwEffectiveBytesLedgerAssurance,
+}
+
+/// Failure policy for the first-class effective-bytes Ledger.
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AwEffectiveBytesLedgerAssurance {
+    /// Keep history and emit a degradation diagnostic.
+    #[default]
+    BestEffort,
+    /// Withhold history when its durable evidence cannot be recorded.
+    Required,
+}
+
+impl Default for AwEffectiveBytesConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            provider_root: None,
+            executable_roots: Vec::new(),
+            target_identifier: default_aw_target_identifier(),
+            preferred_projection_provider: None,
+            provider_wall_time_ms: default_aw_provider_wall_time_ms(),
+            allow_unenforced_providers: false,
+            ledger: None,
+        }
+    }
+}
+
+impl AwEffectiveBytesConfig {
+    pub(crate) fn build_boundary(
+        &self,
+    ) -> Result<
+        Option<cosh_core::aw_effective::AwEffectiveBytesBoundary>,
+        Box<cosh_core::aw_effective::EffectiveBytesError>,
+    > {
+        if !self.enabled {
+            return Ok(None);
+        }
+        let provider_root = self.provider_root.clone().ok_or_else(|| {
+            Box::new(
+                cosh_core::aw_effective::EffectiveBytesError::InvalidConfiguration(
+                    "enabled AW effective-bytes boundary requires provider_root".to_owned(),
+                ),
+            )
+        })?;
+        cosh_core::aw_effective::AwEffectiveBytesBoundary::new(
+            cosh_core::aw_effective::AwEffectiveBytesConfig {
+                provider_root,
+                executable_roots: self.executable_roots.clone(),
+                target_identifier: self.target_identifier.clone(),
+                preferred_projection_provider: self.preferred_projection_provider.clone(),
+                provider_wall_time_ms: self.provider_wall_time_ms,
+                allow_unenforced_providers: self.allow_unenforced_providers,
+                ledger: self.ledger.as_ref().map(|ledger| {
+                    cosh_core::aw_effective::EffectiveBytesLedgerConfig {
+                        root: ledger.root.clone(),
+                        assurance: match ledger.assurance {
+                            AwEffectiveBytesLedgerAssurance::BestEffort => {
+                                cosh_core::aw_effective::EffectiveBytesLedgerAssurance::BestEffort
+                            }
+                            AwEffectiveBytesLedgerAssurance::Required => {
+                                cosh_core::aw_effective::EffectiveBytesLedgerAssurance::Required
+                            }
+                        },
+                    }
+                }),
+            },
+        )
+        .map(Some)
+        .map_err(Box::new)
+    }
+}
+
+fn default_aw_target_identifier() -> String {
+    "cosh-local-host".to_owned()
+}
+
+fn default_aw_provider_wall_time_ms() -> u64 {
+    5_000
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -497,6 +626,7 @@ struct PartialCoreConfig {
     mcp: Option<McpConfig>,
     session: Option<PartialSessionConfig>,
     logging: Option<PartialLoggingConfig>,
+    aw: Option<AwConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -638,7 +768,20 @@ fn apply_user_layer(config: &mut CoreConfig, layer: &PartialCoreConfig) {
     apply_common_layers(config, layer, true);
 }
 
+fn apply_system_layer(config: &mut CoreConfig, layer: &PartialCoreConfig) {
+    apply_user_layer(config, layer);
+    if let Some(ref aw) = layer.aw {
+        config.aw = aw.clone();
+    }
+}
+
 fn apply_project_layer(config: &mut CoreConfig, layer: &PartialCoreConfig, path: &std::path::Path) {
+    if layer.aw.is_some() {
+        eprintln!(
+            "[cosh-core] Warning: ignoring AW configuration from project config {}",
+            path.display()
+        );
+    }
     if let Some(ref ai) = layer.ai {
         if ai.active_provider.is_some() {
             eprintln!(
@@ -878,7 +1021,7 @@ impl CoreConfig {
 
         if let Some(system_path) = system_path {
             if let Some(system) = read_partial_config(system_path) {
-                apply_user_layer(&mut config, &system);
+                apply_system_layer(&mut config, &system);
                 let mut system_snapshot = CoreConfig::default();
                 apply_user_layer(&mut system_snapshot, &system);
                 config.system_ai = system_snapshot.ai;
@@ -887,6 +1030,12 @@ impl CoreConfig {
 
         if let Some(user_path) = user_path {
             if let Some(user) = read_partial_config(user_path) {
+                if user.aw.is_some() {
+                    eprintln!(
+                        "[cosh-core] Warning: ignoring AW configuration from user config {}",
+                        user_path.display()
+                    );
+                }
                 apply_user_layer(&mut config, &user);
                 let mut user_snapshot = CoreConfig::default();
                 apply_user_layer(&mut user_snapshot, &user);
@@ -1172,6 +1321,103 @@ mod tests {
         assert_eq!(config.agent.max_tool_calls_per_turn, 10);
         assert!(config.session.auto_persist);
         assert_eq!(config.hooks.enabled_override, None);
+        assert!(!config.aw.effective_bytes.enabled);
+    }
+
+    #[test]
+    fn aw_effective_bytes_configuration_is_system_owned() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let system_path = tmp.path().join("system-config.toml");
+        let user_path = tmp.path().join("user-config.toml");
+        let project_path = tmp.path().join("project-config.toml");
+        std::fs::write(
+            &system_path,
+            r#"
+[aw.effective_bytes]
+enabled = true
+provider_root = "/opt/anolisa/providers"
+executable_roots = ["/opt/anolisa/bin"]
+target_identifier = "system-host"
+preferred_projection_provider = "tokenless"
+provider_wall_time_ms = 7000
+allow_unenforced_providers = true
+
+[aw.effective_bytes.ledger]
+root = "/var/lib/anolisa/aw-ledger"
+assurance = "required"
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            &user_path,
+            r#"
+[aw.effective_bytes]
+enabled = false
+provider_root = "/tmp/user-providers"
+target_identifier = "user-host"
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            &project_path,
+            r#"
+[aw.effective_bytes]
+enabled = false
+provider_root = "/tmp/project-providers"
+target_identifier = "project-host"
+"#,
+        )
+        .unwrap();
+
+        let config =
+            CoreConfig::load_from_paths(Some(&system_path), Some(&user_path), Some(&project_path));
+        let aw = &config.aw.effective_bytes;
+
+        assert!(aw.enabled);
+        assert_eq!(
+            aw.provider_root.as_deref(),
+            Some(std::path::Path::new("/opt/anolisa/providers"))
+        );
+        assert_eq!(aw.executable_roots, [PathBuf::from("/opt/anolisa/bin")]);
+        assert_eq!(aw.target_identifier, "system-host");
+        assert_eq!(
+            aw.preferred_projection_provider.as_deref(),
+            Some("tokenless")
+        );
+        assert_eq!(aw.provider_wall_time_ms, 7000);
+        assert!(aw.allow_unenforced_providers);
+        let ledger = aw.ledger.as_ref().expect("system Ledger is retained");
+        assert_eq!(ledger.root, PathBuf::from("/var/lib/anolisa/aw-ledger"));
+        assert!(matches!(
+            ledger.assurance,
+            AwEffectiveBytesLedgerAssurance::Required
+        ));
+    }
+
+    #[test]
+    fn user_and_project_layers_cannot_enable_aw_provider_roots() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let user_path = tmp.path().join("user-config.toml");
+        let project_path = tmp.path().join("project-config.toml");
+        let untrusted = r#"
+[aw.effective_bytes]
+enabled = true
+provider_root = "/tmp/untrusted-providers"
+allow_unenforced_providers = true
+
+[aw.effective_bytes.ledger]
+root = "/tmp/untrusted-ledger"
+assurance = "required"
+"#;
+        std::fs::write(&user_path, untrusted).unwrap();
+        std::fs::write(&project_path, untrusted).unwrap();
+
+        let config = CoreConfig::load_from_paths(None, Some(&user_path), Some(&project_path));
+
+        assert!(!config.aw.effective_bytes.enabled);
+        assert!(config.aw.effective_bytes.provider_root.is_none());
+        assert!(!config.aw.effective_bytes.allow_unenforced_providers);
+        assert!(config.aw.effective_bytes.ledger.is_none());
     }
 
     #[test]

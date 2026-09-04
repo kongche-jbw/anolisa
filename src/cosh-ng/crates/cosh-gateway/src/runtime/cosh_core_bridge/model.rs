@@ -5,6 +5,8 @@ pub struct CoshCoreBrokeredContext {
     pub actor: ActorRef,
     /// Immutable target selected by Gateway admission.
     pub target: TargetRef,
+    /// Exact closed capability profile selected by Gateway admission.
+    pub capability_profile: GatewayCapabilityProfile,
 }
 
 /// COSH-owned identities and provider scope for one Core process generation.
@@ -117,14 +119,28 @@ pub struct CoshCoreBridge {
     pending_events: VecDeque<RuntimeEventEnvelope>,
     sequence: u64,
     current_message: Option<RuntimeMessageId>,
-    tool_ids: BTreeMap<String, ToolUseId>,
+    tool_ids: BTreeMap<String, ObservedToolUse>,
     active_turn: Option<TurnId>,
     prompt_deadline: Option<Instant>,
     terminal_delivered: bool,
     pending_input: Option<PendingInputRequest>,
+    pending_brokered: Option<PendingBrokeredRequest>,
 }
 
 struct PendingInputRequest {
     private_request_id: String,
     request: RuntimeInputRequest,
+}
+
+#[derive(Clone)]
+struct ObservedToolUse {
+    tool_use_id: ToolUseId,
+    name: BoundedName,
+}
+
+struct PendingBrokeredRequest {
+    private_request_id: String,
+    request_id: RequestId,
+    operation: BrokeredOperation,
+    acknowledged: bool,
 }

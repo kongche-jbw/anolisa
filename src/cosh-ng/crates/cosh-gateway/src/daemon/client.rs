@@ -19,10 +19,37 @@ impl LocalGatewayClient {
         })
     }
 
-    /// Creates and queues one durable Task.
+    /// Reads the exact trusted admission snapshot for a subsequent submission.
+    pub fn admission(
+        &self,
+        request_id: RequestId,
+    ) -> Result<GatewayAdmission, GatewayDaemonError> {
+        match self.request(GatewayRequest::Admission {
+            api_version: GATEWAY_API_VERSION.to_owned(),
+            request_id,
+        })? {
+            GatewayResult::Admission(admission) => Ok(admission),
+            _ => Err(GatewayDaemonError::Protocol(
+                "daemon returned the wrong result for admission discovery".to_owned(),
+            )),
+        }
+    }
+
+    /// Discovers current admission, then creates and queues one durable Task.
     pub fn submit(&self, request: SubmitTask) -> Result<GatewayResult, GatewayDaemonError> {
+        let admission = self.admission(RequestId::new())?;
+        self.submit_with_admission(admission, request)
+    }
+
+    /// Creates and queues one Task against an exact prior admission snapshot.
+    pub fn submit_with_admission(
+        &self,
+        admission: GatewayAdmission,
+        request: SubmitTask,
+    ) -> Result<GatewayResult, GatewayDaemonError> {
         self.request(GatewayRequest::Submit {
             api_version: GATEWAY_API_VERSION.to_owned(),
+            admission: Some(Box::new(admission)),
             request,
         })
     }
@@ -102,6 +129,7 @@ impl LocalGatewayClient {
                 "socket path must be absolute",
             ));
         }
+        let expected_api_version = request.api_version().to_owned();
         let expected_request_id = request.request_id().clone();
         let mut stream = UnixStream::connect(&self.socket_path)?;
         if peer_uid(&stream)? != Uid::effective().as_raw() {
@@ -111,7 +139,7 @@ impl LocalGatewayClient {
         stream.set_write_timeout(Some(CLIENT_REQUEST_DEADLINE))?;
         write_frame(&mut stream, &request)?;
         let response = read_frame::<GatewayResponse>(&mut stream)?;
-        if response.api_version != GATEWAY_API_VERSION
+        if response.api_version != expected_api_version
             || response.request_id.as_ref() != Some(&expected_request_id)
         {
             return Err(GatewayDaemonError::Protocol(

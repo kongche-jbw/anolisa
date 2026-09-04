@@ -236,7 +236,11 @@ fn write_frame<T: Serialize>(writer: &mut impl Write, value: &T) -> Result<(), G
     Ok(())
 }
 
-fn error_response(request_id: Option<RequestId>, error: &GatewayDaemonError) -> GatewayResponse {
+fn error_response(
+    request_id: Option<RequestId>,
+    api_version: &str,
+    error: &GatewayDaemonError,
+) -> GatewayResponse {
     let (code, message, recoverable) = match error {
         GatewayDaemonError::Unauthorized => {
             ("unauthenticated", "local peer authentication failed", false)
@@ -272,7 +276,7 @@ fn error_response(request_id: Option<RequestId>, error: &GatewayDaemonError) -> 
         }
     };
     GatewayResponse {
-        api_version: GATEWAY_API_VERSION.to_owned(),
+        api_version: api_version.to_owned(),
         request_id,
         outcome: GatewayResponseOutcome::Error {
             error: GatewayErrorBody {

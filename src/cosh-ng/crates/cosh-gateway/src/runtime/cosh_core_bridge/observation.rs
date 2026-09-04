@@ -124,7 +124,10 @@ impl CoshCoreBridge {
                 Ok(None)
             }
             CoshCoreObservation::Result(result) => {
-                if self.current_message.is_some() || self.pending_input.is_some() {
+                if self.current_message.is_some()
+                    || self.pending_input.is_some()
+                    || self.pending_brokered.is_some()
+                {
                     return Err(AgentRuntimePortError::Protocol);
                 }
                 if let Some(provider_session_id) = result.provider_session_id.as_deref() {
@@ -173,71 +176,209 @@ impl CoshCoreBridge {
         if self.config.execution_profile != CoshCoreExecutionProfile::GatewayBrokeredV1
             || self.state != BridgeState::PromptActive
             || self.pending_input.is_some()
+            || self.pending_brokered.is_some()
         {
             return Err(AgentRuntimePortError::Protocol);
         }
         let private_request_id = envelope.request_id;
-        if let CoshCoreControlRequest::AskUser {
-            tool_use_id,
-            question,
-            options,
-            allow_free_text,
-            multi_select,
-        } = &envelope.request
-        {
-            let private_tool_use_id = tool_use_id
-                .as_ref()
-                .ok_or(AgentRuntimePortError::Protocol)?;
-            let stable_tool_id = self
-                .tool_ids
-                .get(private_tool_use_id)
-                .cloned()
-                .ok_or(AgentRuntimePortError::Protocol)?;
-            let turn_id = self
-                .active_turn
-                .clone()
-                .ok_or(AgentRuntimePortError::Protocol)?;
-            let options = options
-                .iter()
-                .map(|option| {
-                    Ok(RuntimeInputOption::new(
-                        BoundedText::new(option.label.clone())
-                            .map_err(|_| AgentRuntimePortError::Protocol)?,
-                        option
-                            .description
-                            .clone()
-                            .map(BoundedText::new)
-                            .transpose()
-                            .map_err(|_| AgentRuntimePortError::Protocol)?,
-                    ))
-                })
-                .collect::<Result<Vec<_>, AgentRuntimePortError>>()?;
-            let request = RuntimeInputRequest::new(
-                InputRequestId::new(),
-                self.config.identity.run_id.clone(),
-                turn_id,
-                Some(stable_tool_id),
-                BoundedText::new(question.clone()).map_err(|_| AgentRuntimePortError::Protocol)?,
+        match envelope.request {
+            CoshCoreControlRequest::AskUser {
+                tool_use_id,
+                question,
                 options,
-                *allow_free_text,
-                *multi_select,
-            )
-            .map_err(|_| AgentRuntimePortError::Protocol)?;
-            self.pending_input = Some(PendingInputRequest {
+                allow_free_text,
+                multi_select,
+            } => {
+                let private_tool_use_id = tool_use_id
+                    .as_ref()
+                    .ok_or(AgentRuntimePortError::Protocol)?;
+                let observed_tool = self
+                    .tool_ids
+                    .get(private_tool_use_id)
+                    .ok_or(AgentRuntimePortError::Protocol)?;
+                if observed_tool.name.as_str() != ASK_USER_QUESTION_TOOL {
+                    return Err(AgentRuntimePortError::Protocol);
+                }
+                let stable_tool_id = observed_tool.tool_use_id.clone();
+                let turn_id = self
+                    .active_turn
+                    .clone()
+                    .ok_or(AgentRuntimePortError::Protocol)?;
+                let options = options
+                    .into_iter()
+                    .map(|option| {
+                        Ok(RuntimeInputOption::new(
+                            BoundedText::new(option.label)
+                                .map_err(|_| AgentRuntimePortError::Protocol)?,
+                            option
+                                .description
+                                .map(BoundedText::new)
+                                .transpose()
+                                .map_err(|_| AgentRuntimePortError::Protocol)?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, AgentRuntimePortError>>()?;
+                let request = RuntimeInputRequest::new(
+                    InputRequestId::new(),
+                    self.config.identity.run_id.clone(),
+                    turn_id,
+                    Some(stable_tool_id),
+                    BoundedText::new(question).map_err(|_| AgentRuntimePortError::Protocol)?,
+                    options,
+                    allow_free_text,
+                    multi_select,
+                )
+                .map_err(|_| AgentRuntimePortError::Protocol)?;
+                self.pending_input = Some(PendingInputRequest {
+                    private_request_id,
+                    request: request.clone(),
+                });
+                Ok(Some(
+                    self.event(AgentRuntimeEvent::InputRequested { request }),
+                ))
+            }
+            CoshCoreControlRequest::CanUseTool {
+                tool_name,
+                input,
+                description,
+                tool_use_id,
+                audit_ref,
+                hook_requires_approval,
+            } if self.hosts_checkpoint() => self.map_checkpoint_request(
                 private_request_id,
-                request: request.clone(),
-            });
-            return Ok(Some(
-                self.event(AgentRuntimeEvent::InputRequested { request }),
-            ));
+                tool_name,
+                input,
+                description,
+                tool_use_id,
+                audit_ref,
+                hook_requires_approval,
+            ),
+            _ => Err(AgentRuntimePortError::Unsupported {
+                operation: "brokered core provider tool request",
+            }),
         }
-        // The task-only Core inventory contains no hosted side-effect tool.
-        // Reject every `can_use_tool` request before a CapabilityRequest,
-        // Approval, Permit, or ExecutionTarget can be created.
-        let _ = private_request_id;
-        Err(AgentRuntimePortError::Unsupported {
-            operation: "task-only core tool request",
-        })
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn map_checkpoint_request(
+        &mut self,
+        private_request_id: String,
+        tool_name: String,
+        input: serde_json::Value,
+        description: Option<String>,
+        private_tool_use_id: String,
+        audit_ref: Option<String>,
+        hook_requires_approval: bool,
+    ) -> Result<Option<RuntimeEventEnvelope>, AgentRuntimePortError> {
+        if tool_name != WORKSPACE_CHECKPOINT_CREATE_TOOL
+            || input.as_object().is_none_or(|object| !object.is_empty())
+        {
+            return Err(AgentRuntimePortError::Unsupported {
+                operation: "checkpoint core tool request",
+            });
+        }
+        let observed_tool = self
+            .tool_ids
+            .get(&private_tool_use_id)
+            .ok_or(AgentRuntimePortError::Protocol)?;
+        if observed_tool.name.as_str() != WORKSPACE_CHECKPOINT_CREATE_TOOL {
+            return Err(AgentRuntimePortError::Protocol);
+        }
+        let tool_use_id = observed_tool.tool_use_id.clone();
+        let turn_id = self
+            .active_turn
+            .clone()
+            .ok_or(AgentRuntimePortError::Protocol)?;
+        let context = self
+            .config
+            .brokered_context
+            .as_ref()
+            .ok_or(AgentRuntimePortError::Protocol)?;
+        if context.capability_profile != GatewayCapabilityProfile::workspace_checkpoint_v1()
+            || context.target != context.capability_profile.governed_target()
+        {
+            return Err(AgentRuntimePortError::IdentityMismatch);
+        }
+
+        let request_id = RequestId::new();
+        let operation_input = WorkspaceCheckpointCreateV1 {
+            checkpoint_id: CheckpointId::new(),
+        };
+        let arguments_digest = digest_json(&operation_input)?;
+        let operation = BrokeredOperation::WorkspaceCheckpointCreateV1(operation_input);
+        let operation_descriptor = OperationDescriptor {
+            namespace: BoundedName::new("workspace")
+                .map_err(|_| AgentRuntimePortError::Protocol)?,
+            name: BoundedName::new("checkpoint_create")
+                .map_err(|_| AgentRuntimePortError::Protocol)?,
+            arguments_digest,
+        };
+        let operation_digest = digest_json(&(&operation_descriptor, &operation))?;
+        let input_digest = digest_json(&(
+            &tool_name,
+            &input,
+            &description,
+            &private_tool_use_id,
+            &audit_ref,
+            hook_requires_approval,
+        ))?;
+        let now = now_ms();
+        let remaining = self
+            .prompt_deadline
+            .and_then(|deadline| deadline.checked_duration_since(Instant::now()))
+            .ok_or(AgentRuntimePortError::Deadline {
+                operation: "checkpoint_request",
+            })?;
+        let lifetime_ms =
+            u64::try_from(remaining.as_millis()).map_err(|_| AgentRuntimePortError::Protocol)?;
+        let expires_at_ms = now
+            .checked_add(lifetime_ms)
+            .filter(|expires| *expires > now)
+            .ok_or(AgentRuntimePortError::Deadline {
+                operation: "checkpoint_request",
+            })?;
+        let request = CapabilityRequest {
+            request_id: request_id.clone(),
+            task_id: self.config.identity.task_id.clone(),
+            run_id: self.config.identity.run_id.clone(),
+            actor: context.actor.clone(),
+            target: context.target.clone(),
+            operation: operation_descriptor,
+            operation_digest,
+            requested_scope: CapabilityScope {
+                resource: BoundedName::new("workspace")
+                    .map_err(|_| AgentRuntimePortError::Protocol)?,
+                access: BoundedName::new("checkpoint_create")
+                    .map_err(|_| AgentRuntimePortError::Protocol)?,
+            },
+            input_digest,
+            expires_at_ms,
+        };
+        self.pending_brokered = Some(PendingBrokeredRequest {
+            private_request_id,
+            request_id,
+            operation: operation.clone(),
+            acknowledged: false,
+        });
+        Ok(Some(
+            self.event(AgentRuntimeEvent::BrokeredExecutionRequested {
+                turn_id,
+                tool_use_id: Some(tool_use_id),
+                summary: ToolSummary {
+                    name: BoundedName::new(WORKSPACE_CHECKPOINT_CREATE_TOOL)
+                        .map_err(|_| AgentRuntimePortError::Protocol)?,
+                    summary: BoundedText::new("Create a governed workspace checkpoint")
+                        .map_err(|_| AgentRuntimePortError::Protocol)?,
+                },
+                request,
+                operation,
+            }),
+        ))
+    }
+
+    fn hosts_checkpoint(&self) -> bool {
+        self.config.brokered_context.as_ref().is_some_and(|context| {
+            context.capability_profile == GatewayCapabilityProfile::workspace_checkpoint_v1()
+        })
+    }
 }

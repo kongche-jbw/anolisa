@@ -252,7 +252,17 @@ impl<'a> DurableApprovalCoordinator<'a> {
             .min(request.expires_at_ms)
             .min(resolved.expires_at_ms);
         if valid_until_ms <= resolution.permit_command.committed_at_ms {
-            return Err(DurableApprovalError::PolicyAuthorityExpired);
+            match self.store.load_permit_record(&resolution.permit_id) {
+                // A previously issued permit may be replayed after its
+                // issuance deadline. The ledger receipt still verifies the
+                // exact command, and execution remains bound to its durable
+                // single-use state.
+                Ok(_) => {}
+                Err(StoreError::LedgerNotFound { .. }) => {
+                    return Err(DurableApprovalError::PolicyAuthorityExpired);
+                }
+                Err(error) => return Err(error.into()),
+            }
         }
         let permit = ExecutionPermit {
             permit_id: resolution.permit_id,

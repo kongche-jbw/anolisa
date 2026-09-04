@@ -1,14 +1,14 @@
-//! Production scheduler attachment for the task-only Gateway runtime.
+//! Production scheduler attachment for sealed Gateway capability profiles.
 
 use super::*;
 
 impl GatewayDaemon {
     /// Enables scheduling with an explicitly injected generic brokered driver.
     ///
-    /// Production callers may use this boundary for a fail-closed task-only
-    /// driver. The attachment itself does not construct or select a concrete
-    /// execution target; checkpoint providers are intentionally absent from
-    /// this crate's production wiring.
+    /// The production entrypoint reaches this boundary only after its concrete
+    /// provider has passed profile, target, socket, workspace, peer, and audit
+    /// admission. Supplying a driver here is the explicit authority wiring;
+    /// merely selecting a capability profile does not construct a target.
     ///
     /// # Errors
     ///
@@ -57,6 +57,11 @@ impl GatewayDaemon {
         worker_id: BoundedOpaque,
         factory: Box<dyn RuntimeFactory>,
     ) -> Result<(), GatewayDaemonError> {
+        if self.capability_profile != GatewayCapabilityProfile::task_only_v1() {
+            return Err(GatewayDaemonError::Protocol(
+                "provider capability profiles require an explicit brokered driver".to_owned(),
+            ));
+        }
         if self.scheduler.is_some() {
             return Err(GatewayDaemonError::Protocol(
                 "Gateway scheduler is already attached".to_owned(),

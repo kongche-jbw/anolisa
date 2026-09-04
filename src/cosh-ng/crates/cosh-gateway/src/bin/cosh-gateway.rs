@@ -36,7 +36,7 @@ use cosh_gateway_contracts::{
     ids::{
         ApprovalId, InputRequestId, InstallationId, RequestId, RunId, RuntimeInstanceId, TaskId,
     },
-    profile::GatewayCapabilityProfile,
+    profile::{GatewayCapabilityProfile, GatewayCapabilityProfileId},
     runtime::{RuntimeInputResponse, RuntimeInputSelections},
 };
 use serde_json::{json, Value};
@@ -44,6 +44,8 @@ use thiserror::Error;
 
 #[path = "cosh_gateway/acp_command.rs"]
 mod acp_command;
+#[path = "cosh_gateway/checkpoint.rs"]
+mod checkpoint;
 #[path = "cosh_gateway/control.rs"]
 mod control;
 #[path = "cosh_gateway/input.rs"]
@@ -54,8 +56,6 @@ mod serve;
 #[cfg(test)]
 use acp_command::with_observation_sequence;
 use acp_command::{doctor, install_interrupt_handler, run};
-#[cfg(test)]
-use control::task_only_target;
 use control::{admin, task};
 use input::{read_intent, read_prompt, terminal_safe};
 use serve::{serve, ServeArgs};
@@ -134,6 +134,8 @@ struct TaskArgs {
 
 #[derive(Debug, Clone, Subcommand)]
 enum TaskCommand {
+    /// Read the daemon's exact profile, target, workspace, and Runtime admission.
+    Admission,
     /// Create one durable Task from stdin or a regular file.
     Submit(TaskSubmitArgs),
     /// Read the current durable Task projection.

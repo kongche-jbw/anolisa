@@ -7,6 +7,9 @@ use std::time::{Duration, Instant};
 use futures::StreamExt;
 use tokio::io::AsyncBufReadExt;
 
+use cosh_core::aw_effective::{
+    EffectiveBytesBoundary, EffectiveBytesOutcome, EffectiveBytesRequest,
+};
 use cosh_platform::audit::LoadedPolicy;
 use cosh_types::audit::{AuditOutcomeStatus, AuditProviderData, AuditToolData, Outcome};
 
@@ -27,7 +30,10 @@ use crate::hook::{
 use crate::loop_detect::LoopDetector;
 use crate::metrics::TurnMetrics;
 use crate::protocol::{
-    ClientControlCapabilities, InputMessage, OutputMessage, ShellContext, ShellControlRequest,
+    ClientControlCapabilities, ControlResponseBody, HostExecutedCheckpointCreateOutcome,
+    HostExecutedCheckpointCreateResult, HostExecutedCheckpointError,
+    HostExecutedCheckpointErrorOutcome, InputMessage, OutputMessage, ShellContext,
+    ShellControlRequest,
 };
 use crate::provider::{
     ContentGenerator, GenerateConfig, GenerateEvent, Message, MAX_TOOL_CALL_INDEX,
@@ -63,6 +69,16 @@ pub(crate) enum AgentTurnOutcome {
     MaxTurns { limit: u32 },
 }
 
+/// Startup state of the system-owned effective-bytes policy boundary.
+enum EffectiveBytesBoundaryState {
+    /// The system configuration explicitly disabled the boundary.
+    Disabled,
+    /// A validated boundary is ready to settle every Tool Result.
+    Ready(Arc<dyn EffectiveBytesBoundary>),
+    /// The system enabled the boundary, but its trusted configuration was invalid.
+    Invalid,
+}
+
 pub struct CoshCore {
     pub config: CoreConfig,
     pub provider: Box<dyn ContentGenerator>,
@@ -84,6 +100,9 @@ pub struct CoshCore {
     pub extension_context: Option<String>,
     pub extra_params: Option<serde_json::Value>,
     pub hook_system: HookSystem,
+    /// System-owned boundary that sees the final provisional bytes after
+    /// ordinary hooks have operated on redacted copies.
+    effective_bytes_boundary: EffectiveBytesBoundaryState,
     pub metrics: TurnMetrics,
     pub(crate) audit: CoreAuditRecorder,
     pub extension_generation: GenerationController,
@@ -256,6 +275,68 @@ impl CoshCore {
         }
     }
 
+    /// Offers the settled post-hook bytes to the trusted AW boundary.
+    ///
+    /// Only an explicitly disabled boundary bypasses AW. Once the system
+    /// enables it, configuration, initialization, execution, validation, and
+    /// required plan-Ledger failures are returned so the caller can withhold
+    /// content and end the turn.
+    async fn prepare_effective_tool_result(
+        &self,
+        tool_name: &str,
+        scope: &crate::execution_scope::ExecutionScopeCorrelation,
+        mut result: ToolResult,
+    ) -> Result<
+        (ToolResult, Option<EffectiveBytesOutcome>),
+        (ToolResult, cosh_core::aw_effective::EffectiveBytesError),
+    > {
+        let boundary = match &self.effective_bytes_boundary {
+            EffectiveBytesBoundaryState::Disabled => return Ok((result, None)),
+            EffectiveBytesBoundaryState::Ready(boundary) => Arc::clone(boundary),
+            EffectiveBytesBoundaryState::Invalid => {
+                return Err((
+                    result,
+                    cosh_core::aw_effective::EffectiveBytesError::BoundaryUnavailable,
+                ));
+            }
+        };
+        let media_type = if serde_json::from_str::<serde_json::Value>(&result.output).is_ok() {
+            "application/json"
+        } else {
+            "text/plain"
+        };
+        let request = match aw_contracts::common::BoundedName::new(media_type) {
+            Ok(media_type) => EffectiveBytesRequest {
+                content: result.output.clone(),
+                media_type,
+                origin: effective_bytes_origin(tool_name),
+                tool_name: aw_contracts::common::BoundedName::new(tool_name).ok(),
+                environment_id: scope.environment_id.clone(),
+                execution_context_id: scope.execution_context_id.clone(),
+                actor_id: scope.actor_id.clone(),
+                agent_session_id: scope.agent_session_id.clone(),
+                turn_id: scope.turn_id.clone(),
+                tool_use_id: scope.tool_use_id.clone(),
+            },
+            Err(error) => {
+                tracing::warn!(error = %error, "COSH could not represent the AW media type");
+                return Ok((result, None));
+            }
+        };
+
+        let outcome = match boundary.prepare(request).await {
+            Ok(outcome) => outcome,
+            Err(error) => return Err((result, error)),
+        };
+        if let Err(error) = outcome.validate_for_source(&result.output) {
+            return Err((result, error));
+        }
+        if let Some(candidate) = outcome.selected_candidate() {
+            result.output.clone_from(&candidate.content);
+        }
+        Ok((result, Some(outcome)))
+    }
+
     fn next_request_id(&self) -> String {
         let n = self.request_counter.fetch_add(1, Ordering::SeqCst);
         format!("req-{n}")
@@ -299,7 +380,14 @@ impl CoshCore {
         };
 
         if self.execution_profile.is_brokered() {
-            return Outcome::Deny;
+            return if tool_name == "workspace_checkpoint_create"
+                && tool.kind() == ToolKind::HostedSideEffect
+                && params.as_object().is_some_and(serde_json::Map::is_empty)
+            {
+                Outcome::RequireApproval
+            } else {
+                Outcome::Deny
+            };
         }
 
         let mode = self.config.agent.approval_mode;
@@ -467,7 +555,9 @@ impl CoshCore {
                 ));
             }
 
-            let approval = self.wait_for_approval(&request_id, None, reader).await;
+            let approval = self
+                .wait_for_approval(&request_id, None, None, reader)
+                .await;
             let (approval_status, approval_decision) = approval_audit_outcome(&approval);
             self.audit.record_approval_resolved(
                 approval_scope,
@@ -507,7 +597,9 @@ impl CoshCore {
                         "prompt approval timed out before reaching a decision surface (request_id={request_id}); nothing was executed and the turn ends here so a late decision cannot split state"
                     ));
                 }
-                ApprovalResult::Interrupted | ApprovalResult::HostExecutedShell { .. } => {
+                ApprovalResult::Interrupted
+                | ApprovalResult::HostExecutedShell { .. }
+                | ApprovalResult::HostExecutedCheckpoint { .. } => {
                     return Ok(AgentTurnOutcome::Completed);
                 }
             }
@@ -1418,13 +1510,21 @@ impl CoshCore {
                             // ─── SLS: approval wait timing ───
                             let approval_start = Instant::now();
                             let approval_result = self
-                                .wait_for_approval(&request_id, accepted_tool_kind, reader)
+                                .wait_for_approval(
+                                    &request_id,
+                                    Some(tc.name.as_str()),
+                                    accepted_tool_kind,
+                                    reader,
+                                )
                                 .await;
                             let approval_wait_ms = approval_start.elapsed().as_millis() as u64;
                             let (approval_status, approval_decision) =
                                 approval_audit_outcome(&approval_result);
-                            if !matches!(&approval_result, ApprovalResult::HostExecutedShell { .. })
-                            {
+                            if !matches!(
+                                &approval_result,
+                                ApprovalResult::HostExecutedShell { .. }
+                                    | ApprovalResult::HostExecutedCheckpoint { .. }
+                            ) {
                                 self.audit.record_approval_resolved(
                                     approval_scope,
                                     &tc.name,
@@ -1468,6 +1568,10 @@ impl CoshCore {
                                         output: llm_content,
                                         is_error,
                                     }
+                                }
+                                ApprovalResult::HostExecutedCheckpoint { result } => {
+                                    self.metrics.approval_allow += 1;
+                                    result
                                 }
                                 ApprovalResult::Denied(reason) => {
                                     self.metrics.approval_deny += 1;
@@ -1671,12 +1775,20 @@ impl CoshCore {
                         } else {
                             let approval_start = Instant::now();
                             let approval_result = self
-                                .wait_for_approval(&request_id, Some(ToolKind::ShellExec), reader)
+                                .wait_for_approval(
+                                    &request_id,
+                                    Some(tc.name.as_str()),
+                                    Some(ToolKind::ShellExec),
+                                    reader,
+                                )
                                 .await;
                             let (approval_status, approval_decision) =
                                 approval_audit_outcome(&approval_result);
-                            if !matches!(&approval_result, ApprovalResult::HostExecutedShell { .. })
-                            {
+                            if !matches!(
+                                &approval_result,
+                                ApprovalResult::HostExecutedShell { .. }
+                                    | ApprovalResult::HostExecutedCheckpoint { .. }
+                            ) {
                                 self.audit.record_approval_resolved(
                                     approval_scope,
                                     &tc.name,
@@ -1714,6 +1826,9 @@ impl CoshCore {
                                         is_error,
                                     };
                                 }
+                                ApprovalResult::HostExecutedCheckpoint { .. } => {
+                                    // Sandbox bypass can only resolve a legacy shell tool.
+                                }
                                 // #1940: same fail-closed contract as the
                                 // policy approval above — a timed-out bypass
                                 // approval ends the turn; the original sandbox
@@ -1727,6 +1842,187 @@ impl CoshCore {
                     }
                 }
 
+                // AW sees only the settled provisional bytes: PostToolUse
+                // aggregation and any PostToolUseFailure retry are complete.
+                let (result, effective_bytes_outcome) = match self
+                    .prepare_effective_tool_result(&tc.name, &execution_scope, result)
+                    .await
+                {
+                    Ok(prepared) => prepared,
+                    Err((_provisional, error)) => {
+                        let audit_reason = if error.is_required_ledger_failure() {
+                            AW_LEDGER_FAILURE_AUDIT_REASON
+                        } else {
+                            AW_BOUNDARY_FAILURE_AUDIT_REASON
+                        };
+                        tracing::error!(
+                            tool_name = %tc.name,
+                            error = %error,
+                            "enabled AW effective-bytes boundary failed; withholding tool-result bytes"
+                        );
+                        let withheld = ToolResult::error(AW_WITHHELD_RESULT);
+                        self.audit.record_tool_terminal(
+                            tool_scope,
+                            &tc.name,
+                            &tool_data,
+                            withheld.is_error,
+                            tool_start.elapsed().as_millis() as u64,
+                            withheld.output.len() as u64,
+                        );
+                        self.messages.push(Message::tool_result(
+                            &tc.id,
+                            &withheld.output,
+                            withheld.is_error,
+                        ));
+                        if fatal_turn.is_none() {
+                            fatal_turn = Some(FatalTurn::new(
+                                "enabled AW effective-bytes policy could not settle; tool-result bytes were withheld from model history".to_owned(),
+                                audit_reason,
+                            ));
+                        }
+                        continue;
+                    }
+                };
+                if let Some(outcome) = effective_bytes_outcome.as_ref() {
+                    tracing::debug!(
+                        source_artifact_id = %outcome.source_artifact_id,
+                        source_digest = %outcome.source_digest.as_str(),
+                        candidate_digest = outcome
+                            .candidate_digest
+                            .as_ref()
+                            .map(aw_contracts::common::Digest::as_str),
+                        effective_digest = %outcome.effective_digest.as_str(),
+                        selection = ?outcome.selection,
+                        receipt_count = outcome.receipts.len(),
+                        "AW effective bytes settled"
+                    );
+                    if matches!(
+                        &outcome.ledger,
+                        cosh_core::aw_effective::EffectiveBytesLedgerState::Degraded
+                    ) {
+                        tracing::warn!(
+                            tool_name = %tc.name,
+                            "AW plan Ledger is degraded; history proceeds without an adoption claim"
+                        );
+                    }
+                }
+
+                let history_index = self.messages.len();
+                self.messages.push(Message::tool_result(
+                    &tc.id,
+                    &result.output,
+                    result.is_error,
+                ));
+
+                // Adoption means only that the exact bytes now occupy the
+                // local COSH history slot. The record is written after the
+                // push, and makes no claim about remote-model delivery.
+                let mut required_adoption_failure = None;
+                if let Some(outcome) = effective_bytes_outcome.as_ref() {
+                    let committed = self.messages[history_index].content.as_text();
+                    let assurance = match &outcome.ledger {
+                        cosh_core::aw_effective::EffectiveBytesLedgerState::Ready {
+                            assurance,
+                            ..
+                        } => Some(*assurance),
+                        _ => None,
+                    };
+                    match outcome.adoption_body_for_history(&committed) {
+                        Ok(Some((body, assurance))) => {
+                            let record_result = match &self.effective_bytes_boundary {
+                                EffectiveBytesBoundaryState::Ready(boundary) => {
+                                    let boundary = Arc::clone(boundary);
+                                    boundary
+                                        .record_adoption(
+                                            body,
+                                            aw_contracts::ledger::LedgerTraceScope {
+                                                attempt_id: None,
+                                                tool_use_id: Some(
+                                                    execution_scope.tool_use_id.clone(),
+                                                ),
+                                                invocation_id: None,
+                                            },
+                                        )
+                                        .await
+                                }
+                                EffectiveBytesBoundaryState::Disabled
+                                | EffectiveBytesBoundaryState::Invalid => Err(
+                                    cosh_core::aw_effective::EffectiveBytesError::LedgerNotConfigured,
+                                ),
+                            };
+                            match record_result {
+                                Ok(event_id) => tracing::debug!(
+                                    tool_name = %tc.name,
+                                    adoption_event_id = %event_id,
+                                    "AW history adoption recorded"
+                                ),
+                                Err(error)
+                                    if assurance
+                                        == cosh_core::aw_effective::EffectiveBytesLedgerAssurance::Required =>
+                                {
+                                    required_adoption_failure = Some(error.to_string());
+                                }
+                                Err(error) => tracing::warn!(
+                                    tool_name = %tc.name,
+                                    error = %error,
+                                    "AW adoption Ledger append degraded; committed history is retained"
+                                ),
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(error)
+                            if assurance
+                                == Some(
+                                    cosh_core::aw_effective::EffectiveBytesLedgerAssurance::Required,
+                                ) =>
+                        {
+                            required_adoption_failure = Some(error.to_string());
+                        }
+                        Err(error) => tracing::warn!(
+                            tool_name = %tc.name,
+                            error = %error,
+                            "AW adoption evidence did not match committed history"
+                        ),
+                    }
+                }
+
+                if let Some(error) = required_adoption_failure {
+                    let committed = self.messages.pop();
+                    debug_assert!(
+                        committed.as_ref().is_some_and(|message| {
+                            message.role == "tool"
+                                && message.tool_call_id.as_deref() == Some(tc.id.as_str())
+                        }),
+                        "the just-committed AW Tool Result must be the history tail"
+                    );
+                    let withheld = ToolResult::error(AW_WITHHELD_RESULT);
+                    self.messages.push(Message::tool_result(
+                        &tc.id,
+                        &withheld.output,
+                        withheld.is_error,
+                    ));
+                    self.audit.record_tool_terminal(
+                        tool_scope,
+                        &tc.name,
+                        &tool_data,
+                        withheld.is_error,
+                        tool_start.elapsed().as_millis() as u64,
+                        withheld.output.len() as u64,
+                    );
+                    tracing::error!(
+                        tool_name = %tc.name,
+                        error,
+                        "required AW adoption evidence failed; committed bytes rolled back"
+                    );
+                    if fatal_turn.is_none() {
+                        fatal_turn = Some(FatalTurn::new(
+                            "required AW adoption evidence could not be persisted; committed tool-result bytes were rolled back".to_owned(),
+                            AW_LEDGER_FAILURE_AUDIT_REASON,
+                        ));
+                    }
+                    continue;
+                }
+
                 self.audit.record_tool_terminal(
                     tool_scope,
                     &tc.name,
@@ -1735,11 +2031,6 @@ impl CoshCore {
                     tool_start.elapsed().as_millis() as u64,
                     result.output.len() as u64,
                 );
-                self.messages.push(Message::tool_result(
-                    &tc.id,
-                    &result.output,
-                    result.is_error,
-                ));
 
                 if self.loop_detector.record_action(&tc.name, &tc.arguments) {
                     self.messages
@@ -2089,6 +2380,7 @@ impl CoshCore {
     async fn wait_for_approval<R: AsyncBufReadExt + Unpin>(
         &self,
         expected_request_id: &str,
+        accepted_tool_name: Option<&str>,
         accepted_tool_kind: Option<ToolKind>,
         reader: &mut tokio::io::Lines<R>,
     ) -> ApprovalResult {
@@ -2182,6 +2474,93 @@ impl CoshCore {
                                 exit_code,
                             };
                         }
+                        Some("host_executed_checkpoint_create") => {
+                            if self
+                                .tools
+                                .get("workspace_checkpoint_create")
+                                .map(|tool| tool.kind())
+                                != Some(ToolKind::HostedSideEffect)
+                            {
+                                return ApprovalResult::Denied(Some(
+                                    "unknown response".to_string(),
+                                ));
+                            }
+                            if response.subtype != "success"
+                                || accepted_tool_name != Some("workspace_checkpoint_create")
+                                || accepted_tool_kind != Some(ToolKind::HostedSideEffect)
+                                || response_has_unrelated_checkpoint_fields(
+                                    &response.response,
+                                    false,
+                                )
+                            {
+                                return ApprovalResult::Denied(Some(
+                                    "typed checkpoint result is not valid for this request"
+                                        .to_string(),
+                                ));
+                            }
+                            let Some(result) = response.response.checkpoint_result else {
+                                return ApprovalResult::Denied(Some(
+                                    "typed checkpoint response missing checkpointResult"
+                                        .to_string(),
+                                ));
+                            };
+                            let result = match serde_json::from_value(result) {
+                                Ok(result) => result,
+                                Err(_) => {
+                                    return ApprovalResult::Denied(Some(
+                                        "typed checkpoint response has an invalid checkpointResult"
+                                            .to_string(),
+                                    ));
+                                }
+                            };
+                            return match hosted_checkpoint_result(result) {
+                                Ok(result) => ApprovalResult::HostExecutedCheckpoint { result },
+                                Err(reason) => ApprovalResult::Denied(Some(reason)),
+                            };
+                        }
+                        Some("host_executed_checkpoint_error") => {
+                            if self
+                                .tools
+                                .get("workspace_checkpoint_create")
+                                .map(|tool| tool.kind())
+                                != Some(ToolKind::HostedSideEffect)
+                            {
+                                return ApprovalResult::Denied(Some(
+                                    "unknown response".to_string(),
+                                ));
+                            }
+                            if response.subtype != "success"
+                                || accepted_tool_name != Some("workspace_checkpoint_create")
+                                || accepted_tool_kind != Some(ToolKind::HostedSideEffect)
+                                || response_has_unrelated_checkpoint_fields(
+                                    &response.response,
+                                    true,
+                                )
+                            {
+                                return ApprovalResult::Denied(Some(
+                                    "typed checkpoint error is not valid for this request"
+                                        .to_string(),
+                                ));
+                            }
+                            let Some(error) = response.response.checkpoint_error else {
+                                return ApprovalResult::Denied(Some(
+                                    "typed checkpoint response missing checkpointError".to_string(),
+                                ));
+                            };
+                            let error = match serde_json::from_value(error) {
+                                Ok(error) => error,
+                                Err(_) => {
+                                    return ApprovalResult::Denied(Some(
+                                        "typed checkpoint response has an invalid checkpointError"
+                                            .to_string(),
+                                    ));
+                                }
+                            };
+                            return match hosted_checkpoint_error(error) {
+                                Ok(result) => ApprovalResult::HostExecutedCheckpoint { result },
+                                Err(reason) => ApprovalResult::Denied(Some(reason)),
+                            };
+                        }
                         _ => return ApprovalResult::Denied(Some("unknown response".to_string())),
                     }
                 }
@@ -2197,6 +2576,18 @@ impl CoshCore {
     }
 }
 
+fn effective_bytes_origin(tool_name: &str) -> aw_contracts::context::ContextArtifactOrigin {
+    match tool_name {
+        "shell" | "run_shell_command" | "Bash" | "terminal" | "exec" | "process" => {
+            aw_contracts::context::ContextArtifactOrigin::CommandOutput
+        }
+        "read_file" | "Read" | "grep" | "grep_search" | "list_directory" => {
+            aw_contracts::context::ContextArtifactOrigin::FileContent
+        }
+        _ => aw_contracts::context::ContextArtifactOrigin::ApiResponse,
+    }
+}
+
 pub(crate) fn max_turns_error(max_turns: u32) -> String {
     format!("Agent exceeded max turns ({max_turns})")
 }
@@ -2207,6 +2598,17 @@ const CONTROL_TRANSPORT_AUDIT_REASON: &str = "control_transport_failed";
 /// Audit reason code for a turn ended by an approval that never reached a
 /// decision surface before the residual deadline (#1940).
 const APPROVAL_TIMEOUT_AUDIT_REASON: &str = "approval_timeout";
+
+/// Audit reason for withholding a history result whose required evidence did
+/// not settle.
+const AW_LEDGER_FAILURE_AUDIT_REASON: &str = "aw_ledger_required_write_failed";
+
+/// Audit reason for an enabled AW policy boundary that could not settle.
+const AW_BOUNDARY_FAILURE_AUDIT_REASON: &str = "aw_effective_bytes_boundary_failed";
+
+/// Fixed, content-free history value used whenever enabled AW cannot settle.
+const AW_WITHHELD_RESULT: &str =
+    "Tool result withheld because the required AW effective-bytes policy could not settle.";
 
 /// One fatal turn outcome held until every declared tool call is closed.
 struct FatalTurn {
@@ -2296,12 +2698,94 @@ fn control_transport_turn_error(
     }
 }
 
+fn response_has_unrelated_checkpoint_fields(
+    response: &ControlResponseBody,
+    expects_error: bool,
+) -> bool {
+    response.result.is_some()
+        || !response.unknown_fields.is_empty()
+        || response.tool_use_id.is_some()
+        || response.updated_permissions.is_some()
+        || response.answer.is_some()
+        || response.selected_options.is_some()
+        || response.provider_id.is_some()
+        || response.provider_type.is_some()
+        || response.values.is_some()
+        || response.persist.is_some()
+        || response.message.is_some()
+        || if expects_error {
+            response.checkpoint_result.is_some()
+        } else {
+            response.checkpoint_error.is_some()
+        }
+}
+
+fn hosted_checkpoint_result(
+    result: HostExecutedCheckpointCreateResult,
+) -> Result<ToolResult, String> {
+    validate_checkpoint_id(&result.checkpoint_id)?;
+    match result.outcome {
+        HostExecutedCheckpointCreateOutcome::Created { snapshot_id } => {
+            validate_bounded_gateway_text(&snapshot_id, 1_024, "snapshot_id")?;
+            Ok(ToolResult::success(format!(
+                "Created checkpoint {} as snapshot {}.",
+                result.checkpoint_id, snapshot_id
+            )))
+        }
+        HostExecutedCheckpointCreateOutcome::Skipped { reason } => {
+            validate_bounded_gateway_text(&reason, 4_096, "checkpoint skip reason")?;
+            Ok(ToolResult::success(format!(
+                "Checkpoint {} was safely skipped: {}",
+                result.checkpoint_id, reason
+            )))
+        }
+    }
+}
+
+fn hosted_checkpoint_error(error: HostExecutedCheckpointError) -> Result<ToolResult, String> {
+    validate_bounded_gateway_text(&error.code, 128, "checkpoint error code")?;
+    validate_bounded_gateway_text(&error.message, 4_096, "checkpoint error message")?;
+    match error.outcome {
+        HostExecutedCheckpointErrorOutcome::Failed => Ok(ToolResult::error(format!(
+            "Checkpoint execution failed [{}]: {}",
+            error.code, error.message
+        ))),
+        HostExecutedCheckpointErrorOutcome::Uncertain => Ok(ToolResult::error(format!(
+            "Checkpoint execution is uncertain [{}]: {} Do not retry without Gateway reconciliation.",
+            error.code, error.message
+        ))),
+    }
+}
+
+fn validate_checkpoint_id(value: &str) -> Result<(), String> {
+    let body = value
+        .strip_prefix("ckp_")
+        .ok_or_else(|| "typed checkpoint result has an invalid checkpoint_id".to_string())?;
+    let id = uuid::Uuid::parse_str(body)
+        .map_err(|_| "typed checkpoint result has an invalid checkpoint_id".to_string())?;
+    if id.hyphenated().to_string() != body {
+        return Err("typed checkpoint result has an invalid checkpoint_id".to_string());
+    }
+    Ok(())
+}
+
+fn validate_bounded_gateway_text(value: &str, max_bytes: usize, field: &str) -> Result<(), String> {
+    if value.is_empty() || value.len() > max_bytes || value.contains('\0') {
+        Err(format!("typed checkpoint result has an invalid {field}"))
+    } else {
+        Ok(())
+    }
+}
+
 enum ApprovalResult {
     Allowed,
     Denied(Option<String>),
     HostExecutedShell {
         llm_content: String,
         exit_code: Option<i32>,
+    },
+    HostExecutedCheckpoint {
+        result: ToolResult,
     },
     Interrupted,
     /// #1940 residual guard: the wait exceeded the last-resort deadline,
@@ -2385,9 +2869,9 @@ fn hook_outcome(decision: &HookDecision) -> AuditOutcomeStatus {
 
 fn approval_audit_outcome(approval: &ApprovalResult) -> (AuditOutcomeStatus, &'static str) {
     match approval {
-        ApprovalResult::Allowed | ApprovalResult::HostExecutedShell { .. } => {
-            (AuditOutcomeStatus::Allowed, "allow")
-        }
+        ApprovalResult::Allowed
+        | ApprovalResult::HostExecutedShell { .. }
+        | ApprovalResult::HostExecutedCheckpoint { .. } => (AuditOutcomeStatus::Allowed, "allow"),
         ApprovalResult::Denied(_) => (AuditOutcomeStatus::Denied, "deny"),
         ApprovalResult::TimedOut => (AuditOutcomeStatus::Denied, "timeout"),
         ApprovalResult::Interrupted => (AuditOutcomeStatus::Cancelled, "interrupted"),

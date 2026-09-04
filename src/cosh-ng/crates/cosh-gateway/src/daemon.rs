@@ -51,8 +51,12 @@ use crate::task::TaskAggregate;
 
 use handler::{TaskAdmission, TaskCommandPort, TaskProjectionPort};
 
-/// Local Gateway API version, independent from ACP wire versions.
-pub const GATEWAY_API_VERSION: &str = "cosh.gateway.v1";
+/// Frozen legacy Gateway API retained for compatible Task submission.
+pub const GATEWAY_API_VERSION_V1: &str = "cosh.gateway.v1";
+/// Gateway API with explicit admission discovery and mandatory submit echo.
+pub const GATEWAY_API_VERSION_V2: &str = "cosh.gateway.v2";
+/// Current local Gateway API version, independent from ACP wire versions.
+pub const GATEWAY_API_VERSION: &str = GATEWAY_API_VERSION_V2;
 /// Maximum bytes in one length-prefixed request or response.
 pub const MAX_GATEWAY_FRAME_BYTES: usize = 1024 * 1024;
 // A same-UID client may occupy the serial handler for at most one scheduler

@@ -117,7 +117,12 @@ impl ResolvedWorkspace {
         self.directory.identity()
     }
 
-    pub(crate) fn pinned_directory(&self) -> &PinnedDirectory {
+    /// Returns the descriptor-pinned directory shared with trusted adapters.
+    ///
+    /// Callers receive no path-derived authority: the returned handle remains
+    /// bound to the exact inode selected during workspace admission.
+    #[must_use]
+    pub fn pinned_directory(&self) -> &PinnedDirectory {
         &self.directory
     }
 

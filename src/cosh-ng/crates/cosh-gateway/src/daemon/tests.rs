@@ -43,6 +43,26 @@ fn submit(key: &str) -> SubmitTask {
     }
 }
 
+fn admission_for_profile(
+    installation_id: InstallationId,
+    profile: GatewayCapabilityProfile,
+) -> GatewayAdmission {
+    GatewayAdmission {
+        installation_id,
+        capability_profile: profile.identity(),
+        target: profile.governed_target(),
+        workspace: WorkspaceRef {
+            scope_digest: sha256_digest(b"cosh.gateway.test.workspace.v1"),
+            display_name: None,
+        },
+        runtime: brokered_core_runtime(),
+    }
+}
+
+fn admission(installation_id: InstallationId) -> GatewayAdmission {
+    admission_for_profile(installation_id, GatewayCapabilityProfile::task_only_v1())
+}
+
 fn private_directory(root: &TempDir, name: &str) -> PathBuf {
     let path = root.path().join(name);
     let mut builder = fs::DirBuilder::new();
@@ -203,8 +223,13 @@ fn request_rejects_unknown_fields() {
     assert!(serde_json::from_str::<GatewayRequest>(&payload).is_err());
 
     for request in [
+        GatewayRequest::Admission {
+            api_version: GATEWAY_API_VERSION_V1.to_owned(),
+            request_id: RequestId::new(),
+        },
         GatewayRequest::Submit {
             api_version: GATEWAY_API_VERSION.to_owned(),
+            admission: Some(Box::new(admission(InstallationId::new()))),
             request: submit("strict-submit"),
         },
         GatewayRequest::Cancel {
@@ -284,6 +309,111 @@ fn gateway_wire_v1_matches_frozen_golden_corpus() {
         .collect::<Result<_, _>>()
         .unwrap();
     assert_eq!(actual, expected);
+}
+
+#[test]
+fn gateway_wire_v2_matches_frozen_golden_corpus() {
+    let expected: Vec<serde_json::Value> =
+        serde_json::from_str(include_str!("../../tests/fixtures/gateway-wire-v2.json")).unwrap();
+    let requests: Vec<GatewayRequest> = expected
+        .iter()
+        .cloned()
+        .map(serde_json::from_value)
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let commands: Vec<&str> = expected
+        .iter()
+        .map(|value| value["command"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        commands,
+        [
+            "ping",
+            "admission",
+            "submit",
+            "get",
+            "events",
+            "cancel",
+            "resolve_approval",
+            "retry",
+            "append_input",
+        ]
+    );
+
+    let actual: Vec<serde_json::Value> = requests
+        .iter()
+        .map(serde_json::to_value)
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn submit_versions_reject_crossed_admission_shapes() {
+    let admitted = admission(InstallationId::new());
+
+    for request in [
+        GatewayRequest::Submit {
+            api_version: GATEWAY_API_VERSION_V1.to_owned(),
+            admission: Some(Box::new(admitted.clone())),
+            request: submit("v1-with-v2-echo"),
+        },
+        GatewayRequest::Submit {
+            api_version: GATEWAY_API_VERSION_V2.to_owned(),
+            admission: None,
+            request: submit("v2-without-echo"),
+        },
+    ] {
+        assert!(matches!(
+            handler::validate_request_version_shape(&request),
+            Err(GatewayDaemonError::Protocol(_))
+        ));
+    }
+    let legacy: GatewayRequest = serde_json::from_value(
+        serde_json::from_str::<Vec<serde_json::Value>>(include_str!(
+            "../../tests/fixtures/gateway-wire-v1.json"
+        ))
+        .unwrap()[1]
+            .clone(),
+    )
+    .unwrap();
+    assert!(handler::validate_request_version_shape(&legacy).is_ok());
+}
+
+#[test]
+fn legacy_submit_is_admitted_only_by_task_only_v1() {
+    let task_only = admission_for_profile(
+        InstallationId::new(),
+        GatewayCapabilityProfile::task_only_v1(),
+    );
+    let request = submit("legacy-task-only");
+    assert!(handler::validate_legacy_submission(&request, &task_only).is_ok());
+
+    let checkpoint = admission_for_profile(
+        InstallationId::new(),
+        GatewayCapabilityProfile::workspace_checkpoint_v1(),
+    );
+    let mut checkpoint_request = submit("legacy-checkpoint");
+    checkpoint_request.target = checkpoint.target.clone();
+    checkpoint_request.runtime = checkpoint.runtime.clone();
+    assert!(matches!(
+        handler::validate_legacy_submission(&checkpoint_request, &checkpoint),
+        Err(GatewayDaemonError::Protocol(message))
+            if message.contains("task-only-v1")
+    ));
+}
+
+#[test]
+fn v2_submit_accepts_the_checkpoint_daemon_admission() {
+    let checkpoint = admission_for_profile(
+        InstallationId::new(),
+        GatewayCapabilityProfile::workspace_checkpoint_v1(),
+    );
+    let mut request = submit("v2-checkpoint");
+    request.target = checkpoint.target.clone();
+    request.runtime = checkpoint.runtime.clone();
+
+    assert!(handler::validate_submission_admission(&request, &checkpoint, &checkpoint).is_ok());
 }
 
 #[test]
@@ -955,11 +1085,14 @@ fn local_api_replays_submit_after_response_loss_and_rejects_digest_change() {
     let server = std::thread::spawn(move || daemon.serve_until(&server_shutdown));
 
     let mut request = submit("lost-submit-response");
+    let client = LocalGatewayClient::new(socket_path.clone());
+    let admission = client.admission(RequestId::new()).unwrap();
     let mut abandoned = UnixStream::connect(&socket_path).unwrap();
     write_frame(
         &mut abandoned,
         &GatewayRequest::Submit {
             api_version: GATEWAY_API_VERSION.to_owned(),
+            admission: Some(Box::new(admission)),
             request: request.clone(),
         },
     )
@@ -967,7 +1100,6 @@ fn local_api_replays_submit_after_response_loss_and_rejects_digest_change() {
     drop(abandoned);
 
     request.request_id = RequestId::new();
-    let client = LocalGatewayClient::new(socket_path.clone());
     let GatewayResult::Task(replayed) = client.submit(request.clone()).unwrap() else {
         panic!("retry after response loss must return the durable Task")
     };
@@ -1220,14 +1352,23 @@ fn daemon_admission_accepts_only_the_exact_brokered_core_selector() {
     let mut request = submit("brokered-core-admission");
     let admitted = brokered_core_runtime();
     request.runtime = admitted.clone();
+    let snapshot = admission(InstallationId::new());
 
     assert!(supported_daemon_runtime(&admitted));
-    assert!(handler::validate_submission_admission(&request, &request.target, &admitted).is_ok());
+    assert!(handler::validate_submission_admission(&request, &snapshot, &snapshot).is_ok());
 
     request.runtime = acp_runtime();
     assert!(!supported_daemon_runtime(&request.runtime));
     assert!(matches!(
-        handler::validate_submission_admission(&request, &request.target, &admitted),
+        handler::validate_submission_admission(&request, &snapshot, &snapshot),
+        Err(GatewayDaemonError::Protocol(_))
+    ));
+
+    request.runtime = admitted;
+    let mut stale = snapshot.clone();
+    stale.installation_id = InstallationId::new();
+    assert!(matches!(
+        handler::validate_submission_admission(&request, &stale, &snapshot),
         Err(GatewayDaemonError::Protocol(_))
     ));
 }
@@ -1281,6 +1422,28 @@ fn bind_accepts_the_exact_brokered_core_selector() {
     let daemon = GatewayDaemon::bind(daemon_config(socket_path.clone(), database_path.clone()))
         .expect("the exact brokered Core selector must be admitted");
 
+    assert!(socket_path.exists());
+    assert!(database_path.exists());
+    drop(daemon);
+    assert!(!socket_path.exists());
+}
+
+#[test]
+fn bind_accepts_the_closed_checkpoint_capability_profile() {
+    let root = private_tempdir();
+    let socket_dir = private_directory(&root, "runtime");
+    let socket_path = socket_dir.join("gateway.sock");
+    let database_path = root.path().join("gateway.db");
+    let mut config = daemon_config(socket_path.clone(), database_path.clone());
+    config.capability_profile = GatewayCapabilityProfile::workspace_checkpoint_v1();
+
+    let daemon = GatewayDaemon::bind(config)
+        .expect("the closed checkpoint profile must reach explicit provider attachment");
+
+    assert_eq!(
+        daemon.capability_profile,
+        GatewayCapabilityProfile::workspace_checkpoint_v1()
+    );
     assert!(socket_path.exists());
     assert!(database_path.exists());
     drop(daemon);

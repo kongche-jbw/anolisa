@@ -74,6 +74,7 @@ impl CoshCore {
 
         let mut hook_system = HookSystem::from_config(&config.hooks);
         hook_system.register_extension_hooks(&snapshot.hooks);
+        let effective_bytes_boundary = effective_bytes_boundary_from_config(&config);
         let extension_context = snapshot.context.rendered().map(str::to_string);
         let tools = Arc::clone(&snapshot.tools);
         let bound_extension_generation = snapshot.generation.id;
@@ -97,6 +98,7 @@ impl CoshCore {
             extension_context,
             extra_params: None,
             hook_system,
+            effective_bytes_boundary,
             metrics: TurnMetrics::default(),
             audit,
             extension_generation,
@@ -115,6 +117,21 @@ impl CoshCore {
         };
         core.apply_execution_profile_constraints();
         core
+    }
+
+    /// Replaces reloadable configuration and rebuilds the system-owned AW
+    /// boundary from that same trusted system snapshot.
+    pub(crate) fn replace_runtime_config(&mut self, config: CoreConfig) {
+        self.effective_bytes_boundary = effective_bytes_boundary_from_config(&config);
+        self.config = config;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_effective_bytes_boundary(
+        &mut self,
+        boundary: Arc<dyn cosh_core::aw_effective::EffectiveBytesBoundary>,
+    ) {
+        self.effective_bytes_boundary = EffectiveBytesBoundaryState::Ready(boundary);
     }
 
     /// Gracefully drains MCP processes retired by safe generation switches.
@@ -143,5 +160,16 @@ impl CoshCore {
         self.hook_system = HookSystem::from_config(&self.config.hooks);
         self.hook_system.register_extension_hooks(&snapshot.hooks);
         self.bound_extension_generation = snapshot.generation.id;
+    }
+}
+
+fn effective_bytes_boundary_from_config(config: &CoreConfig) -> EffectiveBytesBoundaryState {
+    match config.aw.effective_bytes.build_boundary() {
+        Ok(Some(boundary)) => EffectiveBytesBoundaryState::Ready(Arc::new(boundary)),
+        Ok(None) => EffectiveBytesBoundaryState::Disabled,
+        Err(error) => {
+            tracing::error!(error = %error, "AW effective-bytes system configuration is invalid; Tool Results will fail closed");
+            EffectiveBytesBoundaryState::Invalid
+        }
     }
 }

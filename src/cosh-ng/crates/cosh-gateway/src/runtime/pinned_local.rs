@@ -186,6 +186,39 @@ impl PinnedDirectory {
         self.identity
     }
 
+    /// Reads the ws-ckpt Btrfs generation token from this pinned directory.
+    ///
+    /// The readable descriptor is reopened through the retained `O_PATH`
+    /// descriptor, so no configured path is resolved a second time.
+    ///
+    /// # Errors
+    ///
+    /// Returns when the descriptor cannot be reopened, no longer denotes the
+    /// pinned inode, or is not a Btrfs subvolume root with a kernel identity.
+    #[cfg(target_os = "linux")]
+    pub fn btrfs_generation(&self) -> io::Result<[u8; 32]> {
+        let readable = OpenOptions::new()
+            .read(true)
+            .custom_flags(nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC)
+            .open(proc_descriptor_path(self.descriptor.as_raw_fd()))?;
+        if metadata_identity(&readable.metadata()?)? != self.identity {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "reopened workspace descriptor changed identity",
+            ));
+        }
+        super::btrfs_generation::from_directory(&readable)
+    }
+
+    /// Reports that Btrfs generation identity is unavailable off Linux.
+    #[cfg(not(target_os = "linux"))]
+    pub fn btrfs_generation(&self) -> io::Result<[u8; 32]> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Btrfs workspace generation requires Linux",
+        ))
+    }
+
     /// Returns the descriptor-backed directory used by the child before exec.
     pub(crate) fn descriptor_path(&self) -> PathBuf {
         proc_descriptor_path(self.descriptor.as_raw_fd())
@@ -194,6 +227,31 @@ impl PinnedDirectory {
     #[cfg(all(test, target_os = "linux"))]
     pub(crate) fn descriptor_weak(&self) -> std::sync::Weak<File> {
         Arc::downgrade(&self.descriptor)
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ordinary_directory_has_no_btrfs_generation() {
+        let root = tempfile::tempdir().unwrap();
+        let pinned = PinnedDirectory::pin(root.path()).unwrap();
+
+        assert!(pinned.btrfs_generation().is_err());
+    }
+
+    #[test]
+    fn real_btrfs_subvolume_generation_is_stable_when_available() {
+        let root = tempfile::tempdir().unwrap();
+        let pinned = PinnedDirectory::pin(root.path()).unwrap();
+        let Ok(first) = pinned.btrfs_generation() else {
+            eprintln!("skipped: test directory is not a Btrfs subvolume root");
+            return;
+        };
+
+        assert_eq!(pinned.btrfs_generation().unwrap(), first);
     }
 }
 

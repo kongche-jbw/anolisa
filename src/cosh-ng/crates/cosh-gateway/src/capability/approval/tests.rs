@@ -351,6 +351,99 @@ fn approval_creates_no_authority_until_explicit_allow() {
 }
 
 #[test]
+fn issued_permit_replays_after_expiry_with_the_same_execution_identity() {
+    let mut store = SqliteTaskStore::open_in_memory().unwrap();
+    let actor_id = ActorId::new();
+    let run_id = RunId::new();
+    let task_id = create_started_task(&mut store, &actor_id, &run_id);
+    let request = request(actor_id.clone(), task_id, run_id);
+    let approval = approval(&request);
+    let (operation, target_identity_digest, runtime_fence) =
+        brokered_binding(&mut store, &actor_id, &request);
+    let pending = DurableApprovalCoordinator::new(&mut store)
+        .record_pending(
+            &command(&actor_id, "expiry-replay-record", '1', 10),
+            &request,
+            &approval,
+            BrokeredApprovalBinding {
+                operation: &operation,
+                target_identity_digest: &target_identity_digest,
+                runtime_fence: &runtime_fence,
+                provider_binding: None,
+            },
+        )
+        .unwrap();
+    let permit_id = PermitId::new();
+    let execution_id = ExecutionId::new();
+    let first_resolution = command(&actor_id, "expiry-replay-resolution", '2', 20);
+    let first_permit = command(&actor_id, "expiry-replay-permit", '3', 20);
+    let first = DurableApprovalCoordinator::new(&mut store)
+        .resolve_once(
+            &request,
+            &approval,
+            DurableApprovalResolution {
+                resolution_command: &first_resolution,
+                permit_command: &first_permit,
+                expected_revision: pending.revision,
+                decision: ApprovalDecision::Approve,
+                policy_revision: 1,
+                policy_valid_until_ms: approval.expires_at_ms,
+                permit_id: permit_id.clone(),
+                execution_id: execution_id.clone(),
+            },
+        )
+        .unwrap();
+    let replay_at = approval.expires_at_ms + 1;
+    let replay_resolution = command(&actor_id, "expiry-replay-resolution", '2', replay_at);
+    let replay_permit = command(&actor_id, "expiry-replay-permit", '3', replay_at);
+    let replay = DurableApprovalCoordinator::new(&mut store)
+        .resolve_once(
+            &request,
+            &approval,
+            DurableApprovalResolution {
+                resolution_command: &replay_resolution,
+                permit_command: &replay_permit,
+                expected_revision: pending.revision,
+                decision: ApprovalDecision::Approve,
+                policy_revision: 1,
+                policy_valid_until_ms: approval.expires_at_ms,
+                permit_id: permit_id.clone(),
+                execution_id: execution_id.clone(),
+            },
+        )
+        .unwrap();
+    let DurableApprovalOutcome::Permit(first) = first else {
+        panic!("first approval must issue its permit")
+    };
+    let DurableApprovalOutcome::Permit(replay) = replay else {
+        panic!("re-entry must replay its durable permit")
+    };
+
+    assert_eq!(replay, first);
+    assert_eq!(replay.permit.permit_id, permit_id);
+    assert_eq!(replay.permit.execution_id, execution_id);
+
+    let new_permit = command(&actor_id, "expired-new-permit", '4', replay_at);
+    assert!(matches!(
+        DurableApprovalCoordinator::new(&mut store).resolve_once(
+            &request,
+            &approval,
+            DurableApprovalResolution {
+                resolution_command: &replay_resolution,
+                permit_command: &new_permit,
+                expected_revision: pending.revision,
+                decision: ApprovalDecision::Approve,
+                policy_revision: 1,
+                policy_valid_until_ms: approval.expires_at_ms,
+                permit_id: PermitId::new(),
+                execution_id: ExecutionId::new(),
+            },
+        ),
+        Err(DurableApprovalError::PolicyAuthorityExpired)
+    ));
+}
+
+#[test]
 fn denial_is_durable_and_never_issues_a_permit() {
     let mut store = SqliteTaskStore::open_in_memory().unwrap();
     let actor_id = ActorId::new();

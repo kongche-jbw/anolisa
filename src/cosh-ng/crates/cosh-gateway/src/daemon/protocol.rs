@@ -15,6 +15,27 @@ pub struct GatewayDaemonConfig {
     pub runtime: RuntimeSelector,
 }
 
+/// Exact trusted daemon admission snapshot echoed by a submitting client.
+///
+/// The daemon compares the complete snapshot again when handling `Submit`, so
+/// a restart or configuration change between discovery and mutation fails
+/// closed instead of rebinding the Task to a different installation or scope.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GatewayAdmission {
+    /// Durable installation owning the daemon database and socket.
+    pub installation_id: InstallationId,
+    /// Closed profile name and pinned manifest digest admitted by the daemon.
+    pub capability_profile:
+        cosh_gateway_contracts::profile::GatewayCapabilityProfileIdentity,
+    /// Target derived from the admitted profile.
+    pub target: TargetRef,
+    /// Canonical workspace projection bound by trusted daemon configuration.
+    pub workspace: WorkspaceRef,
+    /// Exact Runtime selector admitted by the daemon.
+    pub runtime: RuntimeSelector,
+}
+
 /// Validated fields used to create and queue one Task.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -142,6 +163,8 @@ pub struct TaskEventPage {
 pub enum GatewayResult {
     /// Daemon accepted an authenticated ping.
     Pong,
+    /// Exact admission snapshot for a subsequent fail-closed submission.
+    Admission(GatewayAdmission),
     /// Current authorized Task projection.
     Task(TaskView),
     /// Bounded immutable event page.
@@ -204,8 +227,14 @@ enum GatewayRequest {
         api_version: String,
         request_id: RequestId,
     },
+    Admission {
+        api_version: String,
+        request_id: RequestId,
+    },
     Submit {
         api_version: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        admission: Option<Box<GatewayAdmission>>,
         #[serde(flatten)]
         request: SubmitTask,
     },
@@ -247,6 +276,7 @@ impl GatewayRequest {
     fn request_id(&self) -> &RequestId {
         match self {
             Self::Ping { request_id, .. }
+            | Self::Admission { request_id, .. }
             | Self::Get { request_id, .. }
             | Self::Events { request_id, .. } => request_id,
             Self::Submit { request, .. } => &request.request_id,
@@ -260,6 +290,7 @@ impl GatewayRequest {
     fn api_version(&self) -> &str {
         match self {
             Self::Ping { api_version, .. }
+            | Self::Admission { api_version, .. }
             | Self::Submit { api_version, .. }
             | Self::Get { api_version, .. }
             | Self::Events { api_version, .. }

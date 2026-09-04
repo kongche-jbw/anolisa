@@ -10,6 +10,7 @@ pub struct MockProvider {
     call_index: std::sync::atomic::AtomicUsize,
     echo_history: bool,
     repeat_text: Option<String>,
+    checkpoint_roundtrip: bool,
 }
 
 impl MockProvider {
@@ -19,6 +20,7 @@ impl MockProvider {
             call_index: std::sync::atomic::AtomicUsize::new(0),
             echo_history: false,
             repeat_text: None,
+            checkpoint_roundtrip: false,
         }
     }
 
@@ -39,6 +41,7 @@ impl MockProvider {
             call_index: std::sync::atomic::AtomicUsize::new(0),
             echo_history: false,
             repeat_text: Some(text.to_string()),
+            checkpoint_roundtrip: false,
         }
     }
 
@@ -65,6 +68,18 @@ impl MockProvider {
             call_index: std::sync::atomic::AtomicUsize::new(0),
             echo_history: true,
             repeat_text: None,
+            checkpoint_roundtrip: false,
+        }
+    }
+
+    /// Emits one hosted checkpoint call, then echoes its settled tool result.
+    pub fn workspace_checkpoint_roundtrip() -> Self {
+        Self {
+            responses: Vec::new(),
+            call_index: std::sync::atomic::AtomicUsize::new(0),
+            echo_history: false,
+            repeat_text: None,
+            checkpoint_roundtrip: true,
         }
     }
 
@@ -81,9 +96,57 @@ impl ContentGenerator for MockProvider {
     async fn generate(
         &self,
         messages: &[Message],
-        _tools: &[ToolDeclaration],
+        tools: &[ToolDeclaration],
         _config: &GenerateConfig,
     ) -> Result<GenerateStream, String> {
+        if self.checkpoint_roundtrip {
+            let call_index = self
+                .call_index
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if call_index == 0 {
+                let names = tools
+                    .iter()
+                    .map(|tool| tool.name.as_str())
+                    .collect::<Vec<_>>();
+                if names != ["ask_user_question", "workspace_checkpoint_create"] {
+                    return Err(format!(
+                        "checkpoint mock received unexpected tool inventory: {names:?}"
+                    ));
+                }
+                return Ok(Box::pin(stream::iter(vec![
+                    GenerateEvent::ToolCallStart {
+                        index: 0,
+                        id: "checkpoint-call".to_string(),
+                        name: "workspace_checkpoint_create".to_string(),
+                    },
+                    GenerateEvent::ToolCallDelta {
+                        index: 0,
+                        arguments_delta: "{}".to_string(),
+                    },
+                    GenerateEvent::ToolCallEnd { index: 0 },
+                    GenerateEvent::MessageEnd,
+                ])));
+            }
+            if call_index == 1 {
+                let settled = messages.iter().rev().find(|message| {
+                    message.role == "tool"
+                        && message.tool_call_id.as_deref() == Some("checkpoint-call")
+                });
+                let Some(settled) = settled else {
+                    return Err(
+                        "checkpoint mock did not receive the settled tool result".to_string()
+                    );
+                };
+                return Ok(Box::pin(stream::iter(vec![
+                    GenerateEvent::TextDelta(format!(
+                        "gateway checkpoint result: {}",
+                        settled.content.as_text()
+                    )),
+                    GenerateEvent::MessageEnd,
+                ])));
+            }
+            return Err("checkpoint mock received an unexpected provider turn".to_string());
+        }
         if let Some(text) = &self.repeat_text {
             return Ok(Box::pin(stream::iter(vec![
                 GenerateEvent::TextDelta(text.clone()),

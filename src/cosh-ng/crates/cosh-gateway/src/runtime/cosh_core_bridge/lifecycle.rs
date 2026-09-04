@@ -13,7 +13,8 @@ impl CoshCoreBridge {
         match (config.execution_profile, config.brokered_context.as_ref()) {
             (CoshCoreExecutionProfile::Legacy, None) => {}
             (CoshCoreExecutionProfile::GatewayBrokeredV1, Some(context))
-                if config.identity.actor_id.as_ref() == Some(&context.actor.actor_id) => {}
+                if config.identity.actor_id.as_ref() == Some(&context.actor.actor_id)
+                    && context.target == context.capability_profile.governed_target() => {}
             _ => return Err(AgentRuntimePortError::IdentityMismatch),
         }
         let initialize_request_id = format!("init-{}", config.identity.runtime_instance_id);
@@ -25,6 +26,11 @@ impl CoshCoreBridge {
                 CoshCoreJsonlCodec::new_gateway_brokered(
                     initialize_request_id,
                     config.max_frame_bytes,
+                    config
+                        .brokered_context
+                        .as_ref()
+                        .ok_or(AgentRuntimePortError::IdentityMismatch)?
+                        .capability_profile,
                 )
             }
         }
@@ -48,6 +54,7 @@ impl CoshCoreBridge {
             prompt_deadline: None,
             terminal_delivered: false,
             pending_input: None,
+            pending_brokered: None,
         })
     }
 

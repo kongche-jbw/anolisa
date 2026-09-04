@@ -7,6 +7,7 @@
 mod acp;
 mod acp_port;
 mod bounded_io;
+mod btrfs_generation;
 mod containment;
 mod cosh_core_bridge;
 mod cosh_core_jsonl;

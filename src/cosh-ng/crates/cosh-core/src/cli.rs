@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 
+use crate::brokered_profile::BrokeredCapabilityProfile;
 use crate::config::ApprovalMode;
 
 /// Runtime execution boundary selected before loading workspace-owned state.
@@ -95,6 +96,13 @@ pub struct CliArgs {
     /// this hidden prevents it from being mistaken for a user approval mode.
     #[arg(long, value_enum, default_value_t, hide = true)]
     pub execution_profile: ExecutionProfile,
+
+    /// Select the closed tool inventory for a Gateway-brokered process.
+    ///
+    /// Gateway passes this launch property from daemon admission. Omission
+    /// retains the original task-only inventory for older trusted callers.
+    #[arg(long, value_enum, hide = true)]
+    pub capability_profile: Option<BrokeredCapabilityProfile>,
 
     /// Override the active model from config.toml
     #[arg(long)]
@@ -215,6 +223,11 @@ impl CliArgs {
 
     pub fn is_compact(&self) -> bool {
         self.compact
+    }
+
+    /// Resolves the closed brokered inventory selected before runtime startup.
+    pub(crate) fn brokered_capability_profile(&self) -> BrokeredCapabilityProfile {
+        self.capability_profile.unwrap_or_default()
     }
 
     /// Resolves the workspace root for this process.

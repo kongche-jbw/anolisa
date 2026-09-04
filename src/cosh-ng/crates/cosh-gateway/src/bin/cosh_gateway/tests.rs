@@ -1,4 +1,6 @@
 use super::*;
+use cosh_gateway::runtime::PinnedDirectory;
+use cosh_gateway_contracts::common::{Digest, WorkspaceRef};
 
 use super::acp_command::prompt_exit_code;
 
@@ -40,6 +42,67 @@ fn terminal_text_escapes_control_sequences() {
 }
 
 #[test]
+fn task_only_workspace_preserves_kernel_path_resolution() {
+    let task_only = GatewayCapabilityProfile::task_only_v1();
+    assert_eq!(
+        super::serve::configured_workspace(
+            task_only,
+            Some(&PathBuf::from("/work/link/../project")),
+        )
+        .unwrap(),
+        Path::new("/work/link/../project")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn task_only_link_parent_uses_kernel_resolution() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempfile::tempdir().unwrap();
+    let actual = root.path().join("actual");
+    let nested = actual.join("nested");
+    std::fs::create_dir_all(&nested).unwrap();
+    let link = root.path().join("link");
+    symlink(&nested, &link).unwrap();
+    let configured = link.join("..");
+    let preserved = super::serve::configured_workspace(
+        GatewayCapabilityProfile::task_only_v1(),
+        Some(&configured),
+    )
+    .unwrap();
+    let target = GatewayCapabilityProfile::task_only_v1().governed_target();
+    let resolved = TrustedWorkspaceResolver::new(target.clone(), preserved)
+        .unwrap()
+        .resolve(&target)
+        .unwrap();
+
+    assert_eq!(
+        resolved.identity(),
+        PinnedDirectory::pin(actual).unwrap().identity()
+    );
+    assert_ne!(
+        resolved.identity(),
+        PinnedDirectory::pin(root.path()).unwrap().identity()
+    );
+}
+
+#[test]
+fn checkpoint_workspace_rejects_dot_components() {
+    let checkpoint = GatewayCapabilityProfile::workspace_checkpoint_v1();
+    for path in ["/work/./project", "/work/link/../project"] {
+        assert!(
+            super::serve::configured_workspace(checkpoint, Some(&PathBuf::from(path))).is_err()
+        );
+    }
+    assert_eq!(
+        super::serve::configured_workspace(checkpoint, Some(&PathBuf::from("/work/project")))
+            .unwrap(),
+        Path::new("/work/project")
+    );
+}
+
+#[test]
 fn json_observation_fields_include_driver_sequence() {
     assert_eq!(
         with_observation_sequence(7, json!({"text": "chunk"})),
@@ -58,6 +121,28 @@ fn task_submit_does_not_accept_intent_as_an_argument() {
 }
 
 #[test]
+fn task_admission_is_an_explicit_read_only_command() {
+    let cli = Cli::try_parse_from([
+        "cosh-gateway",
+        "task",
+        "--socket",
+        "/run/user/1000/cosh/poc.sock",
+        "--output",
+        "jsonl",
+        "admission",
+    ])
+    .unwrap();
+
+    assert!(matches!(
+        cli.command,
+        Command::Task(TaskArgs {
+            command: TaskCommand::Admission,
+            ..
+        })
+    ));
+}
+
+#[test]
 fn task_event_page_is_bounded_by_clap() {
     assert!(Cli::try_parse_from([
         "cosh-gateway",
@@ -71,7 +156,7 @@ fn task_event_page_is_bounded_by_clap() {
 }
 
 #[test]
-fn task_submit_defaults_to_brokered_core_and_fixed_task_only_target() {
+fn task_submit_uses_the_exact_daemon_admission_for_each_profile() {
     let defaults = Cli::try_parse_from([
         "cosh-gateway",
         "task",
@@ -92,10 +177,34 @@ fn task_submit_defaults_to_brokered_core_and_fixed_task_only_target() {
         defaults.runtime_profile,
         GATEWAY_BROKERED_CORE_RUNTIME_PROFILE
     );
-    assert_eq!(
-        task_only_target(),
-        GatewayCapabilityProfile::task_only_v1().governed_target()
-    );
+    let admitted = |profile: GatewayCapabilityProfile| cosh_gateway::daemon::GatewayAdmission {
+        installation_id: InstallationId::new(),
+        capability_profile: profile.identity(),
+        target: profile.governed_target(),
+        workspace: WorkspaceRef {
+            scope_digest: Digest::parse("9".repeat(64)).unwrap(),
+            display_name: None,
+        },
+        runtime: RuntimeSelector {
+            runtime: BoundedName::new("core").unwrap(),
+            profile: Some(BoundedName::new(GATEWAY_BROKERED_CORE_RUNTIME_PROFILE).unwrap()),
+        },
+    };
+    for profile in [
+        GatewayCapabilityProfile::task_only_v1(),
+        GatewayCapabilityProfile::workspace_checkpoint_v1(),
+    ] {
+        let admission = admitted(profile);
+        let (target, runtime) = control::admitted_submission_scope(&defaults, &admission).unwrap();
+        assert_eq!(target, profile.governed_target());
+        assert_eq!(runtime, admission.runtime);
+    }
+    let mut drifted = admitted(GatewayCapabilityProfile::task_only_v1());
+    drifted.capability_profile.manifest_digest = Digest::parse("8".repeat(64)).unwrap();
+    assert!(matches!(
+        control::admitted_submission_scope(&defaults, &drifted),
+        Err(CliError::Profile(_))
+    ));
 
     let explicit = Cli::try_parse_from([
         "cosh-gateway",

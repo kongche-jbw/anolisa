@@ -5,20 +5,12 @@ use std::os::unix::fs::{symlink, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use cosh_gateway_contracts::{
-    common::{BoundedName, BoundedOpaque, BoundedText, RuntimeSelector, TargetRef},
+    common::{BoundedName, BoundedText, RuntimeSelector},
     ids::{InstallationId, RunId, TaskId},
 };
 use tempfile::TempDir;
 
 use super::*;
-
-fn target(identifier: &str) -> TargetRef {
-    TargetRef {
-        kind: BoundedName::new("local").unwrap(),
-        authority: BoundedName::new("cosh").unwrap(),
-        identifier: BoundedOpaque::new(identifier).unwrap(),
-    }
-}
 
 fn executable(directory: &Path, name: &str, marker: &Path) -> PathBuf {
     let path = directory.join(name);
@@ -52,9 +44,18 @@ fn admitted(
     core: &Path,
     script: &Path,
 ) -> (InstalledBrokeredCoreRuntimePortFactory, ScheduledRun) {
+    admitted_for_profile(root, core, script, GatewayCapabilityProfile::task_only_v1())
+}
+
+fn admitted_for_profile(
+    root: &TempDir,
+    core: &Path,
+    script: &Path,
+    capability_profile: GatewayCapabilityProfile,
+) -> (InstalledBrokeredCoreRuntimePortFactory, ScheduledRun) {
     let workspace = root.path().join("workspace");
     fs::create_dir(&workspace).unwrap();
-    let expected_target = GatewayCapabilityProfile::task_only_v1().governed_target();
+    let expected_target = capability_profile.governed_target();
     let installation = InstallationId::new();
     let actors = LocalOsActorResolver::new(installation.clone(), 1000);
     let actor = actors.actor_ref().clone();
@@ -64,6 +65,8 @@ fn admitted(
         installation,
         actors,
         workspaces,
+        capability_profile,
+        expected_target.clone(),
         core,
         BTreeMap::from([
             (OsString::from("HOME"), OsString::from("/tmp/test-home")),
@@ -86,7 +89,7 @@ fn admitted(
         intent: BoundedText::new("create a checkpoint").unwrap(),
         target: expected_target,
         workspace: workspace_ref,
-        capability_profile: GatewayCapabilityProfile::task_only_v1().identity(),
+        capability_profile: capability_profile.identity(),
         lease_generation: 9,
     };
     (factory, run)
@@ -114,9 +117,83 @@ fn factory_launches_only_the_exact_profile_with_filtered_environment() {
     }
     assert_eq!(
         fs::read_to_string(marker).unwrap(),
-        "--headless --execution-profile gateway-brokered-v1|"
+        "--headless --execution-profile gateway-brokered-v1 --capability-profile task-only-v1|"
     );
     drop(port);
+}
+
+#[test]
+fn factory_launches_the_exact_checkpoint_profile_without_widening_the_target() {
+    let root = TempDir::new().unwrap();
+    let marker = root.path().join("launch.marker");
+    let script = executable(root.path(), "fake-core.sh", &marker);
+    let core = root.path().join("cosh-core");
+    symlink("/bin/sh", &core).unwrap();
+    let profile = GatewayCapabilityProfile::workspace_checkpoint_v1();
+    let (mut factory, run) = admitted_for_profile(&root, &core, &script, profile);
+
+    let port = factory.create(&run).unwrap();
+    for _ in 0..100 {
+        if marker.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(run.capability_profile, profile.identity());
+    assert_eq!(run.target, profile.governed_target());
+    assert_eq!(
+        fs::read_to_string(marker).unwrap(),
+        "--headless --execution-profile gateway-brokered-v1 --capability-profile workspace-checkpoint-v1|"
+    );
+    drop(port);
+}
+
+#[test]
+fn factory_rejects_profile_or_target_substitution_before_launch() {
+    let root = TempDir::new().unwrap();
+    let marker = root.path().join("launch.marker");
+    let script = executable(root.path(), "fake-core.sh", &marker);
+    let core = root.path().join("cosh-core");
+    symlink("/bin/sh", &core).unwrap();
+    let (mut factory, mut run) = admitted(&root, &core, &script);
+
+    run.capability_profile = GatewayCapabilityProfile::workspace_checkpoint_v1().identity();
+    assert_eq!(
+        factory.create(&run).err().unwrap().code.as_str(),
+        "runtime_profile_invalid"
+    );
+    run.capability_profile = GatewayCapabilityProfile::task_only_v1().identity();
+    run.target = GatewayCapabilityProfile::workspace_checkpoint_v1().governed_target();
+    assert_eq!(
+        factory.create(&run).err().unwrap().code.as_str(),
+        "runtime_profile_invalid"
+    );
+    assert!(!marker.exists());
+}
+
+#[test]
+fn factory_rejects_profile_target_mismatch_at_binding() {
+    let root = TempDir::new().unwrap();
+    let core = root.path().join("cosh-core");
+    symlink("/bin/sh", &core).unwrap();
+    let workspace = root.path().join("workspace");
+    fs::create_dir(&workspace).unwrap();
+    let task_only = GatewayCapabilityProfile::task_only_v1();
+    let target = task_only.governed_target();
+    let installation = InstallationId::new();
+    let actors = LocalOsActorResolver::new(installation.clone(), 1_000);
+    let workspaces = TrustedWorkspaceResolver::new(target.clone(), workspace).unwrap();
+
+    assert!(InstalledBrokeredCoreRuntimePortFactory::new(
+        installation,
+        actors,
+        workspaces,
+        GatewayCapabilityProfile::workspace_checkpoint_v1(),
+        target,
+        core,
+        BTreeMap::new(),
+    )
+    .is_err());
 }
 
 #[test]
@@ -247,12 +324,16 @@ fn factory_rejects_a_non_core_configured_entry() {
     fs::create_dir(&workspace).unwrap();
     let installation = InstallationId::new();
     let actors = LocalOsActorResolver::new(installation.clone(), 1000);
-    let workspaces = TrustedWorkspaceResolver::new(target("primary"), workspace).unwrap();
+    let profile = GatewayCapabilityProfile::task_only_v1();
+    let target = profile.governed_target();
+    let workspaces = TrustedWorkspaceResolver::new(target.clone(), workspace).unwrap();
 
     assert!(InstalledBrokeredCoreRuntimePortFactory::new(
         installation,
         actors,
         workspaces,
+        profile,
+        target,
         core,
         BTreeMap::new(),
     )

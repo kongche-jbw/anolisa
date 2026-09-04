@@ -316,7 +316,7 @@ pub struct CoshCoreControlRequestEnvelope {
 
 /// Private control requests that require a bridge-owned response.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(tag = "subtype")]
+#[serde(tag = "subtype", deny_unknown_fields)]
 pub enum CoshCoreControlRequest {
     /// Requests policy evaluation for provider tool intent.
     #[serde(rename = "can_use_tool")]

@@ -1,4 +1,4 @@
-//! Trusted admission and pinned launch policy for task-only cosh-core.
+//! Trusted admission and pinned launch policy for closed cosh-core profiles.
 
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
@@ -8,7 +8,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use cosh_gateway_contracts::{
-    common::{BoundedName, Digest},
+    common::{BoundedName, Digest, TargetRef},
     error::{ContractError, ErrorCategory},
     ids::{AgentSessionId, InstallationId, RuntimeBindingId, RuntimeInstanceId},
     profile::GatewayCapabilityProfile,
@@ -50,7 +50,7 @@ const ALLOWED_ENVIRONMENT: &[&str] = &[
     "DASHSCOPE_API_KEY",
 ];
 
-/// Canonical task-only Core launch inputs pinned before daemon socket admission.
+/// Canonical Core launch inputs pinned before daemon socket admission.
 pub struct ResolvedBrokeredCoreRuntimeProfile {
     executable: PinnedExecutable,
     environment: BTreeMap<OsString, OsString>,
@@ -66,14 +66,16 @@ impl fmt::Debug for ResolvedBrokeredCoreRuntimeProfile {
     }
 }
 
-/// Production factory for the task-only Gateway-brokered Core profile.
+/// Production factory for one admitted Gateway-brokered Core profile.
 ///
-/// The profile admits side-effect-free user questions only; it does not bind a
-/// hosted checkpoint or other external execution target.
+/// The capability profile and its target are fixed by trusted daemon
+/// configuration before any ScheduledRun can reach this factory.
 pub struct InstalledBrokeredCoreRuntimePortFactory {
     installation_id: InstallationId,
     actors: LocalOsActorResolver,
     workspaces: TrustedWorkspaceResolver,
+    capability_profile: GatewayCapabilityProfile,
+    target: TargetRef,
     executable: PinnedExecutable,
     environment: BTreeMap<OsString, OsString>,
     #[cfg(test)]
@@ -87,6 +89,8 @@ impl fmt::Debug for InstalledBrokeredCoreRuntimePortFactory {
             .field("installation_id", &self.installation_id)
             .field("actors", &self.actors)
             .field("workspaces", &self.workspaces)
+            .field("capability_profile", &self.capability_profile.identity())
+            .field("target", &self.target)
             .field("executable", &self.executable)
             .field("environment_names", &self.environment.keys())
             .finish()
@@ -128,20 +132,28 @@ impl InstalledBrokeredCoreRuntimePortFactory {
     ///
     /// # Errors
     ///
-    /// Rejects an actor resolver issued by another installation.
+    /// Rejects an actor resolver issued by another installation or a target
+    /// that is not the exact target sealed by the admitted profile.
     pub fn from_resolved(
         installation_id: InstallationId,
         actors: LocalOsActorResolver,
         workspaces: TrustedWorkspaceResolver,
+        capability_profile: GatewayCapabilityProfile,
+        target: TargetRef,
         profile: ResolvedBrokeredCoreRuntimeProfile,
     ) -> Result<Self, ContractError> {
-        if actors.installation_id() != &installation_id {
+        if actors.installation_id() != &installation_id
+            || target != capability_profile.governed_target()
+            || workspaces.resolve(&target).is_err()
+        {
             return Err(profile_error());
         }
         Ok(Self {
             installation_id,
             actors,
             workspaces,
+            capability_profile,
+            target,
             executable: profile.executable,
             environment: profile.environment,
             #[cfg(test)]
@@ -159,20 +171,30 @@ impl InstalledBrokeredCoreRuntimePortFactory {
         installation_id: InstallationId,
         actors: LocalOsActorResolver,
         workspaces: TrustedWorkspaceResolver,
+        capability_profile: GatewayCapabilityProfile,
+        target: TargetRef,
         executable: impl AsRef<Path>,
         environment: BTreeMap<OsString, OsString>,
     ) -> Result<Self, ContractError> {
         let profile = Self::resolve(executable, environment)?;
-        Self::from_resolved(installation_id, actors, workspaces, profile)
+        Self::from_resolved(
+            installation_id,
+            actors,
+            workspaces,
+            capability_profile,
+            target,
+            profile,
+        )
     }
 }
 
 impl AgentRuntimePortFactory for InstalledBrokeredCoreRuntimePortFactory {
     fn create(&mut self, run: &ScheduledRun) -> Result<ScheduledRuntimePort, ContractError> {
-        if GatewayCapabilityProfile::task_only_v1()
+        if self
+            .capability_profile
             .verify_identity(&run.capability_profile)
             .is_err()
-            || run.target != GatewayCapabilityProfile::task_only_v1().governed_target()
+            || run.target != self.target
             || run.runtime.runtime.as_str() != "core"
             || run.runtime.profile.as_ref().map(BoundedName::as_str)
                 != Some(GATEWAY_BROKERED_CORE_RUNTIME_PROFILE)
@@ -203,6 +225,8 @@ impl AgentRuntimePortFactory for InstalledBrokeredCoreRuntimePortFactory {
                 "--headless",
                 "--execution-profile",
                 GATEWAY_BROKERED_CORE_RUNTIME_PROFILE,
+                "--capability-profile",
+                self.capability_profile.id().as_str(),
             ]
             .into_iter()
             .map(OsString::from),
@@ -224,12 +248,15 @@ impl AgentRuntimePortFactory for InstalledBrokeredCoreRuntimePortFactory {
                 &self.installation_id,
                 &self.executable,
                 workspace.pinned_directory(),
+                self.capability_profile,
+                &self.target,
             ),
         };
         let config = CoshCoreBridgeConfig::new(launch, workspace.reference().clone(), identity)
             .gateway_brokered(CoshCoreBrokeredContext {
                 actor,
                 target: run.target.clone(),
+                capability_profile: self.capability_profile,
             });
         let port = CoshCoreBridge::launch(config).map_err(|_| {
             contract_error(
@@ -250,13 +277,21 @@ fn scope_digest(
     installation: &InstallationId,
     executable: &PinnedExecutable,
     workspace: &super::PinnedDirectory,
+    capability_profile: GatewayCapabilityProfile,
+    target: &TargetRef,
 ) -> Digest {
     let mut digest = Sha256::new();
+    let profile_manifest_digest = capability_profile.manifest_digest();
     for part in [
-        b"cosh.gateway-brokered-core.scope.v1".as_slice(),
+        b"cosh.gateway-brokered-core.scope.v2".as_slice(),
         installation.as_str().as_bytes(),
         path_bytes(executable.canonical_path()),
         path_bytes(workspace.canonical_path()),
+        capability_profile.id().as_str().as_bytes(),
+        profile_manifest_digest.as_str().as_bytes(),
+        target.kind.as_str().as_bytes(),
+        target.authority.as_str().as_bytes(),
+        target.identifier.as_str().as_bytes(),
     ] {
         digest.update((part.len() as u64).to_be_bytes());
         digest.update(part);
