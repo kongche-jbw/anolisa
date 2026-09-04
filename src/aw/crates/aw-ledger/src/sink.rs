@@ -11,7 +11,10 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use aw_contracts::ids::LedgerEventId;
-use aw_contracts::ledger::{LedgerEventKind, LedgerParent, LedgerRecordHeader, LedgerTraceScope};
+use aw_contracts::ledger::{
+    LedgerEventKind, LedgerParent, LedgerRecordHeader, LedgerTraceScope, PostToolUsePlanBody,
+    PreToolUseGateBody, LEDGER_POST_TOOL_USE_PLAN_SCHEMA, LEDGER_PRE_TOOL_USE_GATE_SCHEMA,
+};
 use serde_json::Value;
 use thiserror::Error;
 
@@ -25,6 +28,31 @@ pub enum SinkError {
     /// Admission rejected the candidate.
     #[error("ledger admission rejected: {0}")]
     Admission(#[from] AdmissionError),
+    /// The generic sink has no typed writer for this taxonomy entry yet.
+    #[error("ledger event kind {kind:?} has no implemented typed writer")]
+    UnsupportedEventKind {
+        /// Event kind for which no writer contract exists.
+        kind: LedgerEventKind,
+    },
+    /// The event kind was paired with a different body schema.
+    #[error("ledger event kind {kind:?} requires schema {expected}, got {actual}")]
+    SchemaMismatch {
+        /// Event kind whose schema did not match.
+        kind: LedgerEventKind,
+        /// Schema implemented by this writer.
+        expected: &'static str,
+        /// Schema supplied by the caller.
+        actual: String,
+    },
+    /// The body did not conform to the implemented typed schema.
+    #[error("ledger event kind {kind:?} has an invalid typed body: {source}")]
+    InvalidBody {
+        /// Event kind whose body failed decoding.
+        kind: LedgerEventKind,
+        /// Strict typed decoding failure.
+        #[source]
+        source: serde_json::Error,
+    },
     /// The backing store could not persist the record.
     #[error("ledger store error: {0}")]
     Store(#[from] StoreError),
@@ -65,9 +93,10 @@ impl LedgerSink {
         scope: Option<&LedgerTraceScope>,
     ) -> Result<AdmittedRecord, SinkError> {
         let tip = self.store.tip();
-        let candidate = build_candidate(&tip, kind, schema, body);
+        let candidate = build_candidate(&tip, kind, schema, body, scope);
         let admitted = admit(&tip, candidate)?;
-        self.store.append(&admitted, scope)?;
+        validate_writer_body(kind, schema, &admitted.body)?;
+        self.store.append(&admitted)?;
         Ok(admitted)
     }
 
@@ -82,6 +111,7 @@ fn build_candidate(
     kind: LedgerEventKind,
     schema: &str,
     body: Value,
+    scope: Option<&LedgerTraceScope>,
 ) -> CandidateRecord {
     use aw_contracts::canonical::canonical_json_v1_bytes;
     use sha2::{Digest as _, Sha256};
@@ -113,11 +143,44 @@ fn build_candidate(
             timestamp_ms,
             kind,
             schema: schema.to_owned(),
+            scope: scope.cloned(),
             parent,
             body_digest,
         },
         body,
     }
+}
+
+fn validate_writer_body(
+    kind: LedgerEventKind,
+    schema: &str,
+    body: &Value,
+) -> Result<(), SinkError> {
+    let expected = match kind {
+        LedgerEventKind::PostToolUsePlan => LEDGER_POST_TOOL_USE_PLAN_SCHEMA,
+        LedgerEventKind::PreToolUseGate => LEDGER_PRE_TOOL_USE_GATE_SCHEMA,
+        kind => return Err(SinkError::UnsupportedEventKind { kind }),
+    };
+    if schema != expected {
+        return Err(SinkError::SchemaMismatch {
+            kind,
+            expected,
+            actual: schema.to_owned(),
+        });
+    }
+
+    match kind {
+        LedgerEventKind::PostToolUsePlan => {
+            serde_json::from_value::<PostToolUsePlanBody>(body.clone())
+                .map_err(|source| SinkError::InvalidBody { kind, source })?;
+        }
+        LedgerEventKind::PreToolUseGate => {
+            serde_json::from_value::<PreToolUseGateBody>(body.clone())
+                .map_err(|source| SinkError::InvalidBody { kind, source })?;
+        }
+        _ => unreachable!("unsupported event kinds returned above"),
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -135,10 +198,9 @@ mod tests {
 
     fn clean_body() -> Value {
         json!({
-            "projection": {
-                "id": "prj_00000000-0000-0000-0000-000000000000",
-                "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-            }
+            "gate": "not_mediated",
+            "reasons": [],
+            "degradation": "no_implementation"
         })
     }
 
@@ -147,14 +209,14 @@ mod tests {
         let (mut sink, _dir) = open_sink();
         let admitted = sink
             .record(
-                LedgerEventKind::PostToolUsePlan,
-                "aw.ledger.post_tool_use_plan/v1",
+                LedgerEventKind::PreToolUseGate,
+                LEDGER_PRE_TOOL_USE_GATE_SCHEMA,
                 clean_body(),
                 None,
             )
             .expect("genesis recorded");
         assert_eq!(admitted.header.sequence, 0);
-        assert_eq!(admitted.header.kind, LedgerEventKind::PostToolUsePlan);
+        assert_eq!(admitted.header.kind, LedgerEventKind::PreToolUseGate);
         assert!(admitted.header.parent.is_none());
     }
 
@@ -163,16 +225,16 @@ mod tests {
         let (mut sink, _dir) = open_sink();
         let first = sink
             .record(
-                LedgerEventKind::PostToolUsePlan,
-                "aw.ledger.post_tool_use_plan/v1",
+                LedgerEventKind::PreToolUseGate,
+                LEDGER_PRE_TOOL_USE_GATE_SCHEMA,
                 clean_body(),
                 None,
             )
             .expect("first recorded");
         let second = sink
             .record(
-                LedgerEventKind::EvidenceStored,
-                "aw.ledger.evidence_stored/v1",
+                LedgerEventKind::PreToolUseGate,
+                LEDGER_PRE_TOOL_USE_GATE_SCHEMA,
                 clean_body(),
                 None,
             )
@@ -215,8 +277,8 @@ mod tests {
             invocation_id: None,
         };
         sink.record(
-            LedgerEventKind::PostToolUsePlan,
-            "aw.ledger.post_tool_use_plan/v1",
+            LedgerEventKind::PreToolUseGate,
+            LEDGER_PRE_TOOL_USE_GATE_SCHEMA,
             clean_body(),
             Some(&scope),
         )
@@ -225,5 +287,54 @@ mod tests {
         // Verify the tip advanced.
         assert_eq!(sink.tip().sequence, 0);
         assert!(sink.tip().id.is_some());
+    }
+
+    #[test]
+    fn writer_rejects_kind_schema_mismatch() {
+        let (mut sink, _dir) = open_sink();
+        let error = sink
+            .record(
+                LedgerEventKind::PreToolUseGate,
+                LEDGER_POST_TOOL_USE_PLAN_SCHEMA,
+                clean_body(),
+                None,
+            )
+            .unwrap_err();
+        assert!(matches!(error, SinkError::SchemaMismatch { .. }));
+        assert!(sink.tip().id.is_none());
+    }
+
+    #[test]
+    fn writer_rejects_unknown_body_fields() {
+        let (mut sink, _dir) = open_sink();
+        let mut body = clean_body();
+        body.as_object_mut()
+            .expect("fixture is an object")
+            .insert("note".to_owned(), json!("provider text"));
+        let error = sink
+            .record(
+                LedgerEventKind::PreToolUseGate,
+                LEDGER_PRE_TOOL_USE_GATE_SCHEMA,
+                body,
+                None,
+            )
+            .unwrap_err();
+        assert!(matches!(error, SinkError::InvalidBody { .. }));
+        assert!(sink.tip().id.is_none());
+    }
+
+    #[test]
+    fn writer_rejects_taxonomy_without_an_implemented_contract() {
+        let (mut sink, _dir) = open_sink();
+        let error = sink
+            .record(
+                LedgerEventKind::EvidenceStored,
+                "aw.ledger.evidence_stored/v1",
+                clean_body(),
+                None,
+            )
+            .unwrap_err();
+        assert!(matches!(error, SinkError::UnsupportedEventKind { .. }));
+        assert!(sink.tip().id.is_none());
     }
 }

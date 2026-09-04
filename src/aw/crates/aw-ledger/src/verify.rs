@@ -4,11 +4,13 @@
 //! two digests per row: the body digest over the stored canonical body
 //! bytes, and the record digest over the full canonical record bytes.
 //! It also verifies that each record's parent link matches the previous
-//! row's identity and digest. A passing verification proves the stored
-//! bytes are the bytes the writer committed to and no record has been
-//! inserted, deleted, or tampered with since admission.
+//! row's identity and digest. It also compares every denormalized SQL header
+//! and scope-index value with the committed envelope. A passing verification
+//! proves internal consistency; detecting a maliciously rewritten suffix
+//! still requires an externally retained chain digest.
 
 use aw_contracts::canonical::canonical_json_v1_bytes;
+use aw_contracts::ledger::{LedgerRecordHeader, LedgerTraceScope};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
@@ -54,6 +56,28 @@ pub enum VerifyError {
         /// Sequence of the record whose bytes are corrupt.
         sequence: u64,
     },
+    /// An indexed SQL header column differs from the committed header.
+    #[error(
+        "indexed header field {field} differs from the canonical record at sequence {sequence}"
+    )]
+    HeaderMismatch {
+        /// Sequence of the record whose indexed header differs.
+        sequence: u64,
+        /// Stable header field name that differs.
+        field: &'static str,
+    },
+    /// The scope query index differs from the scope committed in the header.
+    #[error("scope index differs from the canonical record at sequence {sequence}")]
+    ScopeMismatch {
+        /// Sequence of the record whose scope index differs.
+        sequence: u64,
+    },
+    /// The separately stored body bytes differ from the body in the record.
+    #[error("canonical body bytes differ from the canonical record at sequence {sequence}")]
+    BodyCanonicalMismatch {
+        /// Sequence of the record whose body copies differ.
+        sequence: u64,
+    },
     /// A database error prevented verification.
     #[error("ledger database error: {0}")]
     Database(#[from] crate::StoreError),
@@ -72,23 +96,39 @@ pub fn verify_chain(store: &LedgerStore) -> Result<usize, VerifyError> {
     let mut stmt = store
         .conn()
         .prepare(
-            "SELECT id, sequence, parent_id, parent_digest,
-                    body_digest, body_canonical, record_canonical, record_digest
-             FROM ledger_records
+            "SELECT r.id, r.sequence, r.timestamp_ms, r.kind, r.schema,
+                    r.parent_id, r.parent_digest, r.body_digest,
+                    r.body_canonical, r.record_canonical, r.record_digest,
+                    s.record_id, s.attempt_id, s.tool_use_id, s.invocation_id
+             FROM ledger_records r
+             LEFT JOIN ledger_scope s ON s.record_id = r.id
              ORDER BY sequence ASC",
         )
         .map_err(StoreError::from)?;
     let rows = stmt
         .query_map([], |row| {
+            let scope_record_id: Option<String> = row.get(11)?;
+            let scope_attempt_id: Option<String> = row.get(12)?;
+            let scope_tool_use_id: Option<String> = row.get(13)?;
+            let scope_invocation_id: Option<String> = row.get(14)?;
             Ok(RawRow {
                 id: row.get(0)?,
                 sequence: row.get::<_, i64>(1)? as u64,
-                parent_id: row.get(2)?,
-                parent_digest: row.get(3)?,
-                body_digest: row.get(4)?,
-                body_canonical: row.get(5)?,
-                record_canonical: row.get(6)?,
-                record_digest: row.get(7)?,
+                timestamp_ms: row.get::<_, i64>(2)?,
+                kind: row.get(3)?,
+                schema: row.get(4)?,
+                parent_id: row.get(5)?,
+                parent_digest: row.get(6)?,
+                body_digest: row.get(7)?,
+                body_canonical: row.get(8)?,
+                record_canonical: row.get(9)?,
+                record_digest: row.get(10)?,
+                scope: scope_record_id.map(|record_id| RawScope {
+                    record_id,
+                    attempt_id: scope_attempt_id,
+                    tool_use_id: scope_tool_use_id,
+                    invocation_id: scope_invocation_id,
+                }),
             })
         })
         .map_err(StoreError::from)?;
@@ -123,7 +163,7 @@ pub fn verify_chain(store: &LedgerStore) -> Result<usize, VerifyError> {
                     sequence: row.sequence,
                 });
             }
-        } else if row.parent_id.is_some() {
+        } else if row.parent_id.is_some() || row.parent_digest.is_some() {
             // Genesis must not have a parent.
             return Err(VerifyError::ParentLinkBroken { sequence: 0 });
         }
@@ -144,9 +184,9 @@ pub fn verify_chain(store: &LedgerStore) -> Result<usize, VerifyError> {
             });
         }
 
-        // 5. Canonical record bytes decode to a valid envelope whose
-        //    body digest matches the stored body digest column.
-        verify_envelope_body_digest(&row.record_canonical, &row.body_digest, row.sequence)?;
+        // 5. The committed envelope is canonical and agrees with every
+        //    duplicated SQL header, body, and scope-index column.
+        verify_committed_envelope(&row)?;
 
         prev_id = Some(row.id);
         prev_digest = Some(row.record_digest);
@@ -161,47 +201,163 @@ fn digest_hex(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
-/// Decodes the stored canonical record bytes and verifies that the
-/// body embedded in the envelope digests to the stored body digest.
-fn verify_envelope_body_digest(
-    record_canonical: &[u8],
-    expected_body_digest: &str,
-    sequence: u64,
-) -> Result<(), VerifyError> {
-    let envelope: Envelope = serde_json::from_slice(record_canonical)
-        .map_err(|_| VerifyError::IntegrityBroken { sequence })?;
-    let body_canonical = canonical_json_v1_bytes(&envelope.body)
-        .map_err(|_| VerifyError::IntegrityBroken { sequence })?;
+/// Verifies the committed envelope and every denormalized query column.
+fn verify_committed_envelope(row: &RawRow) -> Result<(), VerifyError> {
+    let value: serde_json::Value = serde_json::from_slice(&row.record_canonical).map_err(|_| {
+        VerifyError::IntegrityBroken {
+            sequence: row.sequence,
+        }
+    })?;
+    let canonical = canonical_json_v1_bytes(&value).map_err(|_| VerifyError::IntegrityBroken {
+        sequence: row.sequence,
+    })?;
+    if canonical != row.record_canonical {
+        return Err(VerifyError::IntegrityBroken {
+            sequence: row.sequence,
+        });
+    }
+    let envelope: Envelope =
+        serde_json::from_value(value).map_err(|_| VerifyError::IntegrityBroken {
+            sequence: row.sequence,
+        })?;
+
+    let body_canonical =
+        canonical_json_v1_bytes(&envelope.body).map_err(|_| VerifyError::IntegrityBroken {
+            sequence: row.sequence,
+        })?;
+    if body_canonical != row.body_canonical {
+        return Err(VerifyError::BodyCanonicalMismatch {
+            sequence: row.sequence,
+        });
+    }
     let body_digest_computed = digest_hex(&body_canonical);
-    if body_digest_computed != expected_body_digest {
-        return Err(VerifyError::BodyDigestMismatch { sequence });
+    if body_digest_computed != row.body_digest {
+        return Err(VerifyError::BodyDigestMismatch {
+            sequence: row.sequence,
+        });
+    }
+
+    compare_header(row, &envelope.header)?;
+    Ok(())
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Envelope {
+    header: LedgerRecordHeader,
+    body: serde_json::Value,
+}
+
+fn compare_header(row: &RawRow, header: &LedgerRecordHeader) -> Result<(), VerifyError> {
+    compare_field(row, "id", header.id.as_str() == row.id)?;
+    compare_field(row, "sequence", header.sequence == row.sequence)?;
+    compare_field(
+        row,
+        "timestamp_ms",
+        u64::try_from(row.timestamp_ms) == Ok(header.timestamp_ms),
+    )?;
+    compare_field(
+        row,
+        "kind",
+        crate::store::kind_to_str(header.kind) == row.kind,
+    )?;
+    compare_field(row, "schema", header.schema == row.schema)?;
+    compare_field(
+        row,
+        "parent",
+        parent_matches(
+            header.parent.as_ref(),
+            row.parent_id.as_deref(),
+            row.parent_digest.as_deref(),
+        ),
+    )?;
+    compare_field(
+        row,
+        "body_digest",
+        header.body_digest.as_str() == row.body_digest,
+    )?;
+
+    if !scope_matches(header.scope.as_ref(), row.scope.as_ref(), &row.id) {
+        return Err(VerifyError::ScopeMismatch {
+            sequence: row.sequence,
+        });
     }
     Ok(())
 }
 
-/// Minimal envelope used only to decode stored canonical record bytes
-/// during verification. Only `body` is declared; serde skips the header
-/// the writer also encoded.
-#[derive(serde::Deserialize)]
-struct Envelope {
-    body: serde_json::Value,
+fn parent_matches(
+    committed: Option<&aw_contracts::ledger::LedgerParent>,
+    indexed_id: Option<&str>,
+    indexed_digest: Option<&str>,
+) -> bool {
+    match (committed, indexed_id, indexed_digest) {
+        (None, None, None) => true,
+        (Some(committed), Some(indexed_id), Some(indexed_digest)) => {
+            committed.id.as_str() == indexed_id && committed.digest.as_str() == indexed_digest
+        }
+        _ => false,
+    }
+}
+
+fn compare_field(row: &RawRow, field: &'static str, matches: bool) -> Result<(), VerifyError> {
+    if matches {
+        Ok(())
+    } else {
+        Err(VerifyError::HeaderMismatch {
+            sequence: row.sequence,
+            field,
+        })
+    }
+}
+
+fn scope_matches(
+    committed: Option<&LedgerTraceScope>,
+    indexed: Option<&RawScope>,
+    id: &str,
+) -> bool {
+    match (committed, indexed) {
+        (None, None) => true,
+        (Some(committed), Some(indexed)) => {
+            indexed.record_id == id
+                && committed.attempt_id.as_ref().map(|value| value.as_str())
+                    == indexed.attempt_id.as_deref()
+                && committed.tool_use_id.as_ref().map(|value| value.as_str())
+                    == indexed.tool_use_id.as_deref()
+                && committed.invocation_id.as_ref().map(|value| value.as_str())
+                    == indexed.invocation_id.as_deref()
+        }
+        _ => false,
+    }
 }
 
 struct RawRow {
     id: String,
     sequence: u64,
+    timestamp_ms: i64,
+    kind: String,
+    schema: String,
     parent_id: Option<String>,
     parent_digest: Option<String>,
     body_digest: String,
     body_canonical: Vec<u8>,
     record_canonical: Vec<u8>,
     record_digest: String,
+    scope: Option<RawScope>,
+}
+
+struct RawScope {
+    record_id: String,
+    attempt_id: Option<String>,
+    tool_use_id: Option<String>,
+    invocation_id: Option<String>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{admit, Chain, LedgerStore};
+    use aw_contracts::ids::{AttemptId, ToolUseId};
+    use aw_contracts::ledger::LedgerTraceScope;
     use serde_json::json;
     use tempfile::tempdir;
 
@@ -216,7 +372,7 @@ mod tests {
             let tip = chain.tip();
             let candidate = crate::tests::candidate(&tip, body);
             let admitted = admit(&tip, candidate).expect("admit");
-            store.append(&admitted, None).expect("append");
+            store.append(&admitted).expect("append");
             chain.extend(&admitted);
         }
     }
@@ -295,6 +451,35 @@ mod tests {
     }
 
     #[test]
+    fn body_copy_that_diverges_from_the_envelope_is_detected() {
+        let dir = tempdir().expect("temp dir");
+        let mut store = LedgerStore::open(dir.path()).expect("store opens");
+        let mut chain = Chain::new();
+        append_n(&mut store, &mut chain, 1);
+
+        let replacement = br#"{"evidence":{}}"#;
+        let replacement_digest = digest_hex(replacement);
+        store
+            .conn()
+            .execute(
+                "UPDATE ledger_records
+                 SET body_canonical = ?1, body_digest = ?2
+                 WHERE sequence = 0",
+                rusqlite::params![replacement, replacement_digest],
+            )
+            .expect("replace denormalized body copy");
+
+        let result = verify_chain(&store);
+        assert!(
+            matches!(
+                result,
+                Err(VerifyError::BodyCanonicalMismatch { sequence: 0 })
+            ),
+            "expected BodyCanonicalMismatch, got {result:?}"
+        );
+    }
+
+    #[test]
     fn broken_parent_link_is_detected() {
         let dir = tempdir().expect("temp dir");
         let mut store = LedgerStore::open(dir.path()).expect("store opens");
@@ -314,6 +499,78 @@ mod tests {
         assert!(
             matches!(result, Err(VerifyError::ParentLinkBroken { sequence: 1 })),
             "expected ParentLinkBroken, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn tampered_denormalized_header_columns_are_detected() {
+        let cases = [
+            (
+                "UPDATE ledger_records SET id = 'evt_00000000-0000-0000-0000-000000000000' WHERE sequence = 0",
+                "id",
+            ),
+            (
+                "UPDATE ledger_records SET timestamp_ms = timestamp_ms + 1 WHERE sequence = 0",
+                "timestamp_ms",
+            ),
+            (
+                "UPDATE ledger_records SET kind = 'receipt_stored' WHERE sequence = 0",
+                "kind",
+            ),
+            (
+                "UPDATE ledger_records SET schema = 'aw.ledger.changed/v1' WHERE sequence = 0",
+                "schema",
+            ),
+        ];
+
+        for (sql, expected_field) in cases {
+            let dir = tempdir().expect("temp dir");
+            let mut store = LedgerStore::open(dir.path()).expect("store opens");
+            let mut chain = Chain::new();
+            append_n(&mut store, &mut chain, 1);
+            store.conn().execute(sql, []).expect("tamper index column");
+
+            let result = verify_chain(&store);
+            assert!(
+                matches!(
+                    result,
+                    Err(VerifyError::HeaderMismatch {
+                        sequence: 0,
+                        field,
+                    }) if field == expected_field
+                ),
+                "expected HeaderMismatch for {expected_field}, got {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn tampered_scope_index_is_detected() {
+        let dir = tempdir().expect("temp dir");
+        let mut store = LedgerStore::open(dir.path()).expect("store opens");
+        let chain = Chain::new();
+        let tip = chain.tip();
+        let mut candidate = crate::tests::candidate(&tip, json!({"evidence": {}}));
+        candidate.header.scope = Some(LedgerTraceScope {
+            attempt_id: Some(AttemptId::new()),
+            tool_use_id: Some(ToolUseId::new()),
+            invocation_id: None,
+        });
+        let admitted = admit(&tip, candidate).expect("admit");
+        store.append(&admitted).expect("append");
+
+        store
+            .conn()
+            .execute(
+                "UPDATE ledger_scope SET attempt_id = ?1 WHERE record_id = ?2",
+                rusqlite::params![AttemptId::new().as_str(), admitted.header.id.as_str()],
+            )
+            .expect("tamper scope index");
+
+        let result = verify_chain(&store);
+        assert!(
+            matches!(result, Err(VerifyError::ScopeMismatch { sequence: 0 })),
+            "expected ScopeMismatch, got {result:?}"
         );
     }
 }

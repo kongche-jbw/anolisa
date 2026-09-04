@@ -176,21 +176,7 @@ fn cosh_requests_a_lossless_replacement_after_two_clean_observations() {
         Some(SecurityDetectedLanguage::Mixed),
     );
     assert!(body.projection.candidate_offered);
-    assert_eq!(
-        body.projection
-            .media_type
-            .as_ref()
-            .map(|value| value.as_str()),
-        Some("text/plain")
-    );
-    assert_eq!(
-        body.projection
-            .transform_chain
-            .iter()
-            .map(|value| value.as_str())
-            .collect::<Vec<_>>(),
-        ["toon"]
-    );
+    assert_eq!(body.projection.transform_count, 1);
     assert_eq!(
         body.projection.reversibility,
         Some(ContextReversibility::Lossless)

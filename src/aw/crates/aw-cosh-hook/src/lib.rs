@@ -706,7 +706,9 @@ mod tests {
     use aw_contracts::common::Digest;
     use aw_contracts::context::ContextProjectionCandidate;
     use aw_contracts::ids::{ArtifactId, ProviderInvocationId};
+    use aw_contracts::ledger::security_rule_id_digest;
     use aw_contracts::provider::{ProviderMeasurementKind, ProviderMeter, VersionedSchema};
+    use aw_contracts::security::SecurityRuleId;
 
     #[test]
     fn extracts_only_the_model_visible_cosh_slot() {
@@ -1368,8 +1370,15 @@ mod tests {
             "a stored gate body must not carry a command key: {stored}"
         );
         assert!(
-            stored.contains("fixture.recursive_delete"),
-            "the rule code is what makes the refusal actionable: {stored}"
+            !stored.contains("fixture.recursive_delete"),
+            "the Provider-controlled rule code must not become durable text: {stored}"
+        );
+        let rule_id = SecurityRuleId::parse("fixture.recursive_delete")
+            .expect("the fixture rule ID is canonical");
+        let rule_digest = security_rule_id_digest(&rule_id);
+        assert!(
+            stored.contains(rule_digest.as_str()),
+            "the stable rule digest keeps the refusal correlatable: {stored}"
         );
     }
 }

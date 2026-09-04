@@ -13,6 +13,7 @@
 //! receipts.
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 
 use crate::common::{BoundedName, Digest};
 use crate::context::ContextReversibility;
@@ -23,6 +24,7 @@ use crate::ids::{
 use crate::provider::{ProviderDisposition, ProviderReceipt, VersionedSchema};
 use crate::security::{
     GateDegradation, ObservationGapReason, SecurityDetectedLanguage, SecurityFinding,
+    SecurityFindingCategory, SecurityFindingConfidence, SecurityFindingSeverity,
     SecurityInspectionVerdict, SecurityRuleId, ToolCallGate,
 };
 
@@ -60,6 +62,7 @@ pub enum LedgerEventKind {
 /// previous record's digest. Together they form a tamper-evident sequence that
 /// a reader can recompute without the body bytes in memory.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LedgerRecordHeader {
     /// Stable identity of this record.
     pub id: LedgerEventId,
@@ -73,6 +76,12 @@ pub struct LedgerRecordHeader {
     /// Schema revision governing `body`. The hash chain treats this as opaque
     /// text; a reader uses it to pick a deserializer.
     pub schema: String,
+    /// Query axes committed as part of the canonical record.
+    ///
+    /// Storage may duplicate these values in an index table, but that table
+    /// must never be treated as an independent source of truth.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<LedgerTraceScope>,
     /// Parent link committing to the immediately preceding record. Absent
     /// only on the genesis record at sequence zero. Bundling ID and digest
     /// keeps the header from referencing one without the other.
@@ -88,6 +97,7 @@ pub struct LedgerRecordHeader {
 /// reader can recompute the hash chain by fetching one parent at a time and
 /// verifying the bytes it actually stored.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LedgerParent {
     /// Identity of the preceding record.
     pub id: LedgerEventId,
@@ -141,6 +151,7 @@ pub enum LedgerBodyRef {
 /// Stable scope keys recorded with a Ledger event so a reader can filter the
 /// trace by execution, attempt, or tool call without touching the payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LedgerTraceScope {
     /// Attempt this event contributes to, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -159,6 +170,7 @@ pub struct LedgerTraceScope {
 /// reader can fetch the full receipt from the Provider Host, and carries only
 /// the fields needed to interpret the plan without that round trip.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LedgerInvocationRef {
     /// Core-owned invocation whose result the plan step consumed.
     pub invocation_id: ProviderInvocationId,
@@ -166,10 +178,19 @@ pub struct LedgerInvocationRef {
     pub provider_id: BoundedName,
     /// Provider release declared by the admitted manifest.
     pub provider_version: BoundedName,
+    /// Digest of the exact Provider manifest admitted for this invocation.
+    pub manifest_digest: Digest,
     /// Capability the Provider served.
     pub capability: VersionedSchema,
+    /// Canonical input schema accepted by Core.
+    pub input_schema: VersionedSchema,
+    /// Digest of the canonical input body accepted by Core.
+    pub input_digest: Digest,
     /// Terminal classification Core assigned to the invocation.
     pub disposition: ProviderDisposition,
+    /// Schema of the transient Provider output, when one existed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<VersionedSchema>,
     /// Digest of the transient Provider output, when one existed. The output
     /// body itself is never stored.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -188,8 +209,12 @@ impl LedgerInvocationRef {
             invocation_id: receipt.invocation_id.clone(),
             provider_id: receipt.provider_id.clone(),
             provider_version: receipt.provider_version.clone(),
+            manifest_digest: receipt.manifest_digest.clone(),
             capability: receipt.capability.clone(),
+            input_schema: receipt.input_schema.clone(),
+            input_digest: receipt.input_digest.clone(),
             disposition: receipt.disposition,
+            output_schema: receipt.output_schema.clone(),
             output_digest: receipt.output_digest.clone(),
             started_at_ms: receipt.started_at_ms,
             completed_at_ms: receipt.completed_at_ms,
@@ -197,15 +222,60 @@ impl LedgerInvocationRef {
     }
 }
 
+/// Content-free durable projection of one Provider rule finding.
+///
+/// `rule_id_digest` is SHA-256 over the exact UTF-8 bytes of the transient
+/// security rule ID. Keeping the digest allows stable correlation with a
+/// separately governed rule catalog without giving an arbitrary Provider
+/// label a durable text channel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LedgerRuleFinding {
+    /// Stable SHA-256 identity of the transient Provider rule ID.
+    pub rule_id_digest: Digest,
+    /// Broad closed category of the finding.
+    pub category: SecurityFindingCategory,
+    /// Closed severity assigned by the Provider.
+    pub severity: SecurityFindingSeverity,
+    /// Closed confidence assigned by the Provider.
+    pub confidence: SecurityFindingConfidence,
+    /// Number of matches attributed to the rule.
+    pub count: u32,
+}
+
+impl From<&SecurityFinding> for LedgerRuleFinding {
+    fn from(finding: &SecurityFinding) -> Self {
+        Self {
+            rule_id_digest: security_rule_id_digest(&finding.rule_id),
+            category: finding.category,
+            severity: finding.severity,
+            confidence: finding.confidence,
+            count: finding.count,
+        }
+    }
+}
+
+/// Returns the stable Ledger identity for a transient security rule ID.
+///
+/// The digest is SHA-256 over the exact UTF-8 bytes returned by
+/// [`SecurityRuleId::as_str`].
+#[must_use]
+pub fn security_rule_id_digest(rule_id: &SecurityRuleId) -> Digest {
+    let hex = format!("{:x}", Sha256::digest(rule_id.as_str().as_bytes()));
+    // LowerHex over SHA-256's fixed 32 bytes always produces canonical text.
+    Digest::parse(hex).expect("SHA-256 output is a canonical digest")
+}
+
 /// Content-free record of one Observe step that produced facts.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LedgerObservation {
     /// Capability that produced these facts.
     pub capability: VersionedSchema,
     /// Highest-level conclusion the implementation reported.
     pub verdict: SecurityInspectionVerdict,
     /// Per-rule counts. A finding never carries the value it matched.
-    pub findings: Vec<SecurityFinding>,
+    pub findings: Vec<LedgerRuleFinding>,
     /// Bytes the implementation reported inspecting.
     pub scanned_bytes: u64,
     /// Whether the implementation stopped before the whole artifact.
@@ -222,6 +292,7 @@ pub struct LedgerObservation {
 /// A gap is itself a recorded fact. Without it a reader cannot distinguish
 /// "nothing was found" from "nobody looked".
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LedgerObservationGap {
     /// Capability the plan named but could not complete.
     pub capability: VersionedSchema,
@@ -238,14 +309,15 @@ pub struct LedgerObservationGap {
 /// carries model-visible text, so the Ledger stores its digest and bounded
 /// shape metadata and leaves the bytes to the Artifact store.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LedgerProjectionOutcome {
     /// Whether the Provider offered a candidate at all.
     pub candidate_offered: bool,
-    /// Media type the candidate declared, when one was offered.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub media_type: Option<BoundedName>,
-    /// Ordered transformation names the Provider applied.
-    pub transform_chain: Vec<BoundedName>,
+    /// Number of transformations the Provider declared.
+    ///
+    /// Transformation names are Provider-controlled text, so the durable
+    /// projection records only their bounded cardinality.
+    pub transform_count: u64,
     /// Recoverability guarantee the candidate declared, when one was offered.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reversibility: Option<ContextReversibility>,
@@ -260,6 +332,7 @@ pub struct LedgerProjectionOutcome {
 /// which planned Capabilities produced nothing and why, and what the Advise
 /// step offered. The tool response never appears.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PostToolUsePlanBody {
     /// Core identity allocated to the immutable source artifact.
     pub source_artifact_id: ArtifactId,
@@ -276,14 +349,15 @@ pub struct PostToolUsePlanBody {
 /// Body of a [`LedgerEventKind::PreToolUseGate`] record.
 ///
 /// The gate decision is recorded without the command that triggered it.
-/// `reasons` carries [`SecurityRuleId`] values, whose character set is narrow
-/// enough that naming a rule cannot echo the argument it refused.
+/// `reasons` carries only stable digests of transient rule IDs, so a Provider
+/// cannot use a rule label as a durable text channel.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PreToolUseGateBody {
     /// Gate outcome Core required the Agent Environment to honour.
     pub gate: ToolCallGate,
-    /// Rationale codes safe for operator presentation.
-    pub reasons: Vec<SecurityRuleId>,
+    /// SHA-256 identities of transient Provider rationale codes.
+    pub reasons: Vec<Digest>,
     /// Why the gate resolved without an implementation verdict, when it did.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub degradation: Option<GateDegradation>,
@@ -327,6 +401,15 @@ mod tests {
     }
 
     #[test]
+    fn rule_id_digest_has_a_stable_utf8_contract() {
+        let rule_id = SecurityRuleId::parse("shell.dangerous_pattern").expect("rule ID parses");
+        assert_eq!(
+            security_rule_id_digest(&rule_id).as_str(),
+            "e2625abf9c98b0fad14078643eb69acfe725ec083556357a09250e862cd697e7"
+        );
+    }
+
+    #[test]
     fn body_ref_tag_is_stable_and_digests_match() {
         let projection = LedgerBodyRef::Projection {
             id: LedgerProjectionId::new(),
@@ -351,6 +434,11 @@ mod tests {
             timestamp_ms: 1_725_300_000_000,
             kind: LedgerEventKind::PreToolUseGate,
             schema: "aw.ledger.pre_tool_use_gate/v1".to_owned(),
+            scope: Some(LedgerTraceScope {
+                attempt_id: Some(AttemptId::new()),
+                tool_use_id: None,
+                invocation_id: None,
+            }),
             parent: Some(LedgerParent {
                 id: LedgerEventId::new(),
                 digest: Digest::parse(

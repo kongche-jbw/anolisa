@@ -8,8 +8,8 @@ use aw_contracts::context::ContextProjectionCandidate;
 use aw_contracts::error::ContractError;
 use aw_contracts::ids::ArtifactId;
 use aw_contracts::ledger::{
-    LedgerInvocationRef, LedgerObservation, LedgerObservationGap, LedgerProjectionOutcome,
-    PostToolUsePlanBody, PreToolUseGateBody,
+    security_rule_id_digest, LedgerInvocationRef, LedgerObservation, LedgerObservationGap,
+    LedgerProjectionOutcome, LedgerRuleFinding, PostToolUsePlanBody, PreToolUseGateBody,
 };
 use aw_contracts::provider::{ProviderReceipt, VersionedSchema};
 use aw_contracts::security::{
@@ -140,10 +140,11 @@ impl ToolResultOutcome {
 
     /// Projects this outcome into the content-free Ledger record body.
     ///
-    /// The Advise candidate is reduced to its shape metadata. A candidate
-    /// carries the model-visible representation itself, so copying it into a
-    /// Ledger record would defeat content-freedom; the invocation's
-    /// `output_digest` is what lets a reader prove which candidate was meant.
+    /// The Advise candidate is reduced to closed metadata and a count. A
+    /// candidate carries model-visible representation and Provider-controlled
+    /// labels, so copying either into a Ledger record would defeat
+    /// content-freedom. Invocation schema and digests identify the exact
+    /// transient exchange without retaining those bytes.
     #[must_use]
     pub fn ledger_body(&self) -> PostToolUsePlanBody {
         PostToolUsePlanBody {
@@ -155,7 +156,11 @@ impl ToolResultOutcome {
                 .map(|observation| LedgerObservation {
                     capability: observation.capability.clone(),
                     verdict: observation.verdict,
-                    findings: observation.findings.clone(),
+                    findings: observation
+                        .findings
+                        .iter()
+                        .map(LedgerRuleFinding::from)
+                        .collect(),
                     scanned_bytes: observation.scanned_bytes,
                     truncated: observation.truncated,
                     language_detected: observation.language_detected,
@@ -173,17 +178,11 @@ impl ToolResultOutcome {
                 .collect(),
             projection: LedgerProjectionOutcome {
                 candidate_offered: self.projection.candidate.is_some(),
-                media_type: self
+                transform_count: self
                     .projection
                     .candidate
                     .as_ref()
-                    .map(|candidate| candidate.media_type.clone()),
-                transform_chain: self
-                    .projection
-                    .candidate
-                    .as_ref()
-                    .map(|candidate| candidate.transform_chain.clone())
-                    .unwrap_or_default(),
+                    .map_or(0, |candidate| candidate.transform_chain.len() as u64),
                 reversibility: self
                     .projection
                     .candidate
@@ -220,14 +219,14 @@ pub struct ToolCallDecision {
 impl ToolCallDecision {
     /// Projects this decision into the content-free Ledger record body.
     ///
-    /// Recording a refusal is the point of this record, so the rationale codes
-    /// travel with it. They are [`SecurityRuleId`] values, whose character set
-    /// cannot carry the command text that triggered the gate.
+    /// Recording a refusal is the point of this record, so stable digests of
+    /// its transient rationale codes travel with it. The Provider-controlled
+    /// labels themselves remain on the immediate decision path only.
     #[must_use]
     pub fn ledger_body(&self) -> PreToolUseGateBody {
         PreToolUseGateBody {
             gate: self.gate,
-            reasons: self.reasons.clone(),
+            reasons: self.reasons.iter().map(security_rule_id_digest).collect(),
             degradation: self.degradation,
             invocation: self.receipt.as_ref().map(LedgerInvocationRef::from_receipt),
         }

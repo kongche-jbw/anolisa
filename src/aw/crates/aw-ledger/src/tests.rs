@@ -41,6 +41,7 @@ pub fn candidate(tip: &ChainTip<'_>, body: Value) -> CandidateRecord {
             timestamp_ms: 1_725_300_000_000 + sequence * 1_000,
             kind: LedgerEventKind::EvidenceStored,
             schema: TEST_SCHEMA.to_owned(),
+            scope: None,
             parent,
             body_digest,
         },

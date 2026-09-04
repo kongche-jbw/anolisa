@@ -16,15 +16,16 @@ use crate::store::{kind_to_str, LedgerStore, StoreError};
 
 /// One record read back from the store.
 ///
-/// Carries the header the writer committed to, the trace scope it
-/// recorded alongside, and the body and record digests. The body bytes
-/// are intentionally absent — a reader that needs them calls
+/// Carries indexed copies of the committed header fields and trace scope,
+/// plus the record digest. Call [`crate::verify_chain`] before treating those
+/// copies as authoritative. The body bytes are intentionally absent — a
+/// reader that needs them calls
 /// [`LedgerStore::record_body_bytes`] with the record ID.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredRecord {
-    /// The persisted header.
+    /// Header reconstructed from denormalized query columns.
     pub header: LedgerRecordHeader,
-    /// Trace scope, if one was written.
+    /// Scope index copy, also reflected in [`Self::header`].
     pub scope: Option<LedgerTraceScope>,
     /// Digest of the canonical record bytes — the value the next record's
     /// parent link commits to.
@@ -41,7 +42,7 @@ impl LedgerStore {
         let mut stmt = self.conn().prepare(
             "SELECT r.id, r.sequence, r.timestamp_ms, r.kind, r.schema,
                     r.parent_id, r.parent_digest, r.body_digest, r.record_digest,
-                    s.attempt_id, s.tool_use_id, s.invocation_id
+                    s.record_id, s.attempt_id, s.tool_use_id, s.invocation_id
              FROM ledger_records r
              LEFT JOIN ledger_scope s ON s.record_id = r.id
              WHERE r.id = ?1",
@@ -62,7 +63,7 @@ impl LedgerStore {
         let mut stmt = self.conn().prepare(
             "SELECT r.id, r.sequence, r.timestamp_ms, r.kind, r.schema,
                     r.parent_id, r.parent_digest, r.body_digest, r.record_digest,
-                    s.attempt_id, s.tool_use_id, s.invocation_id
+                    s.record_id, s.attempt_id, s.tool_use_id, s.invocation_id
              FROM ledger_records r
              LEFT JOIN ledger_scope s ON s.record_id = r.id
              WHERE r.kind = ?1
@@ -86,7 +87,7 @@ impl LedgerStore {
         let mut stmt = self.conn().prepare(
             "SELECT r.id, r.sequence, r.timestamp_ms, r.kind, r.schema,
                     r.parent_id, r.parent_digest, r.body_digest, r.record_digest,
-                    s.attempt_id, s.tool_use_id, s.invocation_id
+                    s.record_id, s.attempt_id, s.tool_use_id, s.invocation_id
              FROM ledger_records r
              INNER JOIN ledger_scope s ON s.record_id = r.id
              WHERE s.attempt_id = ?1
@@ -125,9 +126,10 @@ fn row_to_stored_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredRecor
     let parent_digest: Option<String> = row.get(6)?;
     let body_digest_str: String = row.get(7)?;
     let record_digest_str: String = row.get(8)?;
-    let attempt_id: Option<String> = row.get(9)?;
-    let tool_use_id: Option<String> = row.get(10)?;
-    let invocation_id: Option<String> = row.get(11)?;
+    let scope_record_id: Option<String> = row.get(9)?;
+    let attempt_id: Option<String> = row.get(10)?;
+    let tool_use_id: Option<String> = row.get(11)?;
+    let invocation_id: Option<String> = row.get(12)?;
 
     let kind = parse_kind(&kind_str).expect("stored kind strings are canonical by construction");
     let body_digest =
@@ -140,23 +142,20 @@ fn row_to_stored_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredRecor
         digest: Digest::parse(pd).expect("stored parent digests are canonical by construction"),
     });
 
-    let scope = match (attempt_id, tool_use_id, invocation_id) {
-        (None, None, None) => None,
-        (a, t, i) => Some(LedgerTraceScope {
-            attempt_id: a.map(|s| {
-                aw_contracts::ids::AttemptId::parse(s)
-                    .expect("stored attempt IDs are canonical by construction")
-            }),
-            tool_use_id: t.map(|s| {
-                aw_contracts::ids::ToolUseId::parse(s)
-                    .expect("stored tool use IDs are canonical by construction")
-            }),
-            invocation_id: i.map(|s| {
-                aw_contracts::ids::ProviderInvocationId::parse(s)
-                    .expect("stored invocation IDs are canonical by construction")
-            }),
+    let scope = scope_record_id.map(|_| LedgerTraceScope {
+        attempt_id: attempt_id.map(|s| {
+            aw_contracts::ids::AttemptId::parse(s)
+                .expect("stored attempt IDs are canonical by construction")
         }),
-    };
+        tool_use_id: tool_use_id.map(|s| {
+            aw_contracts::ids::ToolUseId::parse(s)
+                .expect("stored tool use IDs are canonical by construction")
+        }),
+        invocation_id: invocation_id.map(|s| {
+            aw_contracts::ids::ProviderInvocationId::parse(s)
+                .expect("stored invocation IDs are canonical by construction")
+        }),
+    });
 
     Ok(StoredRecord {
         header: LedgerRecordHeader {
@@ -165,6 +164,7 @@ fn row_to_stored_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredRecor
             timestamp_ms: timestamp_ms as u64,
             kind,
             schema,
+            scope: scope.clone(),
             parent,
             body_digest,
         },
@@ -208,7 +208,7 @@ mod tests {
             let tip = chain.tip();
             let candidate = crate::tests::candidate(&tip, body);
             let admitted = crate::admit(&tip, candidate).expect("admit");
-            store.append(&admitted, None).expect("append");
+            store.append(&admitted).expect("append");
             chain.extend(&admitted);
             records.push(admitted);
         }
@@ -275,14 +275,15 @@ mod tests {
         // First record: scoped to `attempt`.
         let body = json!({"evidence": {"id": "evd_00000000-0000-0000-0000-000000000000", "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}});
         let tip = chain.tip();
-        let candidate = crate::tests::candidate(&tip, body);
-        let admitted = crate::admit(&tip, candidate).expect("admit");
         let scope = LedgerTraceScope {
             attempt_id: Some(attempt.clone()),
             tool_use_id: Some(tool_use),
             invocation_id: None,
         };
-        store.append(&admitted, Some(&scope)).expect("append");
+        let mut candidate = crate::tests::candidate(&tip, body);
+        candidate.header.scope = Some(scope);
+        let admitted = crate::admit(&tip, candidate).expect("admit");
+        store.append(&admitted).expect("append");
         chain.extend(&admitted);
 
         // Second record: no scope.
@@ -290,7 +291,7 @@ mod tests {
         let tip2 = chain.tip();
         let candidate2 = crate::tests::candidate(&tip2, body2);
         let admitted2 = crate::admit(&tip2, candidate2).expect("admit");
-        store.append(&admitted2, None).expect("append");
+        store.append(&admitted2).expect("append");
         chain.extend(&admitted2);
 
         let results = store.events_for_attempt(&attempt).expect("query succeeds");

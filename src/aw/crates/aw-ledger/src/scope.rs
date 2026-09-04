@@ -1,8 +1,8 @@
 //! Ledger trace scope indexing.
 //!
-//! Each record carries an optional trace scope used for bounded
-//! queries. The scope is stored in a side table so the main records
-//! table stays narrow for hash-chain recomputation.
+//! Each canonical record header commits to an optional trace scope. The same
+//! values are copied into a side table for bounded queries; verification treats
+//! the committed header as authoritative and rejects divergence.
 
 use aw_contracts::ledger::LedgerTraceScope;
 use rusqlite::Transaction;

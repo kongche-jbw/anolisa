@@ -1,8 +1,8 @@
 //! Admission invariant tests.
 
 use aw_contracts::common::Digest;
-use aw_contracts::ids::LedgerEventId;
-use aw_contracts::ledger::{LedgerEventKind, LedgerParent};
+use aw_contracts::ids::{AttemptId, LedgerEventId};
+use aw_contracts::ledger::{LedgerEventKind, LedgerParent, LedgerTraceScope};
 use serde_json::json;
 
 use crate::{admit, AdmissionError, Chain};
@@ -167,6 +167,26 @@ fn admitted_record_carries_canonical_bytes_and_digests() {
     assert_eq!(admitted.body_digest, admitted.header.body_digest);
     // Record digest commits to the record bytes (header + body).
     assert_ne!(admitted.body_digest, admitted.record_digest);
+}
+
+#[test]
+fn trace_scope_changes_the_canonical_record_commitment() {
+    let chain = Chain::new();
+    let tip = chain.tip();
+    let unscoped = candidate(&tip, clean_body());
+    let mut scoped = unscoped.clone();
+    scoped.header.scope = Some(LedgerTraceScope {
+        attempt_id: Some(AttemptId::new()),
+        tool_use_id: None,
+        invocation_id: None,
+    });
+
+    let unscoped = admit(&tip, unscoped).expect("unscoped record admitted");
+    let scoped = admit(&tip, scoped).expect("scoped record admitted");
+    assert_ne!(unscoped.record_digest, scoped.record_digest);
+    assert!(String::from_utf8(scoped.record_canonical)
+        .expect("canonical JSON is UTF-8")
+        .contains("\"scope\""));
 }
 
 #[test]

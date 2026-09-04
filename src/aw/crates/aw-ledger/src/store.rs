@@ -10,7 +10,6 @@
 use std::path::{Path, PathBuf};
 
 use aw_contracts::ids::LedgerEventId;
-use aw_contracts::ledger::LedgerTraceScope;
 use rusqlite::Connection;
 use thiserror::Error;
 
@@ -68,18 +67,15 @@ impl LedgerStore {
     ///
     /// # Errors
     ///
-    /// Returns [`StoreError::Database`] when the insert or scope write
+    /// The scope index is derived only from the committed record header.
+    /// Returns [`StoreError::Database`] when the insert or derived scope write
     /// fails (including duplicate-sequence rejection).
-    pub fn append(
-        &mut self,
-        record: &AdmittedRecord,
-        scope: Option<&LedgerTraceScope>,
-    ) -> Result<(), StoreError> {
+    pub(crate) fn append(&mut self, record: &AdmittedRecord) -> Result<(), StoreError> {
         let tx = self
             .conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         insert_record(&tx, record)?;
-        scope::insert(&tx, record.header.id.as_str(), scope)?;
+        scope::insert(&tx, record.header.id.as_str(), record.header.scope.as_ref())?;
         tx.commit()?;
         self.chain.extend(record);
         Ok(())
@@ -128,6 +124,7 @@ fn load_chain_tip(conn: &Connection) -> Result<Chain, StoreError> {
                 timestamp_ms: 0,
                 kind: aw_contracts::ledger::LedgerEventKind::EvidenceStored,
                 schema: String::new(),
+                scope: None,
                 parent: None,
                 body_digest: aw_contracts::common::Digest::parse(
                     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -214,7 +211,7 @@ mod tests {
         let mut store = LedgerStore::open(dir.path()).expect("store opens");
         let mut chain = Chain::new();
         let record = admit_one(&mut chain, clean_body());
-        store.append(&record, None).expect("append succeeds");
+        store.append(&record).expect("append succeeds");
 
         let tip = store.tip();
         assert_eq!(tip.sequence, 0);
@@ -231,7 +228,7 @@ mod tests {
             let mut store = LedgerStore::open(dir.path()).expect("store opens");
             let mut chain = Chain::new();
             let record = admit_one(&mut chain, clean_body());
-            store.append(&record, None).expect("append succeeds");
+            store.append(&record).expect("append succeeds");
             record_id = record.header.id.clone();
             record_digest = record.record_digest.clone();
         }
@@ -250,9 +247,9 @@ mod tests {
         {
             let mut store = LedgerStore::open(dir.path()).expect("store opens");
             let r0 = admit_one(&mut chain, clean_body());
-            store.append(&r0, None).expect("first append");
+            store.append(&r0).expect("first append");
             let r1 = admit_one(&mut chain, clean_body());
-            store.append(&r1, None).expect("second append");
+            store.append(&r1).expect("second append");
         }
 
         let store = LedgerStore::open(dir.path()).expect("store reopens");
@@ -265,22 +262,20 @@ mod tests {
         let mut store = LedgerStore::open(dir.path()).expect("store opens");
         let mut chain = Chain::new();
         let record = admit_one(&mut chain, clean_body());
-        store.append(&record, None).expect("first append");
+        store.append(&record).expect("first append");
 
         // Build another record at the same sequence using a fresh chain
         // that still thinks it is at genesis.
         let mut duplicate_chain = Chain::new();
         let duplicate = admit_one(&mut duplicate_chain, clean_body());
-        assert!(store.append(&duplicate, None).is_err());
+        assert!(store.append(&duplicate).is_err());
     }
 
     #[test]
     fn scope_row_is_written_and_queryable() {
         let dir = tempdir().expect("temp dir");
         let mut store = LedgerStore::open(dir.path()).expect("store opens");
-        let mut chain = Chain::new();
-        let record = admit_one(&mut chain, clean_body());
-
+        let chain = Chain::new();
         let attempt_id = AttemptId::new();
         let tool_use_id = ToolUseId::new();
         let scope = LedgerTraceScope {
@@ -288,9 +283,11 @@ mod tests {
             tool_use_id: Some(tool_use_id.clone()),
             invocation_id: None,
         };
-        store
-            .append(&record, Some(&scope))
-            .expect("append with scope");
+        let tip = chain.tip();
+        let mut candidate = crate::tests::candidate(&tip, clean_body());
+        candidate.header.scope = Some(scope.clone());
+        let record = crate::admit(&tip, candidate).expect("admission succeeds");
+        store.append(&record).expect("append with scope");
 
         let found: String = store
             .conn
@@ -311,7 +308,7 @@ mod tests {
         let record = admit_one(&mut chain, clean_body());
         let expected_canonical = record.record_canonical.clone();
         let expected_digest = record.record_digest.as_str().to_owned();
-        store.append(&record, None).expect("append succeeds");
+        store.append(&record).expect("append succeeds");
 
         let (stored_canonical, stored_digest): (Vec<u8>, String) = store
             .conn

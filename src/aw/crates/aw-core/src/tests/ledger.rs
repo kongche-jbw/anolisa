@@ -1,49 +1,28 @@
 //! Ledger record projections for both Core boundaries.
 //!
 //! These tests run real Provider fixtures, project the resulting outcome or
-//! decision into its Ledger body, and push that body through Ledger admission.
-//! Admission is what enforces content-freedom, so a body that survives it is
-//! proof the projection dropped every content-bearing field — not just that
-//! the struct compiles.
+//! decision into its Ledger body, and push that body through the typed writer
+//! and Ledger admission. Surviving both boundaries proves that the projection
+//! has the claimed shape and dropped content-bearing fields.
 
-use aw_contracts::ids::{LedgerEventId, ToolUseId, TurnId};
+use aw_contracts::ids::{ToolUseId, TurnId};
 use aw_contracts::ledger::{
-    LedgerEventKind, LedgerRecordHeader, LEDGER_POST_TOOL_USE_PLAN_SCHEMA,
-    LEDGER_PRE_TOOL_USE_GATE_SCHEMA,
+    LedgerEventKind, LEDGER_POST_TOOL_USE_PLAN_SCHEMA, LEDGER_PRE_TOOL_USE_GATE_SCHEMA,
 };
 use aw_contracts::security::{ObservationGapReason, ToolCallGate};
-use aw_ledger::{admit, AdmissionError, CandidateRecord, Chain};
+use aw_ledger::{LedgerSink, LedgerStore, SinkError};
 use serde_json::Value;
 
 use super::providers::FixtureKind;
 use super::{context_spec, core_fixture, pending_call, submission, CapabilityPreferences};
 
-/// Admits `body` as a genesis record and returns the admission result.
-///
-/// The header mirrors what a real writer builds: correct sequence, no parent,
-/// and a body digest over the canonical bytes.
-fn admit_body(kind: LedgerEventKind, schema: &str, body: Value) -> Result<(), AdmissionError> {
-    use aw_contracts::canonical::canonical_json_v1_bytes;
-    use sha2::{Digest as _, Sha256};
-
-    let canonical = canonical_json_v1_bytes(&body).expect("body encodes canonically");
-    let digest_hex = format!("{:x}", Sha256::digest(&canonical));
-    let body_digest = aw_contracts::common::Digest::parse(digest_hex).expect("sha2 output parses");
-
-    let chain = Chain::new();
-    let candidate = CandidateRecord {
-        header: LedgerRecordHeader {
-            id: LedgerEventId::new(),
-            sequence: 0,
-            timestamp_ms: 1_725_300_000_000,
-            kind,
-            schema: schema.to_owned(),
-            parent: None,
-            body_digest,
-        },
-        body,
-    };
-    admit(&chain.tip(), candidate).map(|_| ())
+/// Writes `body` as a genesis record through the production sink boundary.
+fn admit_body(kind: LedgerEventKind, schema: &str, body: Value) -> Result<(), SinkError> {
+    let dir = tempfile::tempdir().expect("temporary Ledger directory");
+    let store = LedgerStore::open(dir.path()).expect("Ledger store opens");
+    LedgerSink::new(store)
+        .record(kind, schema, body, None)
+        .map(|_| ())
 }
 
 #[test]
@@ -142,14 +121,81 @@ fn the_plan_body_drops_the_candidate_representation() {
         "no content-bearing key may survive the projection: {encoded}"
     );
 
-    // The bounded shape metadata is what a reader gets instead.
+    // Only closed metadata and cardinality survive.
     assert!(body.projection.candidate_offered);
     assert_eq!(
-        body.projection.media_type.as_ref(),
-        Some(&candidate.media_type)
+        body.projection.transform_count,
+        candidate.transform_chain.len() as u64
     );
-    assert_eq!(body.projection.transform_chain, candidate.transform_chain);
     assert!(body.projection.invocation.output_digest.is_some());
+    assert!(!encoded.contains("\"media_type\""));
+    assert!(!encoded.contains("\"transform_chain\""));
+    for transform in &candidate.transform_chain {
+        assert!(
+            !encoded.contains(transform.as_str()),
+            "Provider-controlled transform names must remain transient"
+        );
+    }
+}
+
+#[test]
+fn observation_rule_labels_are_replaced_with_stable_digests() {
+    use sha2::{Digest as _, Sha256};
+
+    let (_packages, mut core) = core_fixture(&[
+        ("projection-a", FixtureKind::Projection),
+        ("scanner-a", FixtureKind::ContentInspect),
+    ]);
+    let context = core
+        .establish_execution_context(context_spec(None))
+        .expect("session scope is valid");
+    let outcome = core
+        .observe_tool_result(
+            &context,
+            TurnId::new(),
+            ToolUseId::new(),
+            submission("export AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI"),
+            &CapabilityPreferences::default(),
+        )
+        .expect("the plan completes");
+    let transient = outcome.observations[0].findings[0].rule_id.as_str();
+    let expected_digest = format!("{:x}", Sha256::digest(transient.as_bytes()));
+
+    let body = outcome.ledger_body();
+    assert_eq!(
+        body.observations[0].findings[0].rule_id_digest.as_str(),
+        expected_digest
+    );
+    let encoded = serde_json::to_string(&body).expect("body serializes");
+    assert!(!encoded.contains(transient));
+    assert!(!encoded.contains("\"rule_id\""));
+}
+
+#[test]
+fn writer_rejects_unknown_nested_projection_fields() {
+    let (_packages, mut core) = core_fixture(&[("projection-a", FixtureKind::Projection)]);
+    let context = core
+        .establish_execution_context(context_spec(None))
+        .expect("session scope is valid");
+    let outcome = core
+        .observe_tool_result(
+            &context,
+            TurnId::new(),
+            ToolUseId::new(),
+            submission("plain output"),
+            &CapabilityPreferences::default(),
+        )
+        .expect("the plan completes");
+    let mut value = serde_json::to_value(outcome.ledger_body()).expect("body serializes");
+    value["projection"]["provider_note"] = serde_json::json!("arbitrary text");
+
+    let error = admit_body(
+        LedgerEventKind::PostToolUsePlan,
+        LEDGER_POST_TOOL_USE_PLAN_SCHEMA,
+        value,
+    )
+    .unwrap_err();
+    assert!(matches!(error, SinkError::InvalidBody { .. }));
 }
 
 #[test]
@@ -206,6 +252,11 @@ fn a_blocked_gate_body_survives_ledger_admission() {
         )
         .expect("the gate resolves");
     assert_eq!(decision.gate, ToolCallGate::Block);
+    let transient_reason = decision.reasons[0].as_str();
+    let expected_reason_digest = {
+        use sha2::{Digest as _, Sha256};
+        format!("{:x}", Sha256::digest(transient_reason.as_bytes()))
+    };
 
     let body = decision.ledger_body();
     assert_eq!(body.gate, ToolCallGate::Block);
@@ -215,9 +266,14 @@ fn a_blocked_gate_body_survives_ledger_admission() {
     );
 
     let encoded = serde_json::to_string(&body).expect("body serializes");
+    assert_eq!(body.reasons[0].as_str(), expected_reason_digest);
     assert!(
         !encoded.contains("evil.example.com"),
         "the gate body must not echo the command it refused: {encoded}"
+    );
+    assert!(
+        !encoded.contains(transient_reason),
+        "the durable gate must not retain Provider-controlled rationale labels"
     );
 
     let value = serde_json::to_value(&body).expect("body serializes");
@@ -287,6 +343,11 @@ fn the_gate_body_references_the_invocation_that_produced_the_verdict() {
     let invocation = body.invocation.as_ref().expect("the reference is present");
     assert_eq!(invocation.invocation_id, receipt.invocation_id);
     assert_eq!(invocation.provider_id, receipt.provider_id);
+    assert_eq!(invocation.manifest_digest, receipt.manifest_digest);
+    assert_eq!(invocation.input_schema, receipt.input_schema);
+    assert_eq!(invocation.input_digest, receipt.input_digest);
+    assert_eq!(invocation.output_schema, receipt.output_schema);
+    assert_eq!(invocation.output_digest, receipt.output_digest);
     assert_eq!(invocation.disposition, receipt.disposition);
 }
 
