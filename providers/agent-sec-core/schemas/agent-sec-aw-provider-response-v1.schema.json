@@ -2,100 +2,374 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://agentic-os.sh/schemas/agent-sec-core/aw-provider/response/v1",
   "title": "agent-sec-cli aw-provider native response v1",
-  "description": "One response written to standard output. findings_total and scanned_bytes are required in every disposition because the Provider Host resolves every declared meter pointer regardless of disposition. No field carries matched content.",
-  "type": "object",
-  "additionalProperties": false,
-  "required": [
-    "protocol_version",
-    "disposition",
-    "findings_total",
-    "scanned_bytes",
-    "truncated"
+  "description": "One operation- and disposition-discriminated response. Every branch echoes the operation and carries only content-free metadata.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/content_completed"
+    },
+    {
+      "$ref": "#/$defs/code_completed"
+    },
+    {
+      "$ref": "#/$defs/command_completed"
+    },
+    {
+      "$ref": "#/$defs/skipped"
+    },
+    {
+      "$ref": "#/$defs/error"
+    }
   ],
-  "properties": {
-    "protocol_version": {
-      "const": 1
-    },
-    "disposition": {
-      "enum": ["completed", "skipped", "error"]
-    },
-    "findings_total": {
-      "type": "integer",
-      "minimum": 0
-    },
-    "scanned_bytes": {
-      "type": "integer",
-      "minimum": 0
-    },
-    "truncated": {
-      "type": "boolean"
-    },
-    "verdict": {
-      "enum": [
-        "clean",
-        "suspicious",
-        "sensitive",
-        "allow",
-        "warn",
-        "deny"
-      ]
-    },
-    "findings": {
-      "type": "array",
-      "maxItems": 64,
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "rule_id",
-          "category",
-          "severity",
-          "confidence",
-          "count"
-        ],
-        "properties": {
-          "rule_id": {
-            "type": "string",
-            "pattern": "^[a-z0-9._-]{1,64}$"
-          },
-          "category": {
-            "enum": [
-              "secret",
-              "personal_data",
-              "credential",
-              "dangerous_pattern",
-              "obfuscation",
-              "other"
-            ]
-          },
-          "severity": {
-            "enum": ["info", "low", "medium", "high", "critical"]
-          },
-          "confidence": {
-            "enum": ["low", "medium", "high"]
-          },
-          "count": {
-            "type": "integer",
-            "minimum": 0
-          }
+  "$defs": {
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rule_id", "category", "severity", "confidence", "count"],
+      "properties": {
+        "rule_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9._-]{1,64}$"
+        },
+        "category": {
+          "enum": [
+            "secret",
+            "personal_data",
+            "credential",
+            "dangerous_pattern",
+            "obfuscation",
+            "other"
+          ]
+        },
+        "severity": {
+          "enum": ["info", "low", "medium", "high", "critical"]
+        },
+        "confidence": {
+          "enum": ["low", "medium", "high"]
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1
         }
       }
     },
-    "reasons": {
-      "type": "array",
-      "maxItems": 32,
-      "items": {
-        "type": "string",
-        "pattern": "^[a-z0-9._-]{1,64}$"
+    "content_completed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol_version",
+        "operation",
+        "disposition",
+        "findings_total",
+        "scanned_bytes",
+        "truncated",
+        "verdict",
+        "findings",
+        "engine"
+      ],
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "operation": {
+          "const": "content_inspect"
+        },
+        "disposition": {
+          "const": "completed"
+        },
+        "findings_total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "scanned_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "verdict": {
+          "enum": ["clean", "suspicious", "sensitive"]
+        },
+        "findings": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/finding"
+          }
+        },
+        "engine": {
+          "const": "pii-regex"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "verdict": {
+                "const": "clean"
+              }
+            },
+            "required": ["verdict"]
+          },
+          "then": {
+            "properties": {
+              "findings": {
+                "maxItems": 0
+              },
+              "truncated": {
+                "const": false
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "findings": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "code_completed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol_version",
+        "operation",
+        "disposition",
+        "findings_total",
+        "scanned_bytes",
+        "truncated",
+        "verdict",
+        "findings",
+        "language_detected",
+        "engine"
+      ],
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "operation": {
+          "const": "code_inspect"
+        },
+        "disposition": {
+          "const": "completed"
+        },
+        "findings_total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "scanned_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "verdict": {
+          "enum": ["clean", "suspicious", "sensitive"]
+        },
+        "findings": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/finding"
+          }
+        },
+        "language_detected": {
+          "enum": ["bash", "python", "mixed"]
+        },
+        "engine": {
+          "const": "code-regex"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "verdict": {
+                "const": "clean"
+              }
+            },
+            "required": ["verdict"]
+          },
+          "then": {
+            "properties": {
+              "findings": {
+                "maxItems": 0
+              },
+              "truncated": {
+                "const": false
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "findings": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "command_completed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol_version",
+        "operation",
+        "disposition",
+        "findings_total",
+        "scanned_bytes",
+        "verdict",
+        "findings",
+        "reasons",
+        "language_detected",
+        "engine"
+      ],
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "operation": {
+          "const": "command_inspect"
+        },
+        "disposition": {
+          "const": "completed"
+        },
+        "findings_total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "scanned_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "verdict": {
+          "enum": ["allow", "warn", "deny"]
+        },
+        "findings": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/finding"
+          }
+        },
+        "reasons": {
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9._-]{1,64}$"
+          }
+        },
+        "language_detected": {
+          "enum": ["bash", "python", "mixed"]
+        },
+        "engine": {
+          "const": "code-regex"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "verdict": {
+                "const": "allow"
+              }
+            },
+            "required": ["verdict"]
+          },
+          "then": {
+            "properties": {
+              "findings": {
+                "maxItems": 0
+              },
+              "reasons": {
+                "maxItems": 0
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "findings": {
+                "minItems": 1
+              },
+              "reasons": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "skipped": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol_version",
+        "operation",
+        "disposition",
+        "findings_total",
+        "scanned_bytes",
+        "skip_reason"
+      ],
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "operation": {
+          "enum": ["content_inspect", "code_inspect", "command_inspect"]
+        },
+        "disposition": {
+          "const": "skipped"
+        },
+        "findings_total": {
+          "const": 0
+        },
+        "scanned_bytes": {
+          "const": 0
+        },
+        "skip_reason": {
+          "const": "not_applicable"
+        }
       }
     },
-    "language_detected": {
-      "enum": ["bash", "python", "unknown"]
-    },
-    "engine": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 128
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol_version",
+        "operation",
+        "disposition",
+        "findings_total",
+        "scanned_bytes",
+        "error_code"
+      ],
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "operation": {
+          "enum": ["content_inspect", "code_inspect", "command_inspect"]
+        },
+        "disposition": {
+          "const": "error"
+        },
+        "findings_total": {
+          "const": 0
+        },
+        "scanned_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "error_code": {
+          "const": "scanner_failed"
+        }
+      }
     }
   }
 }

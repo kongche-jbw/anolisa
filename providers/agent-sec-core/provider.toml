@@ -57,8 +57,8 @@ authority = "observe"
 scopes = ["agent_session", "turn", "tool_call"]
 input_contract = { schema = "security.content.inspect.input/v1", resource = "schemas/security-content-inspect-input-v1.schema.json", sha256 = "836231087cc27186746e4316e92dd842053b71ebc1e9f392d99f521adbdfcec4" }
 output_contract = { schema = "security.content.inspect.output/v1", resource = "schemas/security-content-inspect-output-v1.schema.json", sha256 = "4a7a0771081fba792a889d8a1182b7ade08e4a7864c93dd5badb46f259e83bd5" }
-native_input = { resource = "schemas/agent-sec-aw-provider-request-v1.schema.json", sha256 = "5c1c54e7e63966ca79236410fa2d3982769640429c62d57004091b1b9ce2b07b" }
-native_output = { resource = "schemas/agent-sec-aw-provider-response-v1.schema.json", sha256 = "a708fc35208d6c92232415be87ad292066f757c994a6e54167e75247ab617459" }
+native_input = { resource = "schemas/agent-sec-aw-provider-request-v1.schema.json", sha256 = "1ae16c55ddbe7c8242d9f44131889fe2937515021d03af36b74f0adb6b4672bd" }
+native_output = { resource = "schemas/agent-sec-aw-provider-response-v1.schema.json", sha256 = "39b5a901f2004b51f76cf914adfcf2e15c184a3ba964b674d9720790d1c356d2" }
 
 [capabilities.codec]
 kind = "json-map/v1"
@@ -96,6 +96,10 @@ on_unknown = "fail"
 completed = "produced"
 skipped = "bypassed"
 error = "failed"
+
+[[capabilities.codec.response.correlations]]
+request_pointer = "/operation"
+response_pointer = "/operation"
 
 [[capabilities.codec.response.output_fields]]
 target = "/inspection/verdict"
@@ -139,8 +143,8 @@ authority = "observe"
 scopes = ["agent_session", "turn", "tool_call"]
 input_contract = { schema = "security.code.inspect.input/v1", resource = "schemas/security-code-inspect-input-v1.schema.json", sha256 = "c5614f6e464a401621a7d8d1e1c8245edc504919ffde6c7c20d01799bd961c1e" }
 output_contract = { schema = "security.code.inspect.output/v1", resource = "schemas/security-code-inspect-output-v1.schema.json", sha256 = "d41ea55912472845fab80695e5bc78a2cb84996bccaf49264b8b4c99064308f7" }
-native_input = { resource = "schemas/agent-sec-aw-provider-request-v1.schema.json", sha256 = "5c1c54e7e63966ca79236410fa2d3982769640429c62d57004091b1b9ce2b07b" }
-native_output = { resource = "schemas/agent-sec-aw-provider-response-v1.schema.json", sha256 = "a708fc35208d6c92232415be87ad292066f757c994a6e54167e75247ab617459" }
+native_input = { resource = "schemas/agent-sec-aw-provider-request-v1.schema.json", sha256 = "1ae16c55ddbe7c8242d9f44131889fe2937515021d03af36b74f0adb6b4672bd" }
+native_output = { resource = "schemas/agent-sec-aw-provider-response-v1.schema.json", sha256 = "39b5a901f2004b51f76cf914adfcf2e15c184a3ba964b674d9720790d1c356d2" }
 
 [capabilities.codec]
 kind = "json-map/v1"
@@ -173,6 +177,10 @@ on_unknown = "fail"
 completed = "produced"
 skipped = "bypassed"
 error = "failed"
+
+[[capabilities.codec.response.correlations]]
+request_pointer = "/operation"
+response_pointer = "/operation"
 
 [[capabilities.codec.response.output_fields]]
 target = "/inspection/verdict"
@@ -221,8 +229,8 @@ authority = "mediate"
 scopes = ["turn", "tool_call"]
 input_contract = { schema = "security.command.inspect.input/v1", resource = "schemas/security-command-inspect-input-v1.schema.json", sha256 = "546e5fc3b98ecc800160a70e0ad8a3e02be6cee02dbe8fa6ff6987be8eb511de" }
 output_contract = { schema = "security.command.inspect.output/v1", resource = "schemas/security-command-inspect-output-v1.schema.json", sha256 = "3618b57a48d32f6d7f1dcbb3ac18594fa48196deaee60131649014345ea9c57b" }
-native_input = { resource = "schemas/agent-sec-aw-provider-request-v1.schema.json", sha256 = "5c1c54e7e63966ca79236410fa2d3982769640429c62d57004091b1b9ce2b07b" }
-native_output = { resource = "schemas/agent-sec-aw-provider-response-v1.schema.json", sha256 = "a708fc35208d6c92232415be87ad292066f757c994a6e54167e75247ab617459" }
+native_input = { resource = "schemas/agent-sec-aw-provider-request-v1.schema.json", sha256 = "1ae16c55ddbe7c8242d9f44131889fe2937515021d03af36b74f0adb6b4672bd" }
+native_output = { resource = "schemas/agent-sec-aw-provider-response-v1.schema.json", sha256 = "39b5a901f2004b51f76cf914adfcf2e15c184a3ba964b674d9720790d1c356d2" }
 
 [capabilities.codec]
 kind = "json-map/v1"
@@ -255,6 +263,10 @@ on_unknown = "fail"
 completed = "produced"
 skipped = "bypassed"
 error = "failed"
+
+[[capabilities.codec.response.correlations]]
+request_pointer = "/operation"
+response_pointer = "/operation"
 
 [[capabilities.codec.response.output_fields]]
 target = "/decision/verdict"

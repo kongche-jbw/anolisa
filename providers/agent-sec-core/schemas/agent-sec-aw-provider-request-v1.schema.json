@@ -2,30 +2,92 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://agentic-os.sh/schemas/agent-sec-core/aw-provider/request/v1",
   "title": "agent-sec-cli aw-provider native request v1",
-  "description": "One request read from standard input. All three Capabilities in this package share one executable, so the requested operation arrives here rather than on the command line.",
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["protocol_version", "operation", "content"],
-  "properties": {
-    "protocol_version": {
-      "const": 1
+  "description": "One operation-discriminated request read from standard input. Each branch admits only the fields used by that operation.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/content_inspect"
     },
-    "operation": {
-      "enum": ["content_inspect", "code_inspect", "command_inspect"]
+    {
+      "$ref": "#/$defs/code_inspect"
     },
-    "content": {
-      "type": "string"
+    {
+      "$ref": "#/$defs/command_inspect"
+    }
+  ],
+  "$defs": {
+    "content_inspect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol_version",
+        "operation",
+        "content",
+        "source",
+        "include_low_confidence"
+      ],
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "operation": {
+          "const": "content_inspect"
+        },
+        "content": {
+          "type": "string"
+        },
+        "source": {
+          "enum": [
+            "user_input",
+            "tool_input",
+            "tool_output",
+            "model_output",
+            "observability",
+            "manual",
+            "unknown"
+          ]
+        },
+        "include_low_confidence": {
+          "type": "boolean"
+        }
+      }
     },
-    "source": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 64
+    "code_inspect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol_version", "operation", "content", "language"],
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "operation": {
+          "const": "code_inspect"
+        },
+        "content": {
+          "type": "string"
+        },
+        "language": {
+          "enum": ["auto", "bash", "python"]
+        }
+      }
     },
-    "include_low_confidence": {
-      "type": "boolean"
-    },
-    "language": {
-      "enum": ["auto", "bash", "python"]
+    "command_inspect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol_version", "operation", "content", "language"],
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "operation": {
+          "const": "command_inspect"
+        },
+        "content": {
+          "type": "string"
+        },
+        "language": {
+          "enum": ["auto", "bash", "python"]
+        }
+      }
     }
   }
 }
