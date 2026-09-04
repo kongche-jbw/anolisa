@@ -6,6 +6,11 @@
 
 PR 3 已经把核心骨架搭出来，但仍处于源码 POC。它证明了通路能跑，也把主要职责拆开了。它还没有证明安装后会自动生效，也没有达到生产安全边界。
 
+本 PR 涉及 22 个物理 JSON Schema 文件，去除 Provider 包内的逐字副本后为 14 个逻辑
+Schema。公共语义与组件原生协议分层合理，可以继续以 Schema 为中心收敛设计，但不能只改
+JSON 文件；Rust/Python 类型、manifest mapping、真实 Provider 行为和 conformance tests
+必须同步冻结。逐份字段图与结论见 [Schema 图册](schema-reference_zh.md)。
+
 ## Provider 到底是什么
 
 这里的 Provider 指 Capability 的实现者。
@@ -77,6 +82,7 @@ AW 应放在这套主机基座之上，成为每次 Tool Call 的能力面。理
 - content-free 仍靠 key 黑名单
 - Provider 后台进程与 codec 内存预算没有完全收住
 - Agent Sec 的 auto 语言可能漏检 Python
+- Tokenless 与 AW 对 lossless 的定义不同，实际删字段结果可能被当成完全可逆
 - PostToolUse 外层失败会静默回到原始结果
 - CI 和真实二进制链路没有给出可信门禁
 - AW 没有正式安装与默认激活路径

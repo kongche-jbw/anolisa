@@ -42,6 +42,20 @@ COSH 在调用所有 Hook 前，会对整个 HookInput 做 secret redaction。AW
 
 最小修正有两个可选方向。V1 Contract 移除 auto 并要求 adapter 明确语言，或者实现可靠检测并增加 Python-only、Bash-only 与模糊输入回归。安全边界里不宜保留含糊的默认猜测。
 
+### P1 Tokenless 与 AW 对 lossless 的定义不一致
+
+AW canonical contract 把 `lossless` 定义为保留全部 source information。Tokenless native
+contract 的定义是没有移除 task-relevant information。Tokenless 的 JSON compressor 会
+删除 `debug`、`trace`、空值等字段，只要没有发生 truncation 仍可返回 lossless。manifest
+随后把该值原样映射到 AW candidate。
+
+AW Hook 当前又把非空且 `lossless` 作为采用候选的条件。结果是已经不可逆删除字段的内容
+可以满足 AW 的强保证并进入下一次模型上下文，Ledger 中的 reversibility 也会失真。
+
+最小修正应保留 AW 的强定义，由 Tokenless 的 AW Provider 模式把任何删字段、drop-null、
+drop-empty 或 cleanup change 标为 `unrecoverable`。只有能恢复全部 source information 的
+转换才能标为 `lossless`。需要新增跨组件测试，证明所有 lossless candidate 均可恢复原文。
+
 ### P1 Ledger 的哈希验证没有覆盖读路径使用的全部事实
 
 `verify_chain` 会重算 body digest、record digest 和 parent 链，但不会把 SQLite 的 `kind`、`schema`、`timestamp_ms` 等列与 `record_canonical` 内的 header 逐项比对。`ledger_scope` 也完全不在哈希承诺里。
@@ -166,7 +180,7 @@ PR 3 主要解决一次 Tool Call 内的能力面，包括规范化 Contracts、
 
 ## 建议的收敛顺序
 
-1. 修复 Hook 字节一致性、Agent Sec auto、Ledger 承诺范围、content-free 类型封闭、one-shot 清理和 codec 预算。
+1. 修复 Hook 字节一致性、Agent Sec auto、Tokenless lossless、Ledger 承诺范围、content-free 类型封闭、one-shot 清理和 codec 预算。
 2. 修复默认 AW 测试与 CI diff 范围，加入两个真实 Provider 的非 ignored Host/Core 链路。
 3. 明确本 PR 定位。若是 source POC，删去安装已完成的暗示。若是产品集成，统一 FHS root 并补齐 AW 安装激活闭环。
 4. 把 Graph 的失败隔离、Observe 有序结果、schema conformance 与 executable identity 作为下一阶段架构任务。

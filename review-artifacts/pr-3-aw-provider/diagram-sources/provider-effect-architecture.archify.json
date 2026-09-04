@@ -1,0 +1,217 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "AW Capability Provider 如何生效",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "visual_preset": "editorial",
+    "viewBox": [1360, 920],
+    "repository": {
+      "url": "https://github.com/casparant/anolisa",
+      "revision": "42d07649409ecd5bb023056b28545efbd9325ef2"
+    },
+    "views": [
+      {
+        "id": "runtime",
+        "label": "当前运行主链",
+        "focus": ["environment", "hook", "core", "host", "tokenless"],
+        "note": "一次 Tool Result 从 COSH 进入 AW，再被映射为 Tokenless 原生请求。"
+      },
+      {
+        "id": "contracts",
+        "label": "Schema 与映射",
+        "focus": ["package", "catalog", "core", "host", "tokenless", "agentsec"],
+        "note": "Canonical Schema 定义能力语义，native Schema 描述组件自己的协议。"
+      },
+      {
+        "id": "decision",
+        "label": "结果与最终权力",
+        "focus": ["tokenless", "agentsec", "host", "core", "hook", "environment", "ledger"],
+        "note": "Provider 返回结果后，Core 验证，Environment 才决定是否执行或入模。"
+      },
+      {
+        "id": "product",
+        "label": "产品化缺口",
+        "focus": ["package", "service", "hoststate", "adoption"],
+        "note": "橙色虚线关系表示当前 PR 尚未交付的激活、状态和最终采纳闭环。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "environment",
+      "type": "frontend",
+      "label": "Agent 运行环境",
+      "sublabel": "COSH · Tool 边界与最终执行权",
+      "tag": "当前实现",
+      "pos": [45, 360],
+      "size": [180, 82],
+      "sources": [{"path": "src/cosh-ng/crates/cosh-core/src/core.rs", "line": 1515, "label": "Tool Result 边界"}]
+    },
+    {
+      "id": "hook",
+      "type": "frontend",
+      "label": "AW COSH Hook",
+      "sublabel": "Hook JSON ↔ AW Contract",
+      "tag": "当前实现",
+      "pos": [285, 360],
+      "size": [180, 82],
+      "sources": [{"path": "src/aw/crates/aw-cosh-hook/src/lib.rs", "line": 160, "label": "Hook adapter"}]
+    },
+    {
+      "id": "core",
+      "type": "backend",
+      "label": "AW Core",
+      "sublabel": "Plan · Policy · Route · Validate",
+      "tag": "能力与权力编排",
+      "pos": [525, 360],
+      "size": [190, 82],
+      "sources": [{"path": "src/aw/crates/aw-core/src/lib.rs", "line": 271, "label": "PostTool plan"}]
+    },
+    {
+      "id": "host",
+      "type": "backend",
+      "label": "Provider Host",
+      "sublabel": "Admission · json-map · Budget · Exec",
+      "tag": "通用托管",
+      "pos": [785, 360],
+      "size": [205, 82],
+      "sources": [{"path": "src/aw/crates/aw-provider-host/src/driver.rs", "line": 37, "label": "有界调用"}]
+    },
+    {
+      "id": "tokenless",
+      "type": "backend",
+      "label": "Tokenless Provider",
+      "sublabel": "context.projection.prepare · Advise",
+      "tag": "候选内容",
+      "pos": [1075, 245],
+      "size": [230, 86],
+      "sources": [{"path": "providers/tokenless/provider.toml", "line": 38, "label": "Capability mapping"}]
+    },
+    {
+      "id": "agentsec",
+      "type": "security",
+      "label": "Agent Sec Provider",
+      "sublabel": "security.*.inspect · Observe / Mediate",
+      "tag": "风险事实与门禁",
+      "pos": [1075, 475],
+      "size": [230, 86],
+      "sources": [{"path": "providers/agent-sec-core/provider.toml", "line": 50, "label": "Capabilities"}]
+    },
+    {
+      "id": "package",
+      "type": "cloud",
+      "label": "Provider Package",
+      "sublabel": "binary + provider.toml + schemas",
+      "tag": "Installed 仍未调用",
+      "pos": [785, 95],
+      "size": [205, 82],
+      "sources": [{"path": "providers/tokenless/provider.toml", "line": 5, "label": "Package identity"}]
+    },
+    {
+      "id": "catalog",
+      "type": "database",
+      "label": "Capability Catalog",
+      "sublabel": "Contract digest + Ready target",
+      "tag": "Host admission 结果",
+      "pos": [525, 95],
+      "size": [190, 82],
+      "sources": [{"path": "src/aw/crates/aw-provider-host/src/graph.rs", "line": 107, "label": "Graph projection"}]
+    },
+    {
+      "id": "ledger",
+      "type": "database",
+      "label": "AW Ledger",
+      "sublabel": "Receipt digest 与边界事实",
+      "tag": "当前为 Hook writer",
+      "pos": [525, 610],
+      "size": [190, 82],
+      "sources": [{"path": "src/aw/crates/aw-cosh-hook/src/ledger.rs", "line": 43, "label": "Ledger write"}]
+    },
+    {
+      "id": "adoption",
+      "type": "external",
+      "label": "Final Adoption",
+      "sublabel": "候选最终进入模型的事实",
+      "tag": "当前缺失",
+      "pos": [285, 610],
+      "size": [180, 82],
+      "sources": [{"path": "src/aw/docs/design/context-projection.md", "line": 101, "label": "当前采纳规则"}]
+    },
+    {
+      "id": "service",
+      "type": "cloud",
+      "label": "AW System Service",
+      "sublabel": "Catalog · Policy · Writer",
+      "tag": "下一阶段",
+      "pos": [785, 680],
+      "size": [205, 82],
+      "sources": [{"path": "src/aw/README.md", "line": 156, "label": "长期 workspace"}]
+    },
+    {
+      "id": "hoststate",
+      "type": "external",
+      "label": "Agent Host 状态面",
+      "sublabel": "top · host verify · rollback",
+      "tag": "尚未接线",
+      "pos": [1075, 680],
+      "size": [230, 82],
+      "sources": [{"path": "scripts/build-all.sh", "line": 521, "label": "当前构建清单"}]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "当前 PR 的 Tool Call 能力面",
+      "wraps": ["environment", "hook", "core", "host", "tokenless", "agentsec", "ledger"]
+    },
+    {
+      "kind": "region",
+      "label": "Agent Host 产品连接层",
+      "wraps": ["service", "hoststate", "adoption"]
+    }
+  ],
+  "connections": [
+    {"id": "event", "from": "environment", "to": "hook", "label": "1 · Tool 边界事件", "variant": "emphasis", "labelAt": [255, 456]},
+    {"id": "submission", "from": "hook", "to": "core", "label": "2 · 标准化请求", "variant": "emphasis", "labelAt": [495, 356]},
+    {"id": "invoke", "from": "core", "to": "host", "label": "3 · 精确 Contract + 预算", "variant": "emphasis", "labelAt": [750, 456]},
+    {"id": "tokenless-native", "from": "host", "to": "tokenless", "label": "4a · 映射并调用压缩", "variant": "emphasis", "labelAt": [1033, 345]},
+    {"id": "agentsec-native", "from": "host", "to": "agentsec", "label": "4b · 映射并调用扫描", "variant": "security", "labelAt": [1033, 456]},
+    {"id": "package-admit", "from": "package", "to": "catalog", "label": "校验 manifest / schema digest", "variant": "security", "labelAt": [750, 191]},
+    {"id": "catalog-route", "from": "catalog", "to": "core", "label": "Ready targets", "variant": "default", "labelAt": [620, 191]},
+    {"id": "record", "from": "core", "to": "ledger", "label": "5 · receipt 与结果摘要", "variant": "dashed", "labelAt": [620, 456]},
+    {"id": "candidate", "from": "core", "to": "adoption", "label": "6 · candidate ≠ adopted", "variant": "dashed"},
+    {"id": "service-catalog", "from": "service", "to": "host", "label": "目标 · 常驻 catalog / policy", "variant": "dashed"},
+    {"id": "service-state", "from": "service", "to": "hoststate", "label": "目标 · health / activation / rollback", "variant": "dashed", "labelAt": [1033, 776]}
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "读图顺序",
+      "items": [
+        "先沿 1 → 4 阅读运行主链，再看 5 和 6 的结果处理",
+        "Canonical Schema 由 AW 定义，native Schema 由组件定义",
+        "Host 用 manifest 中的 json-map/v1 连接两种 Schema"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "什么时候算生效",
+      "items": [
+        "Observe：事实被 Core 接受并可见",
+        "Advise：Environment 最终采用 candidate",
+        "Mediate：Environment 按聚合结果实际执行、询问或阻断"
+      ]
+    },
+    {
+      "dot": "orange",
+      "title": "当前 PR 的边界",
+      "items": [
+        "源码链路已存在，但安装 Provider 文件不等于自动激活",
+        "AW service、主机状态投影和 final adoption 尚未交付",
+        "虚线表示目标或旁路，不能读成当前已完成的产品闭环"
+      ]
+    }
+  ]
+}

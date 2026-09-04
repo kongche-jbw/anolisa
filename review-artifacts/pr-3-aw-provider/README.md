@@ -15,7 +15,8 @@ the AW Provider path is production-ready.
 
 - [Full architecture review in Chinese](architecture-review_zh.md)
 - [Executive architecture brief in Chinese](executive-brief_zh.md)
-- [Component integration guide in Chinese](component-integration_zh.md)
+- [Provider principles and integration guide in Chinese](component-integration_zh.md)
+- [Complete schema atlas in Chinese](schema-reference_zh.md)
 - [Agent Host POC comparison in Chinese](poc-comparison_zh.md)
 
 ## Interactive diagrams
@@ -23,7 +24,7 @@ the AW Provider path is production-ready.
 - [Provider activation architecture](provider-effect-architecture.html)
 - [Provider activation sequence](provider-effect-sequence.html)
 
-Both HTML files are self-contained Archify artifacts. Each passed the nine
-showcase validation checks with no errors or warnings. Browser screenshot review
-was skipped because Chrome or Chromium was unavailable in the review
-environment.
+Both HTML files are self-contained Archify artifacts defaulting to the bright editorial
+preset. Each passed the nine showcase validation checks with no errors or
+warnings. The 14 deterministic light-theme schema SVGs are stored under
+`images/schemas/`.
