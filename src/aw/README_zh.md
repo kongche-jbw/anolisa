@@ -62,3 +62,5 @@ OS 防护应持续限制受控进程的系统访问。`os-protection-binding` �
 从新 clone 执行 `python3 src/aw/scripts/demo.py setup`，再用 `doctor` 检查、`run --allow-unrecoverable` 展示真实 Qoder/Herdr。Provider 默认从 `src/aw/providers/` 发现，依赖和证据保存在 `src/aw/target/demo/`。完整命令、前提与清理见[演示指南](../../docs/user-guide/zh/token-saving/aw-demo.md)。
 
 在真实项目中自由多轮交互：`python3 /path/to/anolisa-demo/src/aw/scripts/session.py --workspace "$PWD" --allow-unrecoverable`。该入口保留 Qoder 权限确认和原生历史，独立观察器持续验证 Bash 的会话统计。需要新会话时退出后重新运行；原生会话切换会清除旧统计并提示重新启动。
+
+在 cosh-shell 的 Bash 中 `source /path/to/anolisa-demo/src/aw/scripts/activate.sh --allow-unrecoverable` 后直接输入 `qoder`，即可自动进入 Herdr 管理的 Qoder。Herdr 原生处理终端输入；`Ctrl+B` 后按 `p` 查看真实 Provider 路径、版本、协议和调用详情。

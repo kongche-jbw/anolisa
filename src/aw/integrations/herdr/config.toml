@@ -13,20 +13,23 @@ version_check = false
 manifest_check = false
 
 [ui]
-sidebar_width = 44
-sidebar_min_width = 36
-sidebar_max_width = 52
+sidebar_width = 48
+sidebar_min_width = 42
+sidebar_max_width = 64
 sidebar_start_collapsed = false
 agent_panel_sort = "spaces"
 
 [ui.sidebar.agents]
 row_gap = 0
 rows = [
-  ["state_icon", { token = "agent", bold = true }, "state_text"],
-  [{ token = "$aw", bold = true }],
-  ["$aw_sec"],
-  ["$aw_tokenless"],
-  ["$aw_usage"],
+  ["state_icon", { token = "agent", bold = true, fg = "#cdd6f4", dim = false }, "state_text"],
+  [{ token = "$aw", bold = true, fg = "#cdd6f4", dim = false }],
+  [{ token = "$aw_sec", fg = "#a6e3a1", dim = false }],
+  [{ token = "$aw_sec_result", fg = "#cdd6f4", dim = false }],
+  [{ token = "$aw_tokenless", fg = "#89b4fa", dim = false }],
+  [{ token = "$aw_tokenless_result", fg = "#cdd6f4", dim = false }],
+  [{ token = "$aw_savings", fg = "#f9e2af", bold = true, dim = false }],
+  [{ token = "$aw_usage", fg = "#bac2de", dim = false }],
 ]
 
 [ui.sidebar.spaces]

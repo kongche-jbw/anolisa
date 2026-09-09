@@ -2,11 +2,9 @@
 """Run an interactive Qoder workspace with verified AW statistics in Herdr."""
 
 import argparse
-import fcntl
+import json
 import os
 from pathlib import Path
-import pty
-import select
 import shlex
 import shutil
 import signal
@@ -15,7 +13,6 @@ import sys
 import tempfile
 import termios
 import time
-import tty
 import uuid
 
 import demo
@@ -204,7 +201,6 @@ def run(args: argparse.Namespace) -> None:
     print("Type tasks directly in Qoder. Ctrl+B, then Q ends this session.", flush=True)
     binary = str(demo.DATA / "herdr/herdr")
     server = client = observer = None
-    master = slave = None
     original_terminal = termios.tcgetattr(sys.stdin.fileno())
     ownership = {
         "launcher_pid": os.getpid(),
@@ -217,7 +213,16 @@ def run(args: argparse.Namespace) -> None:
     with tempfile.TemporaryDirectory(prefix="aw-session-") as temporary:
         runtime = Path(temporary)
         endpoint = runtime / "api.sock"
-        shutil.copyfile(AW / "integrations/herdr/config.toml", runtime / "config.toml")
+        panel_command = shlex.join(
+            [sys.executable, str(AW / "scripts/provider_details.py"), str(root)]
+        )
+        config_text = (AW / "integrations/herdr/config.toml").read_text()
+        config_text += (
+            '\n[[keys.command]]\nkey = "prefix+p"\ntype = "popup"\n'
+            'width = "90%"\nheight = "85%"\ndescription = "AW Provider details"\n'
+            f"command = {json.dumps(panel_command)}\n"
+        )
+        (runtime / "config.toml").write_text(config_text)
         env = {key: value for key, value in os.environ.items() if not key.startswith("HERDR_")}
         env.update(
             HERDR_SOCKET_PATH=str(endpoint),
@@ -259,19 +264,15 @@ def run(args: argparse.Namespace) -> None:
                 )
                 pane = bridge.rpc(endpoint, "pane.list", {})["panes"][0]["pane_id"]
                 ownership["pane_id"] = pane
-                master, slave = pty.openpty()
-                size = fcntl.ioctl(sys.stdin.fileno(), termios.TIOCGWINSZ, b"\0" * 8)
-                fcntl.ioctl(slave, termios.TIOCSWINSZ, size)
                 client = subprocess.Popen(
                     [binary],
                     cwd=workspace,
                     env=env,
-                    stdin=slave,
-                    stdout=slave,
-                    stderr=slave,
-                    start_new_session=True,
+                    stdin=sys.stdin,
+                    stdout=sys.stdout,
+                    stderr=sys.stderr,
                 )
-                ownership.update(client_pid=client.pid, client_stop=f"kill -TERM -- -{client.pid}")
+                ownership.update(client_pid=client.pid, client_stop=f"kill -TERM {client.pid}")
                 write(root / "ownership.json", ownership)
                 command = [sys.executable, str(Path(__file__).resolve()), "--agent", str(root)]
                 bridge.rpc(
@@ -279,27 +280,13 @@ def run(args: argparse.Namespace) -> None:
                     "pane.send_input",
                     {"pane_id": pane, "text": shlex.join(command) + "\n"},
                 )
-                tty.setraw(sys.stdin.fileno())
                 deadline = time.monotonic() + args.duration
                 while time.monotonic() < deadline:
                     if client.poll() is not None:
                         break
                     if server.poll() is not None:
                         raise RuntimeError("Herdr server exited unexpectedly")
-                    ready, _, _ = select.select([master, sys.stdin.fileno()], [], [], 0.1)
-                    if master in ready:
-                        chunk = os.read(master, 65536)
-                        sys.stdout.buffer.write(chunk)
-                        sys.stdout.buffer.flush()
-                    if sys.stdin.fileno() in ready:
-                        chunk = os.read(sys.stdin.fileno(), 65536)
-                        if not chunk:
-                            break
-                        os.write(master, chunk)
-                    current_size = fcntl.ioctl(sys.stdin.fileno(), termios.TIOCGWINSZ, b"\0" * 8)
-                    if current_size != size:
-                        size = current_size
-                        fcntl.ioctl(master, termios.TIOCSWINSZ, size)
+                    time.sleep(0.1)
                     if (root / "runtime.json").exists():
                         config = read(root / "runtime.json")
                         if not live(config["agent_pid"], config["agent_start_ticks"]):
@@ -334,21 +321,25 @@ def run(args: argparse.Namespace) -> None:
             finally:
                 signal.signal(signal.SIGINT, signal.SIG_IGN)
                 signal.signal(signal.SIGTERM, signal.SIG_IGN)
+                signal.signal(signal.SIGHUP, signal.SIG_IGN)
                 termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, original_terminal)
                 try:
                     stop_agent(root)
                 finally:
                     for process in (observer, client, server):
                         if process is not None and process.poll() is None:
-                            os.killpg(process.pid, signal.SIGTERM)
+                            if process is client:
+                                process.terminate()
+                            else:
+                                os.killpg(process.pid, signal.SIGTERM)
                             try:
                                 process.wait(timeout=5)
                             except subprocess.TimeoutExpired:
-                                os.killpg(process.pid, signal.SIGKILL)
+                                if process is client:
+                                    process.kill()
+                                else:
+                                    os.killpg(process.pid, signal.SIGKILL)
                                 process.wait(timeout=5)
-                    for fd in (master, slave):
-                        if fd is not None:
-                            os.close(fd)
                     sys.stdout.write(
                         "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l\x1b[?2004l\x1b[?1004l\x1b[?2031l\x1b[<u\x1b[?7h\x1b[?1049l\x1b[?25h\x1b[0m"
                     )
@@ -385,6 +376,7 @@ def main() -> int:
     if not 60 <= args.duration <= 14400:
         parser.error("--duration must be 60..14400 seconds")
     signal.signal(signal.SIGTERM, lambda _signal, _frame: sys.exit(130))
+    signal.signal(signal.SIGHUP, lambda _signal, _frame: sys.exit(130))
     try:
         run(args)
     except (

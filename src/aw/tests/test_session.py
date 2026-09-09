@@ -1,6 +1,7 @@
 """Check native lifecycle binding without making model requests."""
 
 import json
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
@@ -34,6 +35,37 @@ class SessionTests(unittest.TestCase):
 
     def transition(self, kind, tool="tool-1", session="s1"):
         return hooks.transition(self.root, self.config, self.event(kind, tool, session))
+
+    def test_activation_keeps_native_arguments_after_launcher_options(self):
+        result = subprocess.run(
+            [
+                "bash",
+                "--noprofile",
+                "--norc",
+                "-c",
+                'source "$1" --allow-unrecoverable >/dev/null; '
+                'python3() { printf "%s\\0" "$@"; }; '
+                'qoder --model auto "prompt with spaces" --duration 20',
+                "bash",
+                str(AW / "scripts/activate.sh"),
+            ],
+            check=True,
+            capture_output=True,
+            timeout=5,
+        )
+        self.assertEqual(
+            result.stdout.decode().split("\0")[:-1],
+            [
+                str(AW / "scripts/session.py"),
+                "--allow-unrecoverable",
+                "--",
+                "--model",
+                "auto",
+                "prompt with spaces",
+                "--duration",
+                "20",
+            ],
+        )
 
     def test_tool_requires_observed_prompt(self):
         with self.assertRaisesRegex(ValueError, "no observed"):
@@ -127,6 +159,8 @@ class SessionTests(unittest.TestCase):
             patch("session_observer.bridge.rpc", return_value={}) as rpc,
             patch("session_observer.bridge.verify_pane") as verify,
             patch("session_observer.bridge.format_view", return_value={}),
+            patch("session_observer.provider_details.snapshot", return_value={}),
+            patch("session_observer.provider_details.sidebar", return_value={}),
             patch("session_observer.bridge.publish"),
             patch("session_observer.subprocess.run") as command,
         ):

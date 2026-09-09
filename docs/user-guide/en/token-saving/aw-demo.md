@@ -53,11 +53,12 @@ Doctor also checks Qoder version, login state, and integration conflicts without
 
 ## 3. Interact freely in a real repository
 
-After setup above, open a terminal in the repository you want to work on. `AW_CHECKOUT` points to the clone containing AW, while `$PWD` is your real project:
+After setup, enter your working repository at cosh-shell’s Bash prompt, activate the entry once for this shell, then type `qoder`. `AW_CHECKOUT` points to the clone containing AW, while `$PWD` is your real project:
 
 ```bash
 AW_CHECKOUT=/path/to/anolisa-demo
-python3 "$AW_CHECKOUT/src/aw/scripts/session.py" --workspace "$PWD" --allow-unrecoverable
+source "$AW_CHECKOUT/src/aw/scripts/activate.sh" --allow-unrecoverable
+qoder
 ```
 
 Alternatively, run from the AW clone root:
@@ -66,7 +67,7 @@ Alternatively, run from the AW clone root:
 python3 src/aw/scripts/session.py --workspace "$PWD" --allow-unrecoverable
 ```
 
-Qoder opens in the selected directory. Type tasks and follow-up questions, scroll, cancel generation, and confirm tool permissions through the real terminal. The launcher sends no prompt and creates no fixture. It does not modify repository source, the Git branch, or existing configuration files; actual development operations you authorize Qoder to perform can still change the project. You decide any initial directory-trust prompt; the launcher does not accept it automatically.
+Qoder opens in the selected directory. The native Herdr client inherits the current terminal and handles keyboard input and resizing itself. The launcher manages process lifecycles without reading or forwarding keys. Enter tasks and follow-up questions, scroll, cancel generation and confirm permissions normally. The launcher sends no prompt and creates no fixture. It does not modify repository source, the Git branch, or existing configuration files; actual development operations you authorize Qoder to perform can still change the project. You decide any initial directory-trust prompt; the launcher does not accept it automatically.
 
 Try this sequence in the ANOLISA repository:
 
@@ -74,6 +75,19 @@ Try this sequence in the ANOLISA repository:
 2. Follow up: “Use Bash to run `cargo metadata --manifest-path src/tokenless/Cargo.toml --no-deps --format-version 1` and analyze Tokenless crate dependencies.”
 3. Ask a real follow-up, such as: “Which layer selects the compressor? Read the code and explain the call path.”
 4. Watch Herdr cumulative calls, `history adopted`, and saved bytes. Not every output compresses; short output, unsupported formats, and failed commands do not count as savings.
+
+`activate.sh` defines an AW `qoder` function only in the current Bash. It neither edits startup files nor replaces the Qoder program on disk. Exiting Qoder/Herdr returns to the original shell, where you can type `qoder` again. To remove this shell integration:
+
+```bash
+unset -f qoder
+unset _AW_SESSION_ENTRY
+```
+
+The sidebar uses explicit high-contrast text, separating Bash result counts, SecCore/Tokenless versions, per-Provider calls, latest results, and independently verified history adoption and saved bytes. One Bash result can invoke two Providers; their summed invocation count is no longer presented as Bash activity.
+
+Press `Ctrl+B`, release, then press `p` to open the **AW PROVIDERS** popup. Press `1` for actual executable paths, SecCore source directory, native protocols, configured/executed versions, manifest digests and cumulative statistics. Press `2` for the latest 40 Provider calls: tool IDs, outcomes, elapsed time, source/candidate bytes and actual compression operations. Scroll with arrow keys and press `q` to return to Qoder.
+
+A native Tokenless `no_savings` result displays `preserved: no savings`; timeouts display failure codes. Older evidence without native reasons explicitly says `native reason not recorded`, rather than guessing from `bypassed`. Details come only from events verified by Rust for the current session. Verification errors or session changes clear previous details. Source paths and Provider results remain local.
 
 AW currently handles the main Agent's Bash post-tool output. Other tools, including Read and Edit, remain available normally in Qoder, while the sidebar labels its coverage `Bash only`. Bash failures, native capture size-limit failures, and unverifiable results appear as `unverified` without increasing adopted savings. Results awaiting permission confirmation or native history persistence show `pending` and do not count as adopted. SecCore performs post-tool content inspection here, not pre-command enforcement or OS protection.
 
@@ -87,7 +101,7 @@ rm -rf -- "$AW_CHECKOUT/src/aw/target/sessions/<UUID>"
 
 `--workspace` defaults to the current directory. `--provider-dir` defaults to the AW clone's `src/aw/providers/` and can select another explicit trusted manifest directory. User/project hook and plugin coexistence is not validated; configured hooks or installed Qoder plugins cause an explicit startup failure. The launcher uses default `~/.qoder` login configuration and does not support `QODER_CONFIG_DIR`. Resuming old sessions, subagents, custom cwd changes, and other native tool projections remain outside this binding contract; failed binding preserves native behavior and reports unverified results.
 
-The multi-turn entry point uses `scripts/session.py` to launch Herdr/Qoder. `session_hooks.py` generates launcher turn identities from native `UserPromptSubmit` events and snapshots each tool's turn at `PreToolUse`; `PostToolUse` invokes the same Rust `aw-hook-cli`. Independent process `session_observer.py` waits for complete history lines, verifies with `aw-adoption-cli` and `aw-view-cli`, then publishes counters. Verification runs independently of keyboard forwarding. Providers, AW Core, and Schema use the setup implementations, and this runtime path does not import test runners. Native event references: [Qoder hooks](https://docs.qoder.com/cli/hooks).
+The multi-turn entry point uses `scripts/session.py` to launch Herdr/Qoder. `session_hooks.py` generates launcher turn identities from native `UserPromptSubmit` events and snapshots each tool's turn at `PreToolUse`; `PostToolUse` invokes the same Rust `aw-hook-cli`. Independent process `session_observer.py` waits for complete history lines, verifies with `aw-adoption-cli` and `aw-view-cli`, then publishes counters. Verification runs independently of native Herdr input. Providers, AW Core, and Schema use the setup implementations, and this runtime path does not import test runners. Native event references: [Qoder hooks](https://docs.qoder.com/cli/hooks).
 
 ## 4. Rehearse and present a fixed scenario
 

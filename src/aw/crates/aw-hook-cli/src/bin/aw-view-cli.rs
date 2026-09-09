@@ -138,6 +138,17 @@ fn verify_event(
             .as_str()
             .ok_or_else(|| invalid("missing invocation ID"))?;
         require(ids.insert(id), "duplicate invocation ID")?;
+        for reference in receipt["evidence"].as_array().into_iter().flatten() {
+            if reference["source_id"] == "tokenless-native-mapping/v1" {
+                let mapping = &event["tokenless_mapping"];
+                require(
+                    mapping["invocation_id"] == id
+                        && reference["record_id"] == id
+                        && reference["digest"] == canonical::document_digest(mapping)?,
+                    "native provider detail differs from receipt evidence",
+                )?;
+            }
+        }
         let references: Vec<_> = execution["steps"]
             .as_array()
             .ok_or_else(|| invalid("missing steps"))?
@@ -271,6 +282,7 @@ fn view(binding: Binding) -> Result<Value> {
     let mut providers: BTreeMap<String, Counters> = BTreeMap::new();
     let mut invocation_ids = BTreeSet::new();
     let mut history_verified = false;
+    let mut verified_events = BTreeSet::new();
     require(
         binding.evidence.try_exists()? || !binding.journal.try_exists()?,
         "journal exists without event evidence",
@@ -309,6 +321,7 @@ fn view(binding: Binding) -> Result<Value> {
                 .and_then(|s| s.to_str())
                 .ok_or_else(|| invalid("invalid evidence filename"))?;
             let calls = verify_event(&registry, &journal, &event, key)?;
+            verified_events.insert(key.to_owned());
             settled_keys.insert(key.to_owned());
             let adopted = verified_adoption(&binding, key)?;
             history_verified |= adopted.is_some();
@@ -397,7 +410,7 @@ fn view(binding: Binding) -> Result<Value> {
         })
         .collect();
     Ok(
-        json!({"format":1,"scope":binding.scope,"runtime_alive":runtime_alive(&binding),"providers":rows,"verification":"journal_verified","adoption":if history_verified {"local_history"} else {"not_observed"}}),
+        json!({"format":1,"scope":binding.scope,"runtime_alive":runtime_alive(&binding),"providers":rows,"events":verified_events,"verification":"journal_verified","adoption":if history_verified {"local_history"} else {"not_observed"}}),
     )
 }
 fn main() {

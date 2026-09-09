@@ -18,6 +18,9 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
+        Self::with_native_mapping(false)
+    }
+    fn with_native_mapping(include_mapping: bool) -> Self {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../target/view-tests")
             .join(format!(
@@ -26,7 +29,24 @@ impl Fixture {
                 NEXT.fetch_add(1, Ordering::Relaxed)
             ));
         fs::create_dir_all(&root).unwrap();
-        let f = canonical::parse(include_bytes!("../../../tests/fixtures/contracts.json")).unwrap();
+        let mut f =
+            canonical::parse(include_bytes!("../../../tests/fixtures/contracts.json")).unwrap();
+        let mapping = json!({"invocation_id":f["provider-receipt-v1"]["invocation_id"],"native_disposition":"applied"});
+        if include_mapping {
+            f["provider-receipt-v1"]["evidence"] = json!([{
+                "source_id":"tokenless-native-mapping/v1",
+                "record_id":mapping["invocation_id"],
+                "digest":canonical::document_digest(&mapping).unwrap()
+            }]);
+            let receipt_digest = canonical::document_digest(&f["provider-receipt-v1"]).unwrap();
+            for step in f["plan-execution-v1"]["steps"].as_array_mut().unwrap() {
+                for call in step["invocations"].as_array_mut().unwrap() {
+                    if call["invocation_id"] == mapping["invocation_id"] {
+                        call["receipt_digest"] = json!(receipt_digest);
+                    }
+                }
+            }
+        }
         let key = canonical::digest(root.as_os_str().as_encoded_bytes());
         let mut journal = FileJournal::new(root.join("journal")).unwrap();
         journal.claim(&key, &f["capability-plan-v1"]).unwrap();
@@ -42,7 +62,7 @@ impl Fixture {
                 &json!({"kind":"execution_settled","execution":f["plan-execution-v1"]}),
             )
             .unwrap();
-        let event = json!({"event_key":key,"source_digest":f["capability-plan-v1"]["source_digest"],"execution":f["plan-execution-v1"],"journal_ack":ack,"calls":[{"receipt":f["provider-receipt-v1"],"output":f["context-projection-prepare-output-v2"]}],"adoption":"adopted","saved_bytes":999999});
+        let event = json!({"event_key":key,"source_digest":f["capability-plan-v1"]["source_digest"],"execution":f["plan-execution-v1"],"journal_ack":ack,"calls":[{"receipt":f["provider-receipt-v1"],"output":f["context-projection-prepare-output-v2"]}],"tokenless_mapping":mapping,"adoption":"adopted","saved_bytes":999999});
         let stat = fs::read_to_string(format!("/proc/{}/stat", std::process::id())).unwrap();
         let ticks: u64 = stat
             .rsplit_once(')')
@@ -105,6 +125,13 @@ fn candidate_and_flat_adoption_claim_do_not_count_as_saved() {
     assert_eq!(view["providers"][0]["adopted"], 0);
     assert_eq!(view["providers"][0]["saved_bytes"], 0);
     assert_eq!(view["runtime_alive"], true);
+}
+#[test]
+fn native_details_must_match_the_journal_bound_digest() {
+    let mut f = Fixture::with_native_mapping(true);
+    assert_eq!(f.value()["events"], json!([f.key]));
+    f.event["tokenless_mapping"]["native_disposition"] = json!("no_savings");
+    assert!(!f.run().status.success());
 }
 #[test]
 fn another_native_session_has_no_counters() {

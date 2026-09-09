@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import pty
+import re
 import select
 import shutil
 import signal
@@ -46,13 +47,14 @@ def main():
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 140, 0, 0))
     command = [
-        sys.executable,
-        str(AW / "scripts/session.py"),
-        "--workspace",
+        "/bin/bash",
+        "--noprofile",
+        "--norc",
+        "-c",
+        'source "$1" --allow-unrecoverable && qoder --workspace "$2" --duration 180',
+        "aw-native-entry",
+        str(AW / "scripts/activate.sh"),
         str(work),
-        "--allow-unrecoverable",
-        "--duration",
-        "180",
     ]
     process = subprocess.Popen(
         command,
@@ -77,6 +79,8 @@ def main():
     first_session = None
     trusted = False
     failure_allowed = False
+    popup_open = popup_checked = False
+    terminal_output = bytearray()
     result = {"status": "failed"}
     try:
         with (root / "screen.ansi").open("wb") as screen:
@@ -84,7 +88,9 @@ def main():
             while time.monotonic() < deadline:
                 ready, _, _ = select.select([master], [], [], 0.1)
                 if ready:
-                    screen.write(os.read(master, 65536))
+                    chunk = os.read(master, 65536)
+                    terminal_output.extend(chunk)
+                    screen.write(chunk)
                     screen.flush()
                 candidates = set((AW / "target/sessions").glob("*")) - before
                 if len(candidates) == 1:
@@ -96,6 +102,11 @@ def main():
                         Path(owned["socket"]), "pane.read", {"pane_id": pane, "source": "visible"}
                     )
                     visible = visible.get("read", visible).get("text", "")
+                    if "--interrupt" in sys.argv and "Qoder" in visible:
+                        os.kill(owned["launcher_pid"], signal.SIGHUP)
+                        process.wait(timeout=25)
+                        result = {"status": "passed", "hangup": "owned processes cleaned"}
+                        break
                     if (
                         "Permission Required" in visible
                         and "Command: false" in visible
@@ -131,6 +142,27 @@ def main():
                         and "idle"
                         in str(bridge.rpc(Path(owned["socket"]), "pane.get", {"pane_id": pane}))
                     ):
+                        if not popup_checked:
+                            if not popup_open:
+                                os.write(master, b"\x02")
+                                time.sleep(0.1)
+                                os.write(master, b"p")
+                                popup_open = True
+                                continue
+                            rendered = re.sub(
+                                r"\x1b\[[0-?]*[ -/]*[@-~]",
+                                "",
+                                terminal_output.decode(errors="replace"),
+                            )
+                            if (
+                                "AW PROVIDERS" not in rendered
+                                or "nativeprotocolv2" not in rendered.replace(" ", "")
+                            ):
+                                continue
+                            assert "sec-core" in rendered and "tokenless" in rendered
+                            os.write(master, b"q")
+                            time.sleep(0.5)
+                            popup_checked = True
                         os.write(
                             master,
                             b"Use Bash for three separate calls: `cat fixture.json`, `cat fixture.json`, and `false`. The last command intentionally exits 1; do not fix or retry it. Compare the record count with the previous answer. Do not use other tools.",
@@ -149,7 +181,7 @@ def main():
                         calls = [read(p) for p in (session / "calls").glob("*/before.json")]
                         assert len(turns) == 2 and len({c["turn_id"] for c in calls}) == 2, calls
                         metadata = bridge.rpc(Path(owned["socket"]), "pane.get", {"pane_id": pane})
-                        assert "4056" in metadata["tokens"]["aw_tokenless"], metadata
+                        assert "4056" in metadata["tokens"]["aw_savings"], metadata
                         first_session = view["scope"]["session_id"]
                         os.write(master, b"/new")
                         time.sleep(0.2)
@@ -164,6 +196,8 @@ def main():
                             "status": "passed",
                             "session": str(session),
                             "turns": 2,
+                            "native_terminal": "Herdr inherits launcher terminal; no relay",
+                            "provider_popup": "rendered from real session details",
                             "adopted": 3,
                             "saved_bytes": 4056,
                             "native_failure": "unverified, no savings",
@@ -178,10 +212,14 @@ def main():
             else:
                 raise TimeoutError("two-turn live acceptance exceeded 165 seconds")
         process.wait(timeout=15)
-        assert process.returncode == 0
+        assert process.returncode == (130 if "--interrupt" in sys.argv else 0)
     finally:
         if process.poll() is None:
-            process.terminate()
+            if session and (session / "ownership.json").exists():
+                owner = read(session / "ownership.json")
+                os.kill(owner["launcher_pid"], signal.SIGTERM)
+            else:
+                os.killpg(process.pid, signal.SIGTERM)
             process.wait(timeout=25)
         os.close(master)
         os.close(slave)

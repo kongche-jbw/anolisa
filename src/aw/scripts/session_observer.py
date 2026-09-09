@@ -7,6 +7,7 @@ import sys
 import time
 
 from session_hooks import read, write
+import provider_details
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "integrations/herdr"))
 import bridge
@@ -50,6 +51,7 @@ class Observer:
         state = read(self.root / "state.json")
         if state["session_id"] != config["session_id"]:
             tokens = {
+                **{key: None for key in bridge.TOKEN_NAMES},
                 "aw": "AW unavailable: session changed",
                 "aw_sec": "SecCore: unverified",
                 "aw_tokenless": "Tokenless: unverified",
@@ -58,6 +60,9 @@ class Observer:
             bridge.publish(self.socket, self.pane, tokens, self.sequence)
             (self.root / "view.json").unlink(missing_ok=True)
             write(self.root / "display.json", tokens)
+            write(
+                self.root / "provider-details.json", {"status": "session changed; restart required"}
+            )
             return
         for call in sorted((self.root / "calls").iterdir()):
             if call.name in self.finished or not (call / "completed.json").exists():
@@ -141,6 +146,8 @@ class Observer:
             )
             view = json.loads(result.stdout)
             tokens = bridge.format_view(view, binding["scope"])
+            details = provider_details.snapshot(self.root, config, view)
+            tokens.update(provider_details.sidebar(details))
             bridge.verify_pane(
                 binding,
                 bridge.rpc(self.socket, "pane.get", {"pane_id": self.pane}),
@@ -149,16 +156,18 @@ class Observer:
             tokens["aw_usage"] = (
                 f"Bash | {pending} pending | {failures} unverified"
                 if pending or failures
-                else "Bash only | Ctrl+B Q: exit"
+                else "Ctrl+B P: Providers | Q: exit"
             )
             bridge.publish(self.socket, self.pane, tokens, self.sequence)
             write(self.root / "view.json", view)
             write(self.root / "display.json", tokens)
+            write(self.root / "provider-details.json", details)
         except (OSError, ValueError, subprocess.SubprocessError) as error:
             bridge.publish(
                 self.socket,
                 self.pane,
                 {
+                    **{key: None for key in bridge.TOKEN_NAMES},
                     "aw": "AW unknown",
                     "aw_sec": "SecCore: unverified",
                     "aw_tokenless": "Tokenless: unverified",
@@ -167,6 +176,7 @@ class Observer:
                 self.sequence,
             )
             write(self.root / "view-error.json", {"message": str(error)})
+            write(self.root / "provider-details.json", {"status": "verification unavailable"})
 
 
 if __name__ == "__main__":

@@ -25,18 +25,26 @@ python3 src/aw/scripts/demo.py run --allow-unrecoverable --hold-seconds 30
 
 | 层 | 实际代码及职责 |
 | --- | --- |
-| 启动和终端 | `scripts/session.py`：发现 Provider，绑定拥有的 Qoder PID/启动代次，转发真实 PTY 输入输出，记录并清理自己的进程 |
+| 启动和终端 | `scripts/session.py`：发现 Provider，绑定拥有的 Qoder PID/启动代次，让 Herdr 客户端直接继承当前终端，记录并清理自己的进程 |
 | 轮次和调用 | `scripts/session_hooks.py`：验证原生 hook 的进程祖先与工作目录；由 `UserPromptSubmit` 生成启动器轮次，在 `PreToolUse` 固定每个工具的轮次和输入 |
 | 检查和压缩 | `crates/aw-hook-cli` → `aw-core` / `aw-sec-host`：接收原生 `PostToolUse`，执行原有 SecCore 和 Tokenless 调用计划 |
 | 采用和展示 | `scripts/session_observer.py` → `aw-adoption-cli` / `aw-view-cli` → `integrations/herdr/bridge.py`：等待匹配历史，独立核验后更新 Herdr |
 
 Qoder 没有提供此处所需的原生 `turn_id`；生成值明确属于启动器，由真实 `UserPromptSubmit` 驱动，不从模型文本推测。每个工具在执行前保存轮次，后续提示和并行工具不会改变已保存绑定。每次调用向旧 `qoder_single_turn_id` 参数传入该工具的轮次，因此不修改 Rust 或 Schema 合同。`PostToolUseFailure` 保留原生失败，不调用 Provider，也不计节省。原生生命周期字段依据 [Qoder hooks](https://docs.qoder.com/cli/hooks)。
 
-观察器在独立进程运行，校验不阻塞键盘输入。完整 Core 事件发布后才可见；历史尚未落盘时显示 pending，等待范围受整体会话时限约束。人类权限提示可能延迟整批历史写入，不能把固定 30 秒等待当作采用失败。只有匹配的本地历史通过 Rust 校验，才累计 `history adopted` 和节省；不宣称模型消费或账单节省。
+观察器在独立进程运行，校验不阻塞 Herdr 原生终端输入。完整 Core 事件发布后才可见；历史尚未落盘时显示 pending，等待范围受整体会话时限约束。人类权限提示可能延迟整批历史写入，不能把固定 30 秒等待当作采用失败。只有匹配的本地历史通过 Rust 校验，才累计 `history adopted` 和节省；不宣称模型消费或账单节省。
 
 `/new` 的原生 `SessionStart` 清空当前轮次。固定 Herdr v0.9.0 不允许替换 Qoder 会话标识，且官方来源的 `release_agent` 不生效；不能通过 API 成功响应推定绑定成功。入口遇到会话变化会清除旧侧栏统计并提示重新启动，后续工具保留原生行为，不再执行 AW 检查或压缩。要开始新的已绑定会话，退出后重新运行启动器。没有修改 Herdr 源码。
 
 真实入口保留用户项目、Qoder 历史和用户选择的信任设置；AW 原始输出及证据位于私有 `target/sessions/<UUID>/`。退出清理属于本次启动的进程和临时 Herdr namespace。用户/项目 hooks 与 plugins 共存、旧会话恢复、子 Agent、cwd 切换和非 Bash 输出投影仍未支持。合成验收 `tests/session_live.py` 额外清理自己的测试历史与信任条目，生产运行不调用它。
+
+## 原生终端入口与 Provider 详情
+
+当前 Bash/cosh-shell 执行 `source scripts/activate.sh --allow-unrecoverable` 后，`qoder` 函数调用启动器。Herdr 客户端继承原终端 stdin/stdout/stderr；Python 不再创建中间 PTY、读取键盘、设置 raw mode 或转发窗口大小。退出回到原 shell；仅本次 shell 的函数生效。
+
+`Ctrl+B p` 打开 Herdr 原生 popup，运行 `scripts/provider_details.py`。侧栏显式指定前景色与 `dim = false`；详情按 Provider 展示实际 launch 配置、版本、协议、程序/源码路径，以及通过校验的调用结果、耗时和压缩操作。`aw-view-cli` 返回本次校验的事件键，观察器只从这些事件生成详情，排除校验后才到达的事件。
+
+Tokenless Host 将原生 disposition、实际操作和候选处理结果保留在不含正文的 `tokenless_mapping` 中，摘要关联到 produced/bypassed Receipt 的 evidence。View 校验此摘要后，面板才展示具体原生原因；旧记录缺少原因时不推断。公开 Schema 和 Core 不变。侧栏的 Bash 结果数与 Provider 调用数分开，避免一次工具调用两个 Provider 被看成两次 Bash。
 
 ## 构建与运行
 
@@ -92,16 +100,16 @@ PYTHONDONTWRITEBYTECODE=1 timeout 210 python3 integrations/herdr/live_smoke.py \
 
 ## 交互入口交接
 
-- **Status**：真实键盘多轮验收通过；新会话需要退出并重新启动入口。
-- **Started**：合成验收启动自己的 Qoder、Herdr 服务/客户端和独立观察器；均已结束，无遗留端口或临时 namespace。
-- **Changed**：新增 `scripts/session.py`、`session_hooks.py`、`session_observer.py`、`tests/test_session.py`、`tests/session_live.py`；同步 README 和中英用户指南/本说明。Schema、Core、Provider 和 Herdr 源码不变。
-- **Validation**：`tests/session_live.py` 通过真实 PTY 完成两轮、三次历史采用、4056 B 节省；原生 `false` 的权限确认和失败不计节省；`/new` 清除旧统计并停止新会话的 AW 处理。8 项会话单测、7 项启动器测试、15 项 Herdr Python 测试、144 项 Rust 测试、fmt、Clippy、文档构建和跨语言摘要通过；当前项目 hook 兼容性及 Provider doctor 通过。
-- **Cleanup/remaining**：已核对拥有的 PID、临时 namespace、合成 Qoder 历史和本次信任条目均已移除；早期交互诊断目录已删除。保留 `target/session-live-73ec5104/`（测试场景及结果）、`target/sessions/f73413d6-fe5a-498e-9537-49342c2edd89/`（AW 采用证据）和 `target/session-checks/`（检查日志）。原有 `target/demo/` 构建材料继续用于启动。
+- **Status**：`qoder` shell 入口和 Herdr 原生终端接入通过；Provider 详情 popup 已实测。需要新会话时退出后重新运行。
+- **Started**：合成测试的 Qoder、Herdr 服务/客户端、观察器与详情 popup 均已结束，无遗留服务。
+- **Changed**：`activate.sh` 提供 shell 入口，`session.py` 删除中间 PTY 转发，`provider_details.py` 与观察器提供详情；更新 Herdr 布局、Tokenless 原生结果记录、View 校验和相关测试/中英文文档。未修改 cosh-shell、Herdr 上游、公开 Schema 或 Core。
+- **Validation**：实际 Bash `source` → `qoder` → Herdr 原生终端，两轮交互、三次历史采用、4056 B 节省；Provider popup 的实际渲染、原生失败、会话切换、退出清理通过。已安装 cosh-shell 的隔离命令模式验证 shell 激活与撤销。终端捕获含明确高对比度颜色。146 项 Rust、33 项 Python 测试及 fmt、Clippy、文档构建通过；SIGHUP 挂断清理也通过。检查日志见下述目录。
+- **Cleanup/remaining**：核验本次拥有的 PID、临时 namespace、合成 Qoder 历史及信任条目已移除；失败诊断目录已删除。保留 `target/session-live-5040dc10/`（原生终端和 popup 验收）、`target/sessions/a6a20627-1c23-4a76-a033-3232826cf058/`（执行证据）、`target/native-entry-checks/`（检查日志）。原有 `target/demo/` 用于启动，前一轮交互证据保持不变。
 
-不再需要此次交互验收证据时，从仓库根目录执行：
+不再需要本次验收材料时，在仓库根目录执行：
 
 ```bash
-rm -rf -- src/aw/target/session-live-73ec5104 src/aw/target/sessions/f73413d6-fe5a-498e-9537-49342c2edd89 src/aw/target/session-checks
+rm -rf -- src/aw/target/session-live-5040dc10 src/aw/target/sessions/a6a20627-1c23-4a76-a033-3232826cf058 src/aw/target/native-entry-checks
 ```
 
 ## 本次核验结果

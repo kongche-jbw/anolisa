@@ -97,6 +97,20 @@ fn no_savings_and_dry_run_never_produce_candidate_or_savings() {
         assert!(result.output.is_none()); assert_eq!(result.receipt["meters"],json!([]));
     }
 }
+
+#[test]
+fn preserved_native_disposition_is_bound_to_receipt() {
+    let mut host = host("y.update(disposition='no_savings');print(json.dumps(x))");
+    let result = host.invoke(&invocation(&host)).unwrap();
+    let mapping = host.native_mapping().unwrap();
+    assert_eq!(result.receipt["disposition"], "bypassed");
+    assert_eq!(mapping["native_disposition"], "no_savings");
+    assert_eq!(mapping["projection_result"], "native_preserved");
+    assert_eq!(
+        result.receipt["evidence"][0]["digest"],
+        canonical::document_digest(mapping).unwrap()
+    );
+}
 #[test]
 fn native_failure_malformed_protocol_and_unavailable_recovery_are_visible() {
     for suffix in [

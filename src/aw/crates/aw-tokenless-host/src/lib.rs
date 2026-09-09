@@ -128,7 +128,7 @@ impl TokenlessHost {
         &self.descriptor
     }
 
-    /// Content-free native claim and the weaker AW recovery guarantee for the last call.
+    /// Content-free native disposition and recovery mapping for the last valid response.
     pub fn native_mapping(&self) -> Option<&Value> {
         self.native_mapping.as_ref()
     }
@@ -212,11 +212,14 @@ impl TokenlessHost {
             &native_request.attribution,
             &self.registry,
         )?;
-        if let Some(output) = &output {
-            let native = canonical::parse(&wire).map_err(|_| "invalid_native_json")?;
-            self.native_mapping = Some(json!({"invocation_id":invocation["invocation_id"],
+        let native = canonical::parse(&wire).map_err(|_| "invalid_native_json")?;
+        self.native_mapping = Some(json!({"invocation_id":invocation["invocation_id"],
                 "native_claim":native["result"]["recoverability"],"aw_reversibility":"unrecoverable",
+                "native_disposition":native["result"]["disposition"],
+                "applied_operations":native["result"]["applied_operations"],
+                "projection_result":if output.is_some() { "candidate_prepared" } else if native["result"]["disposition"] == "applied" { "output_not_smaller" } else { "native_preserved" },
                 "reason":"no_independent_byte_exact_recovery","native_response_digest":canonical::digest(&wire)}));
+        if let Some(output) = &output {
             let bytes = canonical::bytes(output)
                 .map_err(|_| "invalid_response")?
                 .len();
@@ -288,10 +291,6 @@ impl ProviderHost for TokenlessHost {
         let output = match result {
             Ok(Some(output)) => {
                 receipt["disposition"] = json!("produced");
-                if let Some(mapping) = &self.native_mapping {
-                    receipt["evidence"] = json!([{ "source_id":"tokenless-native-mapping/v1",
-                        "record_id":invocation["invocation_id"],"digest":canonical::document_digest(mapping).map_err(|_|host_error("invalid_mapping"))? }]);
-                }
                 receipt["meters"] = json!([
                     {"meter_id":"context.source_bytes","unit":"bytes","measurement_kind":"observed",
                         "method":"utf8-length/v1","value":invocation["input"]["artifact"]["content"].as_str().map(str::len)},
@@ -312,6 +311,10 @@ impl ProviderHost for TokenlessHost {
                 None
             }
         };
+        if let Some(mapping) = &self.native_mapping {
+            receipt["evidence"] = json!([{ "source_id":"tokenless-native-mapping/v1",
+                "record_id":invocation["invocation_id"],"digest":canonical::document_digest(mapping).map_err(|_|host_error("invalid_mapping"))? }]);
+        }
         self.registry
             .validate("provider-receipt-v1", &receipt)
             .map_err(|_| host_error("invalid_receipt"))?;

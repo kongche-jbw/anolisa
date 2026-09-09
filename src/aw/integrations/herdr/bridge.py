@@ -10,7 +10,15 @@ import sys
 import time
 
 SOURCE = "anolisa.aw"
-TOKEN_NAMES = ("aw", "aw_sec", "aw_tokenless", "aw_usage")
+TOKEN_NAMES = (
+    "aw",
+    "aw_sec",
+    "aw_tokenless",
+    "aw_usage",
+    "aw_sec_result",
+    "aw_tokenless_result",
+    "aw_savings",
+)
 MAX_REPLY = 1024 * 1024
 
 
@@ -113,11 +121,7 @@ def format_view(view: dict, scope: dict) -> dict:
         outcome.append(f"{failed} failed")
     if bypasses:
         outcome.append(f"{bypasses} bypassed")
-    usage = (
-        "History evidence"
-        if view["adoption"] == "local_history"
-        else "Adoption unknown"
-    )
+    usage = "History evidence" if view["adoption"] == "local_history" else "Adoption unknown"
     # Keep mixed outcomes visible even when a long Provider row is clipped.
     usage += " | " + (" / ".join(outcome) if outcome else "Ctrl+B Q: detach")
     return {
@@ -127,9 +131,7 @@ def format_view(view: dict, scope: dict) -> dict:
     }
 
 
-def publish(
-    socket_path: Path, pane_id: str, tokens: dict, seq: int, ttl_ms: int = 5000
-) -> None:
+def publish(socket_path: Path, pane_id: str, tokens: dict, seq: int, ttl_ms: int = 5000) -> None:
     rpc(
         socket_path,
         "pane.report_metadata",
@@ -143,9 +145,7 @@ def publish(
     )
 
 
-def refresh(
-    socket_path: Path, pane_id: str, verifier: Path, binding_path: Path, seq: int
-) -> bool:
+def refresh(socket_path: Path, pane_id: str, verifier: Path, binding_path: Path, seq: int) -> bool:
     try:
         binding = json.loads(binding_path.read_text())
         pane = rpc(socket_path, "pane.get", {"pane_id": pane_id})

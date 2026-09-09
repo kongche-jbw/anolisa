@@ -53,11 +53,12 @@ python3 src/aw/scripts/demo.py doctor
 
 ## 3. 在真实仓库中自由多轮交互
 
-完成上面的 setup 后，在要工作的仓库目录打开终端。`AW_CHECKOUT` 指向包含 AW 代码的 clone，`$PWD` 是你的真实项目：
+完成上面的 setup 后，在 cosh-shell 的 Bash 提示符进入要工作的仓库目录，激活一次当前 shell 的入口，然后直接输入 `qoder`。`AW_CHECKOUT` 指向包含 AW 代码的 clone，`$PWD` 是你的真实项目：
 
 ```bash
 AW_CHECKOUT=/path/to/anolisa-demo
-python3 "$AW_CHECKOUT/src/aw/scripts/session.py" --workspace "$PWD" --allow-unrecoverable
+source "$AW_CHECKOUT/src/aw/scripts/activate.sh" --allow-unrecoverable
+qoder
 ```
 
 也可以在 AW clone 根目录运行：
@@ -66,7 +67,7 @@ python3 "$AW_CHECKOUT/src/aw/scripts/session.py" --workspace "$PWD" --allow-unre
 python3 src/aw/scripts/session.py --workspace "$PWD" --allow-unrecoverable
 ```
 
-Qoder 会在指定目录打开。直接输入任务，连续追问、滚动、取消当前生成、确认工具权限都通过真实终端传递给 Qoder。不会自动发送提示词，也不会生成 fixture。仓库的源码、Git 分支与已有配置文件不由启动器修改；你授权 Qoder 执行的实际开发操作仍可能修改项目。首次遇到目录信任提示时由你决定，启动器不自动确认。
+Qoder 会在指定目录打开。Herdr 原生客户端直接继承当前终端，键盘输入和窗口大小由 Herdr 自己处理。启动器负责进程生命周期，不读取或转发键盘。直接输入任务，连续追问、滚动、取消当前生成、确认工具权限。不会自动发送提示词，也不会生成 fixture。仓库的源码、Git 分支与已有配置文件不由启动器修改；你授权 Qoder 执行的实际开发操作仍可能修改项目。首次遇到目录信任提示时由你决定，启动器不自动确认。
 
 可按下面的顺序体验当前 ANOLISA 仓库：
 
@@ -74,6 +75,19 @@ Qoder 会在指定目录打开。直接输入任务，连续追问、滚动、�
 2. 继续输入“用 Bash 执行 `cargo metadata --manifest-path src/tokenless/Cargo.toml --no-deps --format-version 1`，分析 Tokenless 的 crate 依赖关系。”
 3. 根据回答追问一个真实问题，例如“哪一层负责选择压缩器？请查看代码说明调用路径。”
 4. 查看 Herdr 的累计调用、`history adopted` 与节省字节。不是每条输出都能压缩；短输出、无法处理的格式和失败命令不会被计为节省。
+
+`activate.sh` 只为当前 Bash 定义 AW 的 `qoder` 函数，不修改启动文件或覆盖磁盘上的 Qoder 程序。退出 Qoder/Herdr 后回到原 shell，可再次输入 `qoder`。撤销本 shell 的接入：
+
+```bash
+unset -f qoder
+unset _AW_SESSION_ENTRY
+```
+
+侧栏使用显式高对比度文字，分别显示 Bash 结果数、SecCore/Tokenless 版本、各自调用数、最近结果，以及独立历史采用和节省字节。一个 Bash 结果可能调用两个 Provider，因此不会再把两个 Provider 的调用总数当作 Bash 次数。
+
+按 `Ctrl+B`，松开后按 `p`，打开 **AW PROVIDERS** 详情弹窗：`1` 查看实际可执行路径、SecCore 源码目录、原生协议、配置与执行版本、Manifest 摘要和累计统计；`2` 查看最近 40 次 Provider 调用的工具 ID、结果、耗时、输入/候选字节数及实际压缩操作。上下键滚动，`q` 关闭弹窗回到 Qoder。
+
+例如 Tokenless 原生返回 `no_savings`，显示 `preserved: no savings`；超时显示失败代码。旧证据没有保存原生原因时明确显示 `native reason not recorded`，不从 `bypassed` 猜测原因。详情来自当前会话 Rust 校验通过的事件；出现验证错误或会话切换会清除旧详情。源码路径和 Provider 结果仅在本地展示。
 
 当前 AW 接入主 Agent 的 Bash 后置输出。Read、Edit 等其他工具仍由 Qoder 正常使用，侧栏以 `Bash only` 明确范围。Bash 失败、超过原生捕获限制或无法验证的结果显示为 `unverified`，不增加已采用节省。等待权限确认或原生历史落盘期间显示 `pending`，不提前计入采用。这里的 SecCore 是后置内容检查，不提供前置命令拦截或 OS 防护。
 
@@ -87,7 +101,7 @@ rm -rf -- "$AW_CHECKOUT/src/aw/target/sessions/<UUID>"
 
 `--workspace` 默认当前目录；`--provider-dir` 默认 AW clone 的 `src/aw/providers/`，可选显式可信 manifest 目录。现有用户或项目 hook/plugin 共存仍未验收，启动时发现已配置 hook 或已安装 Qoder plugin 会明确退出。使用默认 `~/.qoder` 登录配置，不支持 `QODER_CONFIG_DIR`。恢复旧会话、子 Agent、自定义 cwd 切换和其他原生工具投影不在当前绑定合同内；无法绑定时保留原工具行为并显示未验证。
 
-多轮入口实际使用 `scripts/session.py` 启动 Herdr/Qoder，`session_hooks.py` 从原生 `UserPromptSubmit` 生成启动器轮次，并在 `PreToolUse` 为每个工具固定轮次；`PostToolUse` 再调用同一 Rust `aw-hook-cli`。独立进程 `session_observer.py` 等待完整历史行，通过 `aw-adoption-cli`、`aw-view-cli` 验证后发布统计。观察器独立运行，验证不会阻塞键盘输入。Provider、AW Core 和 Schema 沿用 setup 的实现；运行路径不经过测试脚本。原生事件依据见 [Qoder hooks](https://docs.qoder.com/cli/hooks)。
+多轮入口实际使用 `scripts/session.py` 启动 Herdr/Qoder，`session_hooks.py` 从原生 `UserPromptSubmit` 生成启动器轮次，并在 `PreToolUse` 为每个工具固定轮次；`PostToolUse` 再调用同一 Rust `aw-hook-cli`。独立进程 `session_observer.py` 等待完整历史行，通过 `aw-adoption-cli`、`aw-view-cli` 验证后发布统计。观察器独立运行，验证不会阻塞 Herdr 原生输入。Provider、AW Core 和 Schema 沿用 setup 的实现；运行路径不经过测试脚本。原生事件依据见 [Qoder hooks](https://docs.qoder.com/cli/hooks)。
 
 ## 4. 固定场景彩排与现场演示
 
