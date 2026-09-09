@@ -1,0 +1,14 @@
+[package]
+name = "aw-sec-host"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Bounded Linux Host for the SecCore native inspection provider"
+publish = false
+
+[dependencies]
+aw-contracts = { workspace = true }
+aw-core = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+libc = { workspace = true }

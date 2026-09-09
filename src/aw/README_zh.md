@@ -4,7 +4,7 @@
 
 AW 为原生 Agent adapter、AW Core 和组件 Provider 定义版本化能力合同。根目录的 `aw-contracts` 提供 JSON Schema 和离线语义校验，独立的 `aw-core` crate 通过可信 Host 接口执行固定计划。Provider 生成的候选仍需独立观测，才能确认实际采用；进程观测也不授予控制权限。现有组件继续按原有路径运行。
 
-**当前固定 Core 实现基线为 0.1.0，Schema 冻结仍待评审。** Core 已实现完整计划准入、串行调用、取消、Receipt 检查和 Linux 文件日志。它是可嵌入的库，尚未部署为服务。`aw-adapters` 库新增共享原生文本提取和六份宿主边界描述。生产 Provider Host driver、原生插件注册、进程控制和状态 Provider 仍需接入；测试不能证明真实 Agent 采用或 OS 防护生效。
+**当前固定 Core 实现基线为 0.1.0，Schema 冻结仍待评审。** Core 已实现完整计划准入、串行调用、取消、Receipt 检查和 Linux 文件日志。它是可嵌入的库，尚未部署为服务。`aw-adapters` 库新增共享原生文本提取和六份宿主边界描述。另有可选的 Qoder/Codex 后置入口及 Linux SecCore 内容检查 Host，用于接入验证。通用 Provider driver、自动插件注册、进程控制和状态 Provider 仍需接入；测试不能证明真实 Agent 采用或 OS 防护生效。
 
 ## 运行本地检查
 
@@ -25,6 +25,7 @@ cargo doc --workspace --no-deps --locked
 
 ## 阅读与接入
 
+- [Qoder/Codex 检查入口与真实 SecCore Host](docs/design/qoder-codex-inspection_zh.md)
 - [共享适配层：六类宿主映射、接口与限制](docs/design/native-adapters_zh.md)
 - [可运行的原生检查示例](crates/aw-adapters/examples/native_inspection.rs)
 - [Core 基线：接口、保证、限制与参考来源](docs/design/core-baseline_zh.md)

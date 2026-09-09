@@ -68,6 +68,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "aw-hook-cli"
+version = "0.1.0"
+dependencies = [
+ "aw-adapters",
+ "aw-contracts",
+ "aw-core",
+ "aw-sec-host",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "aw-sec-host"
+version = "0.1.0"
+dependencies = [
+ "aw-contracts",
+ "aw-core",
+ "libc",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "bit-set"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
