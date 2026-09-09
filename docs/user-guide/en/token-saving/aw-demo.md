@@ -80,7 +80,7 @@ Try this sequence in the ANOLISA repository:
 3. Ask a real follow-up, such as: “Which layer selects the compressor? Read the code and explain the call path.”
 4. Watch Herdr cumulative calls, `history adopted`, and saved bytes. Not every output compresses; short output, unsupported formats, and failed commands do not count as savings.
 
-The `scripts/cosh` launcher exports two Bash functions only to its own cosh process tree. Agent children have those functions removed to prevent recursive attachment. No startup file is changed. To leave cosh, type `exit` after leaving Herdr. In the parent shell, remove the temporary PATH entry:
+The `scripts/cosh` launcher exports Bash functions for `qoder`, `qodercli`, and `codex` only to its own cosh process tree. Agent children have those exported functions removed to prevent recursive attachment. No startup file is changed. To leave cosh, type `exit` after leaving Herdr. In the parent shell, remove the temporary PATH entry:
 
 ```bash
 export PATH="${PATH#"$AW_CHECKOUT/src/aw/scripts:"}"
@@ -100,7 +100,7 @@ AW currently handles the main Agent's Bash post-tool output. Other tools, includ
 
 Ordinary follow-up questions retain cumulative session counts. To start from zero, exit and run the launcher again. Pinned Herdr v0.9.0 cannot replace Qoder session identity. If you use `/new` or switch native sessions inside Qoder, AW clears stale sidebar statistics and asks you to restart; subsequent tools in that process retain native behavior without AW inspection or compression. Previous evidence remains. The default deadline is one hour; direct invocation with `session.py --duration 7200 --allow-unrecoverable` selects two hours, with a supported range of 60–14400 seconds.
 
-To exit, press `Ctrl+B`, release, then press `q`. This ends the Qoder, observer, and Herdr processes managed by this entry point. A normal Qoder process exit also ends the launcher. Native Qoder history, project changes, and trust settings you chose to save remain. Startup and exit print `src/aw/target/sessions/<UUID>/`, a 0700 AW evidence directory containing this session's original Bash output, adoption records, and logs; retain it according to the actual data requirements. Removing one AW evidence directory neither deletes Qoder history nor rolls back code.
+To exit, press `Ctrl+B`, release, then press `q`. This ends the Qoder, observer, and Herdr processes managed by this entry point. In a single-pane session, agent exit returns to cosh. Once you have additional panes, exiting one agent leaves the other panes running; `Ctrl+B q` ends the whole instance. Native Qoder history, project changes, and trust settings you chose to save remain. Startup and exit print `src/aw/target/sessions/<UUID>/`, a 0700 AW evidence directory containing this session's original Bash output, adoption records, and logs; retain it according to the actual data requirements. Removing one AW evidence directory neither deletes Qoder history nor rolls back code.
 
 ```bash
 rm -rf -- "$AW_CHECKOUT/src/aw/target/sessions/<UUID>"
@@ -109,6 +109,14 @@ rm -rf -- "$AW_CHECKOUT/src/aw/target/sessions/<UUID>"
 `--workspace` defaults to the current directory. `--provider-dir` defaults to the AW clone's `src/aw/providers/` and can select another explicit trusted manifest directory. User/project hook and plugin coexistence is not validated; configured hooks or installed Qoder plugins cause an explicit startup failure. The launcher uses default `~/.qoder` login configuration and does not support `QODER_CONFIG_DIR`. Resuming old sessions, subagents, custom cwd changes, and other native tool projections remain outside this binding contract; failed binding preserves native behavior and reports unverified results.
 
 The multi-turn entry point uses `scripts/session.py` to launch Herdr/Qoder. `session_hooks.py` generates launcher turn identities from native `UserPromptSubmit` events and snapshots each tool's turn at `PreToolUse`; `PostToolUse` invokes the same Rust `aw-hook-cli`. Independent process `session_observer.py` waits for complete history lines, verifies with `aw-adoption-cli` and `aw-view-cli`, then publishes counters. Verification runs independently of native Herdr input. Providers, AW Core, and Schema use the setup implementations, and this runtime path does not import test runners. Native event references: [Qoder hooks](https://docs.qoder.com/cli/hooks).
+
+### Independent Qoder sessions in split panes
+
+After starting a fresh Herdr instance through cosh, press `Ctrl+B`, release, then `v` for side-by-side panes or `-` for stacked panes. The pane border context menu also offers **Split right** and **Split down**. Enter `qoder` or `qodercli` at the new pane’s shell prompt. Each invocation discovers the configured Providers, creates private hook settings and evidence, and starts its own observer. Sidebar statistics belong to that pane’s Agent. `Ctrl+B p` opens details for the focused pane. Closing the first Qoder leaves the second running; restarting Qoder in a pane creates fresh statistics.
+
+The instance uses a private Bash rc file that sources your normal `~/.bashrc` before defining these commands; it does not modify user startup files. Agent subprocesses do not inherit the entry functions. Calling the agent executable by absolute path bypasses this integration. Codex panes display that AW is not connected; they do not claim SecCore or Tokenless execution. A shared instance retains the original startup deadline and explicit output-replacement consent.
+
+Existing Herdr instances keep their old shell configuration. Save ongoing work, leave the old instance, then start the updated entry; already running Agents are not retrofitted.
 
 ### Demonstrate that SecCore detects sensitive content
 

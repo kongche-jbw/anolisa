@@ -251,7 +251,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("session", type=Path)
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--group", action="store_true")
     args = parser.parse_args()
+    if args.group:
+        from session_panels import focused_root
+
+        args.session = focused_root(args.session)
     if args.json:
         print(json.dumps(read(args.session / "provider-details.json"), indent=2))
     else:

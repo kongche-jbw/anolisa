@@ -112,6 +112,7 @@ def agent(root: Path) -> None:
     # Do not recursively attach Herdr for commands run inside an agent.
     for name in (
         "BASH_FUNC_qoder%%",
+        "BASH_FUNC_qodercli%%",
         "BASH_FUNC_codex%%",
         "_AW_CHECKOUT",
         "_AW_PYTHON",
@@ -166,9 +167,9 @@ def stop_agent(root: Path) -> None:
     raise RuntimeError(f"Agent process group {config['agent_pgid']} survived cleanup")
 
 
-def run(args: argparse.Namespace) -> None:
-    kind = getattr(args, "agent_kind", "qoder")
-    agent_args = getattr(args, "agent_args", [])
+def prepare(args: argparse.Namespace) -> Path:
+    kind = args.agent_kind
+    agent_args = args.agent_args
     if agent_args[:1] == ["--"]:
         agent_args = agent_args[1:]
     if kind == "qoder" and any(
@@ -224,6 +225,9 @@ def run(args: argparse.Namespace) -> None:
         "agent_args": agent_args,
         "session_id": str(uuid.uuid4()),
         "duration_seconds": args.duration,
+        "provider_dir": str(args.provider_dir.resolve()),
+        "allow_unrecoverable": args.allow_unrecoverable,
+        "deadline_monotonic": time.monotonic() + args.duration,
         "xdg": {key: os.environ.get(key) for key in ("XDG_CONFIG_HOME", "XDG_STATE_HOME")},
     }
     write(root / "launch.json", launch)
@@ -234,11 +238,74 @@ def run(args: argparse.Namespace) -> None:
             root / "provider-details.json",
             {"status": "not_connected", "session_id": launch["session_id"]},
         )
+    return root
+
+
+def attach(args: argparse.Namespace) -> None:
+    from session_panels import register
+
+    group = args.attach.resolve()
+    owner = read(group / "ownership.json")
+    config = read(group / "launch.json")
+    if not live(owner["launcher_pid"], owner["launcher_start_ticks"]):
+        raise ValueError("the owning Herdr launcher is no longer running")
+    if os.environ.get("HERDR_SOCKET_PATH") != owner["socket"]:
+        raise ValueError("attachment must run inside the owning Herdr instance")
+    pane = os.environ.get("HERDR_PANE_ID")
+    if not pane:
+        raise ValueError("native Herdr pane identity is missing")
+    process = bridge.rpc(Path(owner["socket"]), "pane.process_info", {"pane_id": pane})
+    parent = os.getppid()
+    for _ in range(64):
+        if parent == process["shell_pid"]:
+            break
+        if parent <= 1:
+            raise ValueError("attachment is not descended from the selected pane shell")
+        parent = int(Path(f"/proc/{parent}/stat").read_text().rsplit(")", 1)[1].split()[1])
+    else:
+        raise ValueError("pane ancestry exceeds limit")
+    args.duration = int(config["deadline_monotonic"] - time.monotonic())
+    if args.duration <= 0:
+        raise ValueError("Herdr instance deadline reached")
+    args.provider_dir = Path(config["provider_dir"])
+    args.allow_unrecoverable = config["allow_unrecoverable"]
+    for key, value in config["xdg"].items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+    root = prepare(args)
+    write(
+        root / "ownership.json",
+        {
+            "launcher_pid": os.getpid(),
+            "launcher_start_ticks": ticks(os.getpid()),
+            "launcher_command": [sys.executable, *sys.argv],
+            "cwd": str(args.workspace.resolve()),
+            "duration_seconds": args.duration,
+            "group_root": str(group),
+            "pane_id": pane,
+            "socket": owner["socket"],
+            "stop_command": f"kill -TERM {os.getpid()}",
+            "server_log": owner["server_log"],
+        },
+    )
+    register(group, root, pane)
+    agent(root)
+
+
+def run(args: argparse.Namespace) -> None:
+    from session_panels import Panels, pane_shell, register, registrations
+
+    root = prepare(args)
+    workspace = args.workspace.resolve()
+    (root / "panels").mkdir(mode=0o700)
     binary = str(demo.DATA / "herdr/herdr")
-    server = client = observer = None
+    server = client = panels = None
     original_terminal = termios.tcgetattr(sys.stdin.fileno())
     ownership = {
         "launcher_pid": os.getpid(),
+        "launcher_start_ticks": ticks(os.getpid()),
         "launcher_command": [sys.executable, *sys.argv],
         "cwd": str(workspace),
         "duration_seconds": args.duration,
@@ -249,9 +316,13 @@ def run(args: argparse.Namespace) -> None:
         runtime = Path(temporary)
         endpoint = runtime / "api.sock"
         panel_command = shlex.join(
-            [sys.executable, str(AW / "scripts/provider_details.py"), str(root)]
+            [sys.executable, str(AW / "scripts/provider_details.py"), "--group", str(root)]
         )
         config_text = (AW / "integrations/herdr/config.toml").read_text()
+        config_text = config_text.replace(
+            'default_shell = "/bin/bash"',
+            "default_shell = " + json.dumps(str(pane_shell(root, runtime))),
+        )
         config_text += (
             '\n[[keys.command]]\nkey = "prefix+p"\ntype = "popup"\n'
             'width = "90%"\nheight = "85%"\ndescription = "AW Provider details"\n'
@@ -259,7 +330,7 @@ def run(args: argparse.Namespace) -> None:
         )
         (runtime / "config.toml").write_text(config_text)
         env = {key: value for key, value in os.environ.items() if not key.startswith("HERDR_")}
-        for name in ("BASH_FUNC_qoder%%", "BASH_FUNC_codex%%"):
+        for name in ("BASH_FUNC_qoder%%", "BASH_FUNC_qodercli%%", "BASH_FUNC_codex%%"):
             env.pop(name, None)
         env.update(
             HERDR_SOCKET_PATH=str(endpoint),
@@ -301,6 +372,8 @@ def run(args: argparse.Namespace) -> None:
                 )
                 pane = bridge.rpc(endpoint, "pane.list", {})["panes"][0]["pane_id"]
                 ownership["pane_id"] = pane
+                register(root, root, pane)
+                panels = Panels(root, endpoint, BINS, args.duration, log)
                 client = subprocess.Popen(
                     [binary],
                     cwd=workspace,
@@ -318,59 +391,27 @@ def run(args: argparse.Namespace) -> None:
                     {"pane_id": pane, "text": shlex.join(command) + "\n"},
                 )
                 deadline = time.monotonic() + args.duration
-                codex_metadata_at = 0.0
-                codex_sequence = 0
+                additional_panes_seen = False
                 while time.monotonic() < deadline:
                     if client.poll() is not None:
                         break
                     if server.poll() is not None:
                         raise RuntimeError("Herdr server exited unexpectedly")
+                    pane_list = bridge.rpc(endpoint, "pane.list", {})["panes"]
+                    panels.refresh({pane["pane_id"] for pane in pane_list})
+                    pane_count = len(pane_list)
+                    additional_panes_seen |= pane_count > 1
+                    # Preserve the original single-pane exit behavior. Additional
+                    # panes belong to Herdr and survive the first agent's exit.
+                    if (
+                        not additional_panes_seen
+                        and all(
+                            Path(entry["root"]) in panels.ended for entry in registrations(root)
+                        )
+                        and pane_count == 1
+                    ):
+                        break
                     time.sleep(0.1)
-                    if (root / "runtime.json").exists():
-                        config = read(root / "runtime.json")
-                        if not live(config["agent_pid"], config["agent_start_ticks"]):
-                            break
-                        if kind == "codex":
-                            if time.monotonic() >= codex_metadata_at:
-                                codex_sequence += 1
-                                bridge.publish(
-                                    endpoint,
-                                    pane,
-                                    {
-                                        "aw": "AW hooks: not connected",
-                                        "aw_sec": "SecCore: not invoked",
-                                        "aw_tokenless": "Tokenless: not invoked",
-                                        "aw_usage": "Ctrl+B p: Provider configuration",
-                                    },
-                                    codex_sequence,
-                                )
-                                codex_metadata_at = time.monotonic() + 2
-                            continue
-                        if observer is None:
-                            observer_command = [
-                                sys.executable,
-                                str(AW / "scripts/session_observer.py"),
-                                str(root),
-                                str(endpoint),
-                                pane,
-                                str(BINS),
-                                str(args.duration),
-                            ]
-                            observer = subprocess.Popen(
-                                observer_command,
-                                stdout=log,
-                                stderr=log,
-                                env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"),
-                                start_new_session=True,
-                            )
-                            ownership.update(
-                                observer_pid=observer.pid,
-                                observer_command=observer_command,
-                                observer_stop=f"kill -TERM -- -{observer.pid}",
-                            )
-                            write(root / "ownership.json", ownership)
-                        elif observer.poll() is not None:
-                            raise RuntimeError("AW observer exited; inspect herdr.log")
                 else:
                     ownership["end_reason"] = "session duration reached"
             finally:
@@ -379,9 +420,12 @@ def run(args: argparse.Namespace) -> None:
                 signal.signal(signal.SIGHUP, signal.SIG_IGN)
                 termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, original_terminal)
                 try:
-                    stop_agent(root)
+                    if panels is not None:
+                        panels.close()
+                    else:
+                        stop_agent(root)
                 finally:
-                    for process in (observer, client, server):
+                    for process in (client, server):
                         if process is not None and process.poll() is None:
                             if process is client:
                                 process.terminate()
@@ -399,16 +443,11 @@ def run(args: argparse.Namespace) -> None:
                         "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l\x1b[?2004l\x1b[?1004l\x1b[?2031l\x1b[<u\x1b[?7h\x1b[?1049l\x1b[?25h\x1b[0m"
                     )
                     sys.stdout.flush()
-                    if (root / "runtime.json").exists():
-                        config = read(root / "runtime.json")
-                        if live(config["agent_pid"], config["agent_start_ticks"]):
-                            raise RuntimeError(
-                                "owned agent process survived cleanup; inspect runtime.json"
-                            )
-                    ownership["cleanup"] = (
-                        "owned processes stopped; native agent history and workspace retained"
-                    )
-                    write(root / "ownership.json", ownership)
+                ownership.update(read(root / "ownership.json"))
+                ownership["cleanup"] = (
+                    "owned processes stopped; native agent history and workspace retained"
+                )
+                write(root / "ownership.json", ownership)
     print(f"Session ended. Workspace and native agent history retained.\nAW evidence: {root}")
 
 
@@ -418,6 +457,7 @@ def main() -> int:
         agent(Path(sys.argv[2]))
         return 0
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--attach", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--agent-kind", choices=("qoder", "codex"), default="qoder")
     parser.add_argument("agent_args", nargs=argparse.REMAINDER)
     parser.add_argument("--workspace", type=Path, default=Path.cwd())
@@ -435,7 +475,10 @@ def main() -> int:
     signal.signal(signal.SIGTERM, lambda _signal, _frame: sys.exit(130))
     signal.signal(signal.SIGHUP, lambda _signal, _frame: sys.exit(130))
     try:
-        run(args)
+        if args.attach:
+            attach(args)
+        else:
+            run(args)
     except (
         OSError,
         ValueError,

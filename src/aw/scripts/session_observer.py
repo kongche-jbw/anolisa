@@ -43,7 +43,7 @@ class Observer:
         self.finished: set[str] = set()
         self.bindings: dict[str, str] = {}
         self.reported_session = None
-        self.sequence = 0
+        self.sequence = time.monotonic_ns()
 
     def refresh(self) -> None:
         self.sequence += 1

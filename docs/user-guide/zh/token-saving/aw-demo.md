@@ -80,7 +80,7 @@ Qoder 会在指定目录打开。Herdr 原生客户端直接继承当前终端�
 3. 根据回答追问一个真实问题，例如“哪一层负责选择压缩器？请查看代码说明调用路径。”
 4. 查看 Herdr 的累计调用、`history adopted` 与节省字节。不是每条输出都能压缩；短输出、无法处理的格式和失败命令不会被计为节省。
 
-`scripts/cosh` 启动器仅向自身 cosh 进程树导出两个 Bash 函数；启动 Agent 时移除这两个函数，避免递归打开 Herdr。不修改启动文件。退出 Herdr 后输入 `exit` 离开 cosh；在外层 shell 移除临时 PATH：
+`scripts/cosh` 启动器仅向自身 cosh 进程树导出 `qoder`、`qodercli`、`codex` 的 Bash 函数；启动 Agent 时移除这些导出函数，避免递归打开 Herdr。不修改启动文件。退出 Herdr 后输入 `exit` 离开 cosh；在外层 shell 移除临时 PATH：
 
 ```bash
 export PATH="${PATH#"$AW_CHECKOUT/src/aw/scripts:"}"
@@ -100,7 +100,7 @@ Herdr 顶部 Agent 的 `blocked` 状态表示 Agent 处于等待状态，不等�
 
 普通追问保留当前会话的累计值。要从零开始，请退出后重新运行启动命令。固定 Herdr v0.9.0 不支持替换 Qoder 会话绑定；若在 Qoder 内输入 `/new` 或切换原生会话，AW 会清除侧栏旧统计并提示重新启动，本进程后续工具保留原生行为、不再执行 AW 检查或压缩。旧证据保留。默认最长运行一小时；直接调用 `session.py --duration 7200 --allow-unrecoverable` 可设为两小时，允许范围为 60～14400 秒。
 
-退出时按 `Ctrl+B`，松开后按 `q`；这会结束此入口管理的 Qoder、观察器与 Herdr。Qoder 进程正常退出时，入口也会结束。Qoder 的原生历史、你修改的项目文件和你选择保存的信任设置会保留。启动时和退出后都会打印 AW 证据目录 `src/aw/target/sessions/<UUID>/`，权限为 0700，包含本次 Bash 原文、采用记录和日志；按实际数据管理要求保管它。删除单次 AW 证据不会删除 Qoder 历史或回滚代码。
+退出时按 `Ctrl+B`，松开后按 `q`；这会结束此入口管理的 Qoder、观察器与 Herdr。单面板时 Agent 退出返回 cosh；有其他面板时，退出一个 Agent 会保留其他面板，`Ctrl+B q` 才结束整个实例。Qoder 的原生历史、你修改的项目文件和你选择保存的信任设置会保留。启动时和退出后都会打印 AW 证据目录 `src/aw/target/sessions/<UUID>/`，权限为 0700，包含本次 Bash 原文、采用记录和日志；按实际数据管理要求保管它。删除单次 AW 证据不会删除 Qoder 历史或回滚代码。
 
 ```bash
 rm -rf -- "$AW_CHECKOUT/src/aw/target/sessions/<UUID>"
@@ -109,6 +109,14 @@ rm -rf -- "$AW_CHECKOUT/src/aw/target/sessions/<UUID>"
 `--workspace` 默认当前目录；`--provider-dir` 默认 AW clone 的 `src/aw/providers/`，可选显式可信 manifest 目录。现有用户或项目 hook/plugin 共存仍未验收，启动时发现已配置 hook 或已安装 Qoder plugin 会明确退出。使用默认 `~/.qoder` 登录配置，不支持 `QODER_CONFIG_DIR`。恢复旧会话、子 Agent、自定义 cwd 切换和其他原生工具投影不在当前绑定合同内；无法绑定时保留原工具行为并显示未验证。
 
 多轮入口实际使用 `scripts/session.py` 启动 Herdr/Qoder，`session_hooks.py` 从原生 `UserPromptSubmit` 生成启动器轮次，并在 `PreToolUse` 为每个工具固定轮次；`PostToolUse` 再调用同一 Rust `aw-hook-cli`。独立进程 `session_observer.py` 等待完整历史行，通过 `aw-adoption-cli`、`aw-view-cli` 验证后发布统计。观察器独立运行，验证不会阻塞 Herdr 原生输入。Provider、AW Core 和 Schema 沿用 setup 的实现；运行路径不经过测试脚本。原生事件依据见 [Qoder hooks](https://docs.qoder.com/cli/hooks)。
+
+### 分屏中的独立 Qoder 会话
+
+从 cosh 启动新的 Herdr 实例后，按 `Ctrl+B`，松开后按 `v` 左右分屏，或按 `-` 上下分屏；面板边框右键菜单也有 **Split right**、**Split down**。在新面板的 shell 提示符输入 `qoder` 或 `qodercli`。每次启动都会发现配置的 Provider，创建独立 hooks 配置、证据和观察器，侧栏统计归属该面板的 Agent。`Ctrl+B p` 查看当前聚焦面板的详情。退出第一个 Qoder，第二个仍可继续运行；在面板内重新启动 Qoder，会建立新的统计。
+
+实例使用私有 Bash rc，先加载正常的 `~/.bashrc`，再定义上述命令，不修改用户启动文件。Agent 子进程不继承入口函数；通过绝对路径直接调用原始 Agent 可执行文件会绕过集成。Codex 面板明确显示 AW 未连接，不宣称 SecCore 或 Tokenless 已执行。同一实例沿用启动时的截止时间与输出替换授权。
+
+已打开的 Herdr 实例保留旧 shell 配置。请先保存正在进行的任务，退出旧实例后重新启动更新后的入口；不会给正在运行的 Agent 强行补装 hooks。
 
 ### 证明 SecCore 检测生效
 

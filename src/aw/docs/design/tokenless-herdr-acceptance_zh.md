@@ -98,21 +98,27 @@ PYTHONDONTWRITEBYTECODE=1 timeout 210 python3 integrations/herdr/live_smoke.py \
 
 合成测试入口在 `lifecycle.json` 或 `ownership.json` 中记录命令、版本、PID 与启动代次、路径和停止命令。成功清理只删除本次新 UUID 会话、同名状态目录、临时 home，以及测试目录的信任条目。认证不复制、不删除，日志与合成证据保留在所选目录。共享 VM 和现有 Herdr 不会被重启。若不再保留本工作树的生成材料，可分别对 AW 与 Tokenless 的 Cargo manifest 执行 `cargo clean`；先保存需要的证据。
 
+### 按面板独立接入
+
+`session.py` 为每次 Qoder 启动准备独立原生会话、hooks 文件、PID/启动代次绑定与证据目录；外层启动器拥有私有 Herdr 服务，`session_panels.py` 注册各面板并管理其观察器。私有 Bash rc 加载正常用户初始化后，在本实例定义 `qoder`、`qodercli`、`codex`。附着必须匹配实例 socket，且进程祖先属于原生面板 shell。Agent 使用原始 XDG 配置，并移除继承的入口函数。
+
+Provider 弹窗通过原生 `pane.current` 与存活 PID 代次选择该面板注册项。观察器重启使用单调时钟序列；每个观察器仍独立验证原生 session/PID 和 Rust 证据后发布。退出一个 Agent 会停止其观察器，其他面板继续；单面板保留退出返回 cosh 的行为。`Ctrl+B q` 结束整个实例拥有的进程。Codex 仍只附着终端，明确显示 AW 未连接。
+
 ## 交互入口交接
 
-- **Status**: 仓库 cosh 入口和仅 Agent 触发 Herdr 已实现。Qoder 检查/投影已验证；Codex 目前仅附着终端，明确显示 AW 未连接。
-- **Started**: 本次 cosh/Bash、Qoder、Codex help、Herdr 服务/客户端、观察器和 popup 进程均已结束，无遗留服务或端口。
-- **Changed**: `scripts/cosh`、`demo.py`、`session.py`、`provider_details.py`、Herdr 配置、`tests/session_live.py`、`tests/cosh_codex_live.py`、`tests/test_provider_details.py` 及 README、验收说明、用户指南的中英文版本。cosh 二进制从未改动的本仓库 Rust 源码编译。
-- **Validation**: 真实 cosh PTY：普通命令不启动 Herdr、Qoder 启动后返回同一 Bash PID、敏感 api_key 检测（high、1 次、43/43 B）、三次历史采用/4056 B 节省、SGR 鼠标切页/关闭和 SIGHUP 清理通过。Codex 原生 --help 参数传递及返回通过，没有发起模型请求。测试使用 cosh --isolated 避免改动用户 rc/历史。146 项 Rust、34 项 Python、fmt、Clippy、跨语言摘要、文档构建及 Bash 语法检查通过。
-- **Cleanup/remaining**: 已核验本次所有进程 PID 和临时 namespace 不存在；合成 Qoder 历史/信任由测试清除。保留 `target/session-live-1b52c36f`, `target/session-live-d106e035`, `target/session-live-a3a71efe`, `target/cosh-codex-79333e1c`（依次为安全、鼠标、挂断、最终 Codex 验证）、下方清理命令列出的对应 `target/sessions/` UUID 和 `target/cosh-entry-checks/`（检查日志）。原有 `target/demo/` 保留 setup 产物（含 cosh）与工具缓存，前序里程碑不变。已删除并核验重复的 `cosh-codex-694abc2b` 及其拥有的会话。
+- **Status**: 每个面板的 Qoder/qodercli 独立 AW 接入、随焦点切换详情、独立退出及面板复用后的新统计已实现并通过实测。已有 Herdr 实例需重启；Codex 仍仅附着终端。
+- **Started**: 本次 cosh/Bash、Qoder、Codex help、Herdr、观察器和 Provider popup 均已结束，无新增服务或端口遗留；未操作已有用户会话。
+- **Changed**: `scripts/cosh`、`scripts/session.py`、`scripts/session_panels.py`、`scripts/session_observer.py`、`scripts/provider_details.py`；`tests/session_live.py`、`tests/multipane_scenario.py`、`tests/cosh_codex_live.py`、`tests/test_session_panels.py`；README、验收说明及 AW 演示指南的中英文版本。未改动 Rust 或 Provider 协议。
+- **Validation**: `session_live.py --multipane`：真实 Ctrl+B v 分屏、qodercli 接入、独立 clean/sensitive 调用及 session ID、详情定位第二面板、退出第一个或关闭其面板后第二个继续执行，以及同一面板重启 Qoder 后从 1 次调用重新统计。原生鼠标 popup 回归、Codex --help 分发及 SIGHUP 清理也通过。146 项 Rust、38 项 Python、fmt、Clippy、跨语言摘要、文档构建、格式化及 Bash 语法通过。
+- **Cleanup/remaining**: 已核验拥有的 PID 和临时 namespace 均不存在，合成 Qoder 历史和信任条目已清除。保留 `target/session-live-bfaa3ee2`, `target/session-live-2c3142a5`, `target/session-live-4e956619`, `target/cosh-codex-6e0e3b43`, `target/session-live-4a233443`（分别为鼠标、多面板退出/关闭两种情况、Codex、挂断证据）、下列对应会话 UUID 及 `target/panels-checks/` 检查日志。诊断重试产物在定向核验清理后已删除。原有 `target/demo/` 继续提供可运行 setup，前序里程碑产物保持不变。
 
-在仓库根目录仅清理本里程碑验证产物：
+在仓库根目录清理本里程碑测试产物：
 
 ```bash
-rm -rf -- src/aw/target/session-live-1b52c36f src/aw/target/session-live-d106e035 src/aw/target/session-live-a3a71efe src/aw/target/cosh-codex-79333e1c src/aw/target/sessions/cee93856-712f-4ef5-8451-d7aa53d1572f src/aw/target/sessions/dbd7898d-8474-4109-bcce-4772fe2df9dc src/aw/target/sessions/9a9113fc-2c90-4754-b45a-4a9517ddc136 src/aw/target/sessions/51f5a00d-1ece-4694-a781-d5e93303a5ff src/aw/target/cosh-entry-checks
+rm -rf -- src/aw/target/session-live-bfaa3ee2 src/aw/target/session-live-2c3142a5 src/aw/target/cosh-codex-6e0e3b43 src/aw/target/session-live-4a233443 src/aw/target/sessions/96f0b56e-0709-427b-9f99-09d53b59821f src/aw/target/sessions/7e10c7fd-e85f-4daf-bceb-e4eaaf8b7f35 src/aw/target/sessions/7050557e-1084-4c5d-9727-1bd77c1409f0 src/aw/target/sessions/2a77e266-32b0-40e1-aa4f-79328da05ab0 src/aw/target/sessions/e42db68b-a89d-4a93-a187-6b0378f69ed0 src/aw/target/sessions/1d9e690e-f98e-45e9-a0d7-05ceb0fa473f src/aw/target/session-live-4e956619 src/aw/target/sessions/270dcf2a-eeaf-45c2-876f-ce26f71e6435 src/aw/target/sessions/11015fd8-f67a-4385-ae5b-b0899dc24532 src/aw/target/sessions/65c66003-3b59-420f-9609-852c2d91cad0 src/aw/target/panels-checks
 ```
 
-若要移除 setup 产物和缓存，先退出所有演示会话，再执行 `rm -rf -- src/aw/target/demo`；之后需重新执行 `python3 src/aw/scripts/demo.py setup` 才能使用入口。
+退出所有演示实例后，可用 `rm -rf -- src/aw/target/demo` 移除 setup；之后用 `python3 src/aw/scripts/demo.py setup` 重建。
 
 ## 本次核验结果
 

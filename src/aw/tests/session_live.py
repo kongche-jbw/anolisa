@@ -109,6 +109,11 @@ def main():
                 if session and (session / "runtime.json").exists():
                     owned = read(session / "ownership.json")
                     pane = owned["pane_id"]
+                    if "--multipane" in sys.argv:
+                        from multipane_scenario import run
+
+                        result = run(master, session, work, screen)
+                        break
                     visible = bridge.rpc(
                         Path(owned["socket"]), "pane.read", {"pane_id": pane, "source": "visible"}
                     )
@@ -316,19 +321,38 @@ def main():
         if process.poll() is None:
             if session and (session / "ownership.json").exists():
                 owner = read(session / "ownership.json")
-                os.kill(owner["launcher_pid"], signal.SIGTERM)
+                if "cleanup" not in owner:
+                    os.kill(owner["launcher_pid"], signal.SIGTERM)
+                deadline = time.monotonic() + 30
+                while time.monotonic() < deadline:
+                    if "cleanup" in read(session / "ownership.json"):
+                        break
+                    ready, _, _ = select.select([master], [], [], 0.1)
+                    if ready:
+                        os.read(master, 65536)
             else:
                 os.killpg(process.pid, signal.SIGTERM)
-            time.sleep(1)
-            os.write(master, b"exit\r")
-            process.wait(timeout=25)
+            if process.poll() is None:
+                os.write(master, b"exit\r")
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGTERM)
+                process.wait(timeout=5)
         os.close(master)
         os.close(slave)
-        if session and (session / "runtime.json").exists():
-            runtime = read(session / "runtime.json")
+        cleanup_roots = [session] if session else []
+        if session and (session / "panels").exists():
+            cleanup_roots = [Path(read(p)["root"]) for p in (session / "panels").glob("*.json")]
+        for cleanup_root in cleanup_roots:
+            if not (cleanup_root / "runtime.json").exists():
+                continue
+            runtime = read(cleanup_root / "runtime.json")
             session_ids = {runtime["session_id"]}
-            session_ids.add(read(session / "state.json")["session_id"])
-            session_ids.update(read(p)["session_id"] for p in (session / "turns").glob("*.json"))
+            session_ids.add(read(cleanup_root / "state.json")["session_id"])
+            session_ids.update(
+                read(p)["session_id"] for p in (cleanup_root / "turns").glob("*.json")
+            )
             project = (
                 Path.home() / ".qoder/projects" / str(work).replace("/", "-").replace("_", "-")
             )
@@ -341,12 +365,13 @@ def main():
                 project.rmdir()
             except OSError:
                 pass
-            owned = read(session / "ownership.json")
-            assert not Path(owned["temporary_directory"]).exists()
+            owned = read(cleanup_root / "ownership.json")
+            if "temporary_directory" in owned:
+                assert not Path(owned["temporary_directory"]).exists()
             for pid in (
                 runtime["agent_pid"],
-                owned["server_pid"],
-                owned["client_pid"],
+                owned.get("server_pid"),
+                owned.get("client_pid"),
                 owned.get("observer_pid"),
             ):
                 if pid is None:

@@ -78,7 +78,7 @@ def main():
                         assert runtime["agent_kind"] == "codex"
                         assert runtime["command"] == [runtime["agent_program"], "--help"]
                         assert not list((session / "evidence").glob("*.json"))
-                        assert read(session / "provider-details.json")["status"] == "not_connected"
+                        assert read(session / "provider-details.json")["status"] == "agent exited"
                         os.write(master, b"printf 'COSH_%s\\n' RETURNED\rexit\r")
                         break
             else:

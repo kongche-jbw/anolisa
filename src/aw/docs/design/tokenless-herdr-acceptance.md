@@ -146,21 +146,27 @@ proofs stay in the chosen output directory. No shared VM or existing Herdr is
 restarted. To discard all generated material in this worktree, run `cargo clean`
 with each of the AW and Tokenless Cargo manifests; save useful evidence first.
 
+### Per-pane attachment
+
+`session.py` prepares a separate native session, hooks file, PID/start binding and evidence root for every Qoder invocation. The outer launcher owns the private Herdr server; `session_panels.py` registers each pane and owns its observer. A private Bash rc sources normal user initialization and defines `qoder`, `qodercli`, and `codex` only for that instance. Attachments must match the instance socket and descend from the native pane shell. Agents execute with the original XDG configuration and without inherited entry functions.
+
+Provider popup selection uses native `pane.current` and the live PID generation to find that pane’s registration. Metadata sequences use the monotonic clock across observer restarts. Each observer still independently validates native session/PID and Rust evidence before publication. Closing one Agent stops its observer while other panes continue; single-pane exit retains the original return-to-cosh behavior. `Ctrl+B q` ends all processes owned by the instance. Codex remains terminal-only with explicit disconnected AW status.
+
 ## Interactive handoff
 
-- **Status**: Repository cosh entry and agent-only Herdr attachment implemented. Qoder inspection/projection verified; Codex terminal attachment only, with AW explicitly not connected.
-- **Started**: Owned cosh/Bash, Qoder, Codex help, Herdr server/client, observer and popup processes ended; no services or ports remain.
-- **Changed**: `scripts/cosh`, `demo.py`, `session.py`, `provider_details.py`, Herdr config, `tests/session_live.py`, `tests/cosh_codex_live.py`, `tests/test_provider_details.py`, README pair, acceptance pair and user-guide pair. The cosh binary is compiled from unchanged repository Rust source.
-- **Validation**: Real cosh PTY: ordinary command without Herdr, Qoder launch, return to the same Bash PID, sensitive api_key finding (high, 1, 43/43 B), three history adoptions/4056 B saved, SGR mouse page/close, and SIGHUP cleanup passed. Codex native --help dispatch and return passed without a model request. Tests use cosh --isolated to avoid user rc/history changes. 146 Rust and 34 Python tests, fmt, Clippy, canonical vectors, docs build and Bash syntax passed.
-- **Cleanup/remaining**: Verified all owned process IDs and temporary namespaces absent; synthetic Qoder histories/trust were removed by the live harness. Retained `target/session-live-1b52c36f`, `target/session-live-d106e035`, `target/session-live-a3a71efe`, `target/cosh-codex-79333e1c` (security, mouse, hangup, and final Codex checks), corresponding `target/sessions/` UUIDs in the cleanup command, and `target/cosh-entry-checks/` (gate logs). Existing `target/demo/` retains setup builds, including cosh, and tooling caches. Earlier milestones remain unchanged. Superseded Codex check `cosh-codex-694abc2b` and its owned session were deleted and absence verified.
+- **Status**: Per-pane Qoder/qodercli AW attachment, focused Provider details, independent Agent exit and fresh counters after pane reuse are implemented and passed live acceptance. Existing Herdr instances require restart; Codex remains terminal-only.
+- **Started**: Owned cosh/Bash, Qoder, Codex help, Herdr, observers and Provider popup processes ended. No newly started services or ports remain; existing user sessions were not operated.
+- **Changed**: `scripts/cosh`, `scripts/session.py`, `scripts/session_panels.py`, `scripts/session_observer.py`, `scripts/provider_details.py`; `tests/session_live.py`, `tests/multipane_scenario.py`, `tests/cosh_codex_live.py`, `tests/test_session_panels.py`; README, acceptance and AW demo guide in both languages. No Rust/provider protocol changes.
+- **Validation**: `session_live.py --multipane`: real Ctrl+B v split, qodercli attachment, separate clean/sensitive calls and session IDs, popup targeting the second pane, continued second Agent execution after first exit or closing its pane, and fresh one-call statistics after restarting Qoder in the same pane. Native mouse popup regression, Codex --help dispatch and SIGHUP cleanup also passed. 146 Rust and 38 Python tests, fmt, Clippy, canonical vectors, docs build, formatter and Bash syntax passed.
+- **Cleanup/remaining**: Verified owned PIDs and temporary namespaces absent; synthetic Qoder histories and trust entries removed. Retained `target/session-live-bfaa3ee2`, `target/session-live-2c3142a5`, `target/session-live-4e956619`, `target/cosh-codex-6e0e3b43`, `target/session-live-4a233443` for mouse, both Agent-exit/pane-close multi-pane cases, Codex and hangup evidence, the corresponding session UUIDs below, and `target/panels-checks/` for gate logs. Diagnostic retries were removed after targeted cleanup verification. Existing `target/demo/` remains the runnable setup; previous milestone outputs remain unchanged.
 
-Discard only this milestone’s verification outputs from the repository root:
+Discard this milestone’s test outputs from the repository root:
 
 ```bash
-rm -rf -- src/aw/target/session-live-1b52c36f src/aw/target/session-live-d106e035 src/aw/target/session-live-a3a71efe src/aw/target/cosh-codex-79333e1c src/aw/target/sessions/cee93856-712f-4ef5-8451-d7aa53d1572f src/aw/target/sessions/dbd7898d-8474-4109-bcce-4772fe2df9dc src/aw/target/sessions/9a9113fc-2c90-4754-b45a-4a9517ddc136 src/aw/target/sessions/51f5a00d-1ece-4694-a781-d5e93303a5ff src/aw/target/cosh-entry-checks
+rm -rf -- src/aw/target/session-live-bfaa3ee2 src/aw/target/session-live-2c3142a5 src/aw/target/cosh-codex-6e0e3b43 src/aw/target/session-live-4a233443 src/aw/target/sessions/96f0b56e-0709-427b-9f99-09d53b59821f src/aw/target/sessions/7e10c7fd-e85f-4daf-bceb-e4eaaf8b7f35 src/aw/target/sessions/7050557e-1084-4c5d-9727-1bd77c1409f0 src/aw/target/sessions/2a77e266-32b0-40e1-aa4f-79328da05ab0 src/aw/target/sessions/e42db68b-a89d-4a93-a187-6b0378f69ed0 src/aw/target/sessions/1d9e690e-f98e-45e9-a0d7-05ceb0fa473f src/aw/target/session-live-4e956619 src/aw/target/sessions/270dcf2a-eeaf-45c2-876f-ce26f71e6435 src/aw/target/sessions/11015fd8-f67a-4385-ae5b-b0899dc24532 src/aw/target/sessions/65c66003-3b59-420f-9609-852c2d91cad0 src/aw/target/panels-checks
 ```
 
-To remove setup builds and caches, exit all demo sessions first, then run `rm -rf -- src/aw/target/demo`. Rebuild with `python3 src/aw/scripts/demo.py setup` before using the entry again.
+Setup removal after leaving all demo instances: `rm -rf -- src/aw/target/demo`; rebuild with `python3 src/aw/scripts/demo.py setup`.
 
 ## Recorded results
 
