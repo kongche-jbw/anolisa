@@ -58,3 +58,5 @@ OS protection independently enforces ongoing system restrictions; it is not a sc
 ## Meeting demo
 
 From a fresh clone, run `python3 src/aw/scripts/demo.py setup`, then `doctor` to check readiness and `run --allow-unrecoverable` to display real Qoder/Herdr. Providers are discovered from `src/aw/providers/`; dependencies and evidence stay in `src/aw/target/demo/`. See the [demo guide](../../docs/user-guide/en/token-saving/aw-demo.md) for commands, prerequisites and cleanup.
+
+For real multi-turn workspace interaction, run `python3 /path/to/anolisa-demo/src/aw/scripts/session.py --workspace "$PWD" --allow-unrecoverable`. Qoder retains normal permission prompts and native history; an independent observer continuously verifies Bash session counters. Exit and rerun the launcher for a new bound session; native session switching clears stale counters and asks for a restart.

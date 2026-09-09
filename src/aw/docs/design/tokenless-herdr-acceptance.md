@@ -22,6 +22,25 @@ The launcher discovers `src/aw/providers/*.json`, resolving relative paths again
 
 The presentation mirrors the real Herdr TUI, refreshing verified sidebar evidence for the selected hold duration before cleaning up its dedicated session. Code delimiters identify `cat fixture.json` in the prompt so punctuation is not mistaken for a command argument. Single-turn identity, plugin coexistence restrictions, and adoption evidence boundaries still apply. The low-level commands below remain available for diagnostics; fresh clones should use the new entry point.
 
+## Interactive workspace sessions
+
+After setup, `session.py --workspace "$PWD" --allow-unrecoverable` opens real Qoder/Herdr in the selected project, leaving keyboard input, permission confirmation and follow-up questions to the user. The launcher registers hooks through a private invocation-specific `--settings` file without writing project configuration. Discovery and Provider builds reuse the entry point above; the user guide contains complete commands and presentation steps.
+
+| Layer | Actual code and responsibility |
+| --- | --- |
+| Launch and terminal | `scripts/session.py`: discover Providers, bind the owned Qoder PID/start generation, forward real PTY input/output, record and clean up owned processes |
+| Turns and calls | `scripts/session_hooks.py`: authenticate native hook ancestry and workspace; generate launcher turns from `UserPromptSubmit` and snapshot each tool's turn/input at `PreToolUse` |
+| Inspection and compression | `crates/aw-hook-cli` → `aw-core` / `aw-sec-host`: accept native `PostToolUse` and execute the existing SecCore/Tokenless plan |
+| Adoption and display | `scripts/session_observer.py` → `aw-adoption-cli` / `aw-view-cli` → `integrations/herdr/bridge.py`: wait for matching history, independently verify it and update Herdr |
+
+Qoder does not supply the native `turn_id` required here. Generated IDs belong explicitly to the launcher, driven by real `UserPromptSubmit` events rather than inferred model text. Each tool snapshots its turn before execution, so later prompts and parallel tools cannot change that binding. Each invocation passes its captured turn through the existing `qoder_single_turn_id` parameter, without changing Rust or Schema contracts. `PostToolUseFailure` retains native failures, invokes no Provider and counts no savings. Lifecycle fields follow [Qoder hooks](https://docs.qoder.com/cli/hooks).
+
+The observer runs in its own process so verification cannot block keyboard input. Only completed Core events become visible. Results whose native history is not yet persisted show pending; the overall session deadline bounds the wait. A human permission prompt can delay persistence of an entire parallel batch, so a fixed 30-second delay cannot establish adoption failure. Only matching local history verified by Rust increases `history adopted` and saved bytes; these are not claims of model consumption or billing savings.
+
+Native `SessionStart` for `/new` clears the current turn. Pinned Herdr v0.9.0 does not allow Qoder session identity replacement and ignores `release_agent` for official sources; an API success response does not prove binding success. On a session change, the launcher clears stale sidebar statistics and asks for a restart. Subsequent tools retain native behavior without AW inspection or compression. Exit and rerun the launcher to start another bound session. Herdr source remains unmodified.
+
+Real sessions retain user projects, Qoder history and user-selected trust settings. Raw AW output and evidence live in private `target/sessions/<UUID>/`. Exit removes owned processes and the temporary Herdr namespace. User/project hook and plugin coexistence, old-session resume, subagents, cwd changes and non-Bash projections remain unsupported. Synthetic acceptance in `tests/session_live.py` additionally removes its own test history and trust entry; production execution does not invoke that test.
+
 ## Build and run
 
 Use Linux ARM64 for the validated environment. Source Tokenless is 0.8.0 with
@@ -104,20 +123,34 @@ reports the captured session ID before publishing verified counters.
   `history adopted`, never model consumption. Mixed failures or bypasses do
   not erase previously verified savings.
 
-The capture owns one explicitly bounded Qoder turn. General multi-turn launch
-identity, native plugin coexistence, automatic COSH lifecycle integration,
+The low-level smoke owns one explicitly bounded Qoder turn; `session.py` supplies
+real multi-turn binding. Native plugin coexistence, automatic COSH lifecycle integration,
 checkpoint actions, OS isolation and clean-machine packaging remain separate
 work. Codex retains its inspection path and rejects Tokenless projection;
 its hook does not provide this Qoder replacement contract. ARM64 is validated;
 x86_64 Herdr artifacts are pinned but have not been executed here.
 
-Each runner records commands, versions, PID/start ticks, paths and stop commands
+Each synthetic runner records commands, versions, PID/start ticks, paths and stop commands
 in `lifecycle.json` or `ownership.json`. Successful cleanup removes only the
 fresh UUID session, its state directory, temporary home and the test workspace
 trust entry. Authentication is neither copied nor removed. Logs and synthetic
 proofs stay in the chosen output directory. No shared VM or existing Herdr is
 restarted. To discard all generated material in this worktree, run `cargo clean`
 with each of the AW and Tokenless Cargo manifests; save useful evidence first.
+
+## Interactive handoff
+
+- **Status**: real keyboard-driven multi-turn acceptance passed; a new bound session requires exiting and rerunning the launcher.
+- **Started**: synthetic acceptance started owned Qoder, Herdr server/client and independent observer processes. All ended, with no remaining ports or temporary namespace.
+- **Changed**: added `scripts/session.py`, `session_hooks.py`, `session_observer.py`, `tests/test_session.py` and `tests/session_live.py`; updated README, bilingual user guides and this explanation. Schema, Core, Provider and Herdr sources remain unchanged.
+- **Validation**: `tests/session_live.py` exercised two real PTY turns, three history adoptions and 4056 B saved. Native `false` permission confirmation and failure counted no savings. `/new` cleared stale counters and disabled AW processing in the new session. Eight session unit tests, seven launcher tests, 15 Herdr Python tests, 144 Rust tests, fmt, Clippy, documentation builds and cross-language digests passed, as did current-workspace hook compatibility and Provider doctor.
+- **Cleanup/remaining**: owned PIDs, temporary namespaces, synthetic Qoder histories and test trust entries were verified removed; earlier interactive diagnostic directories were deleted. Retained `target/session-live-73ec5104/` (test scenario/results), `target/sessions/f73413d6-fe5a-498e-9537-49342c2edd89/` (AW adoption evidence) and `target/session-checks/` (check logs). Existing `target/demo/` build materials remain available for launch.
+
+To discard this interactive acceptance evidence, run from the repository root:
+
+```bash
+rm -rf -- src/aw/target/session-live-73ec5104 src/aw/target/sessions/f73413d6-fe5a-498e-9537-49342c2edd89 src/aw/target/session-checks
+```
 
 ## Recorded results
 

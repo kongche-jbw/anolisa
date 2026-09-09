@@ -2,9 +2,9 @@
 
 [English](../../en/token-saving/aw-demo.md)
 
-用一条启动命令展示 Qoder 读取合成 JSON、SecCore 检查、Tokenless 压缩，以及 Herdr 显示当前会话实际采用的节省。脚本自动准备 Provider 路径、启动项目 hook、提交固定提示词并清理演示会话，适合会前彩排和现场讲解。
+在真实仓库里向 Qoder 输入任务、连续追问，同时在 Herdr 查看 SecCore 检查、Tokenless 压缩和已验证的历史采用。完成一次 setup 后即可打开交互会话；也提供固定合成数据演示，方便组会彩排。
 
-这是开发分支的单轮演示入口。发布版通常通过 `anolisa install` 安装组件，Alinux 也可使用 RPM；本组合尚未发布到这两条安装路径，下面使用源码分支。Linux ARM64 已实测；Linux x86_64 有固定 Herdr 制品，但尚未实机验收。需要可登录且能调用模型的 Qoder 账号。
+本指南同时提供真实项目多轮交互入口 `session.py` 和固定单轮演示入口 `demo.py`。发布版通常通过 `anolisa install` 安装组件，Alinux 也可使用 RPM；本组合尚未发布到这两条安装路径，下面使用源码分支。Linux ARM64 已实测；Linux x86_64 有固定 Herdr 制品，但尚未实机验收。需要可登录且能调用模型的 Qoder 账号。
 
 ## 1. 会前准备
 
@@ -51,7 +51,45 @@ python3 src/aw/scripts/demo.py doctor
 
 `doctor` 还会检查 Qoder 版本、登录状态和集成冲突，但不发起模型请求。模型访问是否可用由下一步真实彩排确认。彩排与正式演示都调用真实模型，可能产生账号用量。
 
-## 3. 彩排与现场演示
+## 3. 在真实仓库中自由多轮交互
+
+完成上面的 setup 后，在要工作的仓库目录打开终端。`AW_CHECKOUT` 指向包含 AW 代码的 clone，`$PWD` 是你的真实项目：
+
+```bash
+AW_CHECKOUT=/path/to/anolisa-demo
+python3 "$AW_CHECKOUT/src/aw/scripts/session.py" --workspace "$PWD" --allow-unrecoverable
+```
+
+也可以在 AW clone 根目录运行：
+
+```bash
+python3 src/aw/scripts/session.py --workspace "$PWD" --allow-unrecoverable
+```
+
+Qoder 会在指定目录打开。直接输入任务，连续追问、滚动、取消当前生成、确认工具权限都通过真实终端传递给 Qoder。不会自动发送提示词，也不会生成 fixture。仓库的源码、Git 分支与已有配置文件不由启动器修改；你授权 Qoder 执行的实际开发操作仍可能修改项目。首次遇到目录信任提示时由你决定，启动器不自动确认。
+
+可按下面的顺序体验当前 ANOLISA 仓库：
+
+1. 输入“先用 Bash 查看当前仓库的 Git 状态和主要源码目录，解释各模块用途，先不要修改文件。”
+2. 继续输入“用 Bash 执行 `cargo metadata --manifest-path src/tokenless/Cargo.toml --no-deps --format-version 1`，分析 Tokenless 的 crate 依赖关系。”
+3. 根据回答追问一个真实问题，例如“哪一层负责选择压缩器？请查看代码说明调用路径。”
+4. 查看 Herdr 的累计调用、`history adopted` 与节省字节。不是每条输出都能压缩；短输出、无法处理的格式和失败命令不会被计为节省。
+
+当前 AW 接入主 Agent 的 Bash 后置输出。Read、Edit 等其他工具仍由 Qoder 正常使用，侧栏以 `Bash only` 明确范围。Bash 失败、超过原生捕获限制或无法验证的结果显示为 `unverified`，不增加已采用节省。等待权限确认或原生历史落盘期间显示 `pending`，不提前计入采用。这里的 SecCore 是后置内容检查，不提供前置命令拦截或 OS 防护。
+
+普通追问保留当前会话的累计值。要从零开始，请退出后重新运行启动命令。固定 Herdr v0.9.0 不支持替换 Qoder 会话绑定；若在 Qoder 内输入 `/new` 或切换原生会话，AW 会清除侧栏旧统计并提示重新启动，本进程后续工具保留原生行为、不再执行 AW 检查或压缩。旧证据保留。默认最长运行一小时；用 `--duration 7200` 可设为两小时，允许范围为 60～14400 秒。
+
+退出时按 `Ctrl+B`，松开后按 `q`；这会结束此入口管理的 Qoder、观察器与 Herdr。Qoder 进程正常退出时，入口也会结束。Qoder 的原生历史、你修改的项目文件和你选择保存的信任设置会保留。启动时和退出后都会打印 AW 证据目录 `src/aw/target/sessions/<UUID>/`，权限为 0700，包含本次 Bash 原文、采用记录和日志；按实际数据管理要求保管它。删除单次 AW 证据不会删除 Qoder 历史或回滚代码。
+
+```bash
+rm -rf -- "$AW_CHECKOUT/src/aw/target/sessions/<UUID>"
+```
+
+`--workspace` 默认当前目录；`--provider-dir` 默认 AW clone 的 `src/aw/providers/`，可选显式可信 manifest 目录。现有用户或项目 hook/plugin 共存仍未验收，启动时发现已配置 hook 或已安装 Qoder plugin 会明确退出。使用默认 `~/.qoder` 登录配置，不支持 `QODER_CONFIG_DIR`。恢复旧会话、子 Agent、自定义 cwd 切换和其他原生工具投影不在当前绑定合同内；无法绑定时保留原工具行为并显示未验证。
+
+多轮入口实际使用 `scripts/session.py` 启动 Herdr/Qoder，`session_hooks.py` 从原生 `UserPromptSubmit` 生成启动器轮次，并在 `PreToolUse` 为每个工具固定轮次；`PostToolUse` 再调用同一 Rust `aw-hook-cli`。独立进程 `session_observer.py` 等待完整历史行，通过 `aw-adoption-cli`、`aw-view-cli` 验证后发布统计。观察器独立运行，验证不会阻塞键盘输入。Provider、AW Core 和 Schema 沿用 setup 的实现；运行路径不经过测试脚本。原生事件依据见 [Qoder hooks](https://docs.qoder.com/cli/hooks)。
+
+## 4. 固定场景彩排与现场演示
 
 先做一次完整彩排；即使使用 `--headless`，压缩场景仍会启动真实 Qoder 和 Herdr，并验证实际 TUI 内容，只是不把画面输出到当前终端。
 
@@ -101,7 +139,7 @@ sequenceDiagram
     A-->>H: 当前会话的已验证摘要
 ```
 
-## 4. 无收益与故障演示
+## 5. 无收益与故障演示
 
 这两个补充场景运行非交互 Qoder，在终端输出结果，不启动 Herdr 组合验收。每次自动生成新目录，不需要手工改路径。
 
@@ -112,7 +150,7 @@ python3 src/aw/scripts/demo.py run --headless --allow-unrecoverable --case provi
 
 `no-gain` 应保留原文，采用与节省均为零。`provider-failure` 让 Tokenless 在压缩前退出，应出现 failed Receipt、Core preserve、原文保留和零节省。这里演示的是可观察的失败处理，不是把失败计为优化成功。
 
-## 5. Provider 放置与发现规则
+## 6. Provider 放置与发现规则
 
 默认读取 `src/aw/providers/*.json`，与运行命令时所在目录无关。当前支持一个 `sec-core` 和一个 `tokenless`，按 ID 选择，目录顺序不改变 Core 的执行顺序。缺失、重复 ID、不支持的种类、版本或协议都会显式失败。`providers` 仅读取配置；`doctor` 才检查并执行版本/导入探测。
 
@@ -129,7 +167,7 @@ python3 src/aw/scripts/demo.py run --headless --allow-unrecoverable --case provi
 
 发现功能属于本次演示启动器；读取文件后仍会生成显式、固定的 Provider 调用配置交给现有 Host。它不是通用 Provider 安装器或 Core 的热加载协议，不会自动安装原生插件。
 
-## 6. 排障、证据与清理
+## 7. 排障、证据与清理
 
 | 症状 | 处理 |
 | --- | --- |
@@ -137,10 +175,13 @@ python3 src/aw/scripts/demo.py run --headless --allow-unrecoverable --case provi
 | Qoder 版本不符 | 在演示账号准备 1.1.47；演示项目禁用自动更新，不修改用户全局设置 |
 | 登录或模型失败 | `qodercli login` 后确认交互 Qoder 可正常使用，再重新运行；doctor 不保证模型请求成功 |
 | 用户 hook/plugin 冲突 | 使用独立演示账号；脚本不会自动关闭现有集成 |
-| 非终端环境 | 使用 `--headless`；现场展示需要真实终端 |
+| 非终端环境 | 固定演示用 `demo.py run --headless`；`session.py` 需要真实终端 |
+| 交互统计未验证 | 查看 `target/sessions/<UUID>/errors/`、`calls/*/hook.stderr.log`、`calls/*/verification-error.log` 和 `herdr.log`；超出范围的工具不计节省 |
 | 演示失败 | 查看所打印目录的 `herdr/command.log`、`agent/result.json` 和 `agent/lifecycle.json`，不要将失败目录当作成功证据 |
 
-压缩场景的 `herdr/result.json` 应为 `passed`，并包含 `real_sidebar_render: passed`、正的 `saved_bytes`。`agent/adoption-verified.json` 与 `agent/evidence/` 保留采用和执行证据；`herdr/screen.ansi` 保存实际画面输出。它是终端捕获文件，不是交互式回放或录屏视频。
+以下证据与自动删除规则适用于固定 `demo.py run`；真实 `session.py` 的保留规则见第 3 节。
+
+固定压缩场景的 `herdr/result.json` 应为 `passed`，并包含 `real_sidebar_render: passed`、正的 `saved_bytes`。`agent/adoption-verified.json` 与 `agent/evidence/` 保留采用和执行证据；`herdr/screen.ansi` 保存实际画面输出。它是终端捕获文件，不是交互式回放或录屏视频。
 
 每次 `run` 结束时停止自己创建的 Qoder、Herdr 客户端和服务，删除临时 home、专属 Qoder 会话和本次添加的信任条目。按 Ctrl+C 提前结束也走清理路径。中断 setup 会停止它自己的进程组，保留日志和增量构建材料。若进程被强制 SIGKILL 或机器断电，则需检查记录中的 PID 与代次，再使用 `launcher.json`、`agent/lifecycle.json`、`herdr/ownership.json` 的准确停止命令处理残留。
 

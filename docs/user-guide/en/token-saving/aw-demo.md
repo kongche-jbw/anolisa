@@ -2,9 +2,9 @@
 
 [中文版](../../zh/token-saving/aw-demo.md)
 
-Use one launch command to show Qoder reading synthetic JSON, SecCore inspection, Tokenless compression, and Herdr displaying savings actually adopted in the current session. The launcher prepares Provider paths, installs a project hook, submits a fixed prompt, and cleans up the demo session for rehearsals and presentations.
+Enter tasks and follow-up questions in Qoder inside a real repository while Herdr displays SecCore inspection, Tokenless compression and verified local-history adoption. After one setup, open an interactive session; a fixed synthetic demo is also available for meeting rehearsals.
 
-This is a single-turn demonstration on a development branch. Released components normally use `anolisa install`, with RPM also available on Alinux; this combination is not yet published through either route, so the instructions below use source. Linux ARM64 has been tested. Linux x86_64 has a pinned Herdr artifact but has not been validated live. A Qoder account with working login and model access is required.
+This guide provides both `session.py` for real multi-turn workspace interaction and `demo.py` for a fixed single-turn demonstration on a development branch. Released components normally use `anolisa install`, with RPM also available on Alinux; this combination is not yet published through either route, so the instructions below use source. Linux ARM64 has been tested. Linux x86_64 has a pinned Herdr artifact but has not been validated live. A Qoder account with working login and model access is required.
 
 ## 1. Prepare before the meeting
 
@@ -51,7 +51,45 @@ Generated content stays in `src/aw/target/demo/`: `sec-core/` contains pinned so
 
 Doctor also checks Qoder version, login state, and integration conflicts without making a model request. The live rehearsal confirms model access. Both rehearsal and presentation call a real model and may incur account usage.
 
-## 3. Rehearse and present
+## 3. Interact freely in a real repository
+
+After setup above, open a terminal in the repository you want to work on. `AW_CHECKOUT` points to the clone containing AW, while `$PWD` is your real project:
+
+```bash
+AW_CHECKOUT=/path/to/anolisa-demo
+python3 "$AW_CHECKOUT/src/aw/scripts/session.py" --workspace "$PWD" --allow-unrecoverable
+```
+
+Alternatively, run from the AW clone root:
+
+```bash
+python3 src/aw/scripts/session.py --workspace "$PWD" --allow-unrecoverable
+```
+
+Qoder opens in the selected directory. Type tasks and follow-up questions, scroll, cancel generation, and confirm tool permissions through the real terminal. The launcher sends no prompt and creates no fixture. It does not modify repository source, the Git branch, or existing configuration files; actual development operations you authorize Qoder to perform can still change the project. You decide any initial directory-trust prompt; the launcher does not accept it automatically.
+
+Try this sequence in the ANOLISA repository:
+
+1. Ask: “First use Bash to inspect Git status and the main source directories. Explain the modules without changing files.”
+2. Follow up: “Use Bash to run `cargo metadata --manifest-path src/tokenless/Cargo.toml --no-deps --format-version 1` and analyze Tokenless crate dependencies.”
+3. Ask a real follow-up, such as: “Which layer selects the compressor? Read the code and explain the call path.”
+4. Watch Herdr cumulative calls, `history adopted`, and saved bytes. Not every output compresses; short output, unsupported formats, and failed commands do not count as savings.
+
+AW currently handles the main Agent's Bash post-tool output. Other tools, including Read and Edit, remain available normally in Qoder, while the sidebar labels its coverage `Bash only`. Bash failures, native capture size-limit failures, and unverifiable results appear as `unverified` without increasing adopted savings. Results awaiting permission confirmation or native history persistence show `pending` and do not count as adopted. SecCore performs post-tool content inspection here, not pre-command enforcement or OS protection.
+
+Ordinary follow-up questions retain cumulative session counts. To start from zero, exit and run the launcher again. Pinned Herdr v0.9.0 cannot replace Qoder session identity. If you use `/new` or switch native sessions inside Qoder, AW clears stale sidebar statistics and asks you to restart; subsequent tools in that process retain native behavior without AW inspection or compression. Previous evidence remains. The default deadline is one hour; `--duration 7200` selects two hours, with a supported range of 60–14400 seconds.
+
+To exit, press `Ctrl+B`, release, then press `q`. This ends the Qoder, observer, and Herdr processes managed by this entry point. A normal Qoder process exit also ends the launcher. Native Qoder history, project changes, and trust settings you chose to save remain. Startup and exit print `src/aw/target/sessions/<UUID>/`, a 0700 AW evidence directory containing this session's original Bash output, adoption records, and logs; retain it according to the actual data requirements. Removing one AW evidence directory neither deletes Qoder history nor rolls back code.
+
+```bash
+rm -rf -- "$AW_CHECKOUT/src/aw/target/sessions/<UUID>"
+```
+
+`--workspace` defaults to the current directory. `--provider-dir` defaults to the AW clone's `src/aw/providers/` and can select another explicit trusted manifest directory. User/project hook and plugin coexistence is not validated; configured hooks or installed Qoder plugins cause an explicit startup failure. The launcher uses default `~/.qoder` login configuration and does not support `QODER_CONFIG_DIR`. Resuming old sessions, subagents, custom cwd changes, and other native tool projections remain outside this binding contract; failed binding preserves native behavior and reports unverified results.
+
+The multi-turn entry point uses `scripts/session.py` to launch Herdr/Qoder. `session_hooks.py` generates launcher turn identities from native `UserPromptSubmit` events and snapshots each tool's turn at `PreToolUse`; `PostToolUse` invokes the same Rust `aw-hook-cli`. Independent process `session_observer.py` waits for complete history lines, verifies with `aw-adoption-cli` and `aw-view-cli`, then publishes counters. Verification runs independently of keyboard forwarding. Providers, AW Core, and Schema use the setup implementations, and this runtime path does not import test runners. Native event references: [Qoder hooks](https://docs.qoder.com/cli/hooks).
+
+## 4. Rehearse and present a fixed scenario
 
 First run the complete rehearsal. Even with `--headless`, the compressed case starts real Qoder and Herdr and verifies actual TUI content; it simply does not mirror the screen to your terminal.
 
@@ -101,7 +139,7 @@ sequenceDiagram
     A-->>H: Verified current-session summary
 ```
 
-## 4. No-gain and failure demonstrations
+## 5. No-gain and failure demonstrations
 
 These supplementary cases use non-interactive Qoder and print results without starting combined Herdr acceptance. Each run creates a fresh directory automatically.
 
@@ -112,7 +150,7 @@ python3 src/aw/scripts/demo.py run --headless --allow-unrecoverable --case provi
 
 No-gain preserves the original with zero adoptions and savings. Provider-failure exits Tokenless before compression and must show a failed Receipt, Core preserve, the original result, and zero savings. The demonstration exposes failure handling rather than counting failure as successful optimization.
 
-## 5. Provider placement and discovery
+## 6. Provider placement and discovery
 
 The default directory is `src/aw/providers/*.json`, independent of the command's working directory. One `sec-core` and one `tokenless` are currently supported and selected by ID; directory order does not change Core execution order. Missing or duplicate IDs and unsupported kinds, versions, or protocols fail explicitly. `providers` only reads configuration; `doctor` checks and executes version/import probes.
 
@@ -129,7 +167,7 @@ Place both manifests in another trusted directory and select it with global opti
 
 Discovery belongs to this demo launcher. After reading files, it still generates explicit, pinned Provider invocation settings for the existing Host. It is not a general Provider installer or a Core hot-loading protocol and does not install native plugins automatically.
 
-## 6. Troubleshooting, evidence and cleanup
+## 7. Troubleshooting, evidence and cleanup
 
 | Symptom | Action |
 | --- | --- |
@@ -137,10 +175,13 @@ Discovery belongs to this demo launcher. After reading files, it still generates
 | Qoder version mismatch | Prepare 1.1.47 in the demo account; the demo project disables automatic updates without changing global user settings |
 | Login or model failure | Run `qodercli login`, verify interactive Qoder works, and rerun; doctor cannot guarantee model request success |
 | User hook/plugin conflict | Use a separate demo account; existing integrations are not automatically disabled |
-| Non-terminal environment | Use `--headless`; presentation requires a real terminal |
+| Non-terminal environment | Use `demo.py run --headless` for the fixed demo; `session.py` requires a real terminal |
+| Interactive statistics unverified | Inspect `target/sessions/<UUID>/errors/`, `calls/*/hook.stderr.log`, `calls/*/verification-error.log` and `herdr.log`; tools outside coverage do not count toward savings |
 | Demo fails | Inspect `herdr/command.log`, `agent/result.json`, and `agent/lifecycle.json` under the printed directory; failed runs are not successful evidence |
 
-For compression, `herdr/result.json` must report `passed`, `real_sidebar_render: passed`, and positive `saved_bytes`. `agent/adoption-verified.json` and `agent/evidence/` retain adoption and execution evidence. `herdr/screen.ansi` captures actual screen output; it is not interactive playback or a video recording.
+The following evidence and automatic deletion rules apply to fixed `demo.py run` scenarios. For real `session.py` retention, see section 3.
+
+For fixed compression, `herdr/result.json` must report `passed`, `real_sidebar_render: passed`, and positive `saved_bytes`. `agent/adoption-verified.json` and `agent/evidence/` retain adoption and execution evidence. `herdr/screen.ansi` captures actual screen output; it is not interactive playback or a video recording.
 
 At the end of each run, the launcher stops its Qoder, Herdr client, and server, removing its temporary home, dedicated Qoder session, and newly added trust entry. Ctrl+C also follows cleanup. Interrupted setup stops its process group and retains logs and incremental build materials. After forced SIGKILL or a machine crash, inspect recorded PIDs and generations before using the exact stop commands in `launcher.json`, `agent/lifecycle.json`, and `herdr/ownership.json` to handle leftovers.
 
