@@ -76,7 +76,9 @@ def main():
                     if "cleanup" in ownership:
                         runtime = read(session / "runtime.json")
                         assert runtime["agent_kind"] == "codex"
-                        assert runtime["command"] == [runtime["agent_program"], "--help"]
+                        assert runtime["command"][0] == runtime["agent_program"]
+                        assert "--help" in runtime["command"]
+                        assert "hooks.PostToolUse=" in " ".join(runtime["command"])
                         assert not list((session / "evidence").glob("*.json"))
                         assert read(session / "provider-details.json")["status"] == "agent exited"
                         os.write(master, b"printf 'COSH_%s\\n' RETURNED\rexit\r")

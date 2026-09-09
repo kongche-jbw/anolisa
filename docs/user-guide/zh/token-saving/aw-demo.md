@@ -69,7 +69,7 @@ git status --short
 qoder
 ```
 
-按 `Ctrl+B`，松开后按 `q` 退出 Qoder/Herdr，回到同一个 cosh shell，保留当前目录和变量。此时可再次运行 `pwd`，或输入 `codex` 打开另一个原生 Herdr 终端。Codex 使用已安装 CLI 和现有登录；此入口目前**只接通 Codex 的终端**，明确显示 `AW hooks: not connected`。下文 SecCore 与 Tokenless 的实时证据适用于 Qoder。原生参数直接跟在命令后，如 `qoder --model auto`、`codex --help`。不要在 Bash 启动文件中用别名覆盖这两个命令；此 Bash 集成不支持 `--shell zsh`。
+按 `Ctrl+B`，松开后按 `q` 退出 Qoder/Herdr，回到同一个 cosh shell，保留当前目录和变量。此时可再次运行 `pwd`，或输入 `codex` 打开另一个原生 Herdr 终端。Codex 使用已安装 CLI 和现有登录，通过本次调用的原生 hooks 接入 SecCore。首次需在 Codex 的 `/hooks` 中信任 AW hooks；Tokenless 输出替换仅支持 Qoder。原生参数直接跟在命令后，如 `qoder --model auto`、`codex --help`。不要在 Bash 启动文件中用别名覆盖这两个命令；此 Bash 集成不支持 `--shell zsh`。
 
 Qoder 会在指定目录打开。Herdr 原生客户端直接继承当前终端，键盘输入和窗口大小由 Herdr 自己处理。启动器负责进程生命周期，不读取或转发键盘。直接输入任务，连续追问、滚动、取消当前生成、确认工具权限。不会自动发送提示词，也不会生成 fixture。仓库的源码、Git 分支与已有配置文件不由启动器修改；你授权 Qoder 执行的实际开发操作仍可能修改项目。首次遇到目录信任提示时由你决定，启动器不自动确认。
 
@@ -114,7 +114,7 @@ rm -rf -- "$AW_CHECKOUT/src/aw/target/sessions/<UUID>"
 
 从 cosh 启动新的 Herdr 实例后，按 `Ctrl+B`，松开后按 `v` 左右分屏，或按 `-` 上下分屏；面板边框右键菜单也有 **Split right**、**Split down**。在新面板的 shell 提示符输入 `qoder` 或 `qodercli`。每次启动都会发现配置的 Provider，创建独立 hooks 配置、证据和观察器，侧栏统计归属该面板的 Agent。`Ctrl+B p` 查看当前聚焦面板的详情。退出第一个 Qoder，第二个仍可继续运行；在面板内重新启动 Qoder，会建立新的统计。
 
-实例使用私有 Bash rc，先加载正常的 `~/.bashrc`，再定义上述命令，不修改用户启动文件。Agent 子进程不继承入口函数；通过绝对路径直接调用原始 Agent 可执行文件会绕过集成。Codex 面板明确显示 AW 未连接，不宣称 SecCore 或 Tokenless 已执行。同一实例沿用启动时的截止时间与输出替换授权。
+实例使用私有 Bash rc，先加载正常的 `~/.bashrc`，再定义上述命令，不修改用户启动文件。Agent 子进程不继承入口函数；通过绝对路径直接调用原始 Agent 可执行文件会绕过集成。Codex 面板独立接入 SecCore，并明确显示 Tokenless 替换不支持。同一实例沿用启动时的截止时间与输出替换授权。
 
 已打开的 Herdr 实例保留旧 shell 配置。请先保存正在进行的任务，退出旧实例后重新启动更新后的入口；不会给正在运行的 Agent 强行补装 hooks。
 
@@ -127,6 +127,31 @@ printf 'api_key=sk-abcdefghijklmnopqrstuvwxyz123456\n'
 ```
 
 按 `Ctrl+B p`，点击 Recent calls。实测原生链路显示 `inspection: sensitive`、规则 `api_key`、数量 `1`、严重级别 `high`、`Scanned: 43/43 B | complete: True`。Overview 可查看实际 SecCore 可执行文件和源码路径。对照命令为 `printf 'version=1\n'`，结果为 `clean`。这是工具执行后的检查：命令已执行，原始输出保留；证明的是扫描器检测生效，不是阻止命令、脱敏或 OS 隔离。Qoder 也会收到原生 hook 警告。本次证据目录的 `provider-details.json` 和 `evidence/` 保存对应回执及 findings。
+
+### Codex 的实际检查与首次信任
+
+在 cosh 提示符输入 `codex`，进入 Codex 后输入 `/hooks`，找到命令指向本 clone 的 `src/aw/scripts/codex_hooks.py` 的 `SessionStart` 和 `PostToolUse` 两项并信任。这里只增加本次进程的 hook 配置，不改写用户或项目的 Codex 配置文件。信任操作由 Codex 原生界面保存；其规则见 [Codex hooks 文档](https://learn.chatgpt.com/docs/hooks)。启动器不会自动绕过 hook 信任。
+
+启动时的 `Provider installed (not a call)` 仅表示本地程序可用。未收到 native hook 时侧栏显示 `waiting for Codex hook`；信任后执行一次 shell 任务即可产生实际结果。若 `SessionStart` 已在信任前被跳过，第一次 `PostToolUse` 仍能绑定当前 native session。`Ctrl+B p` 可查看该面板实际执行的 Provider 路径、版本、规则、覆盖字节数和调用 ID。
+
+要证明 SecCore 扫描了工具输出，可先在 cosh 中创建临时合成文件，再进入 Codex。提示词只给文件路径，避免提前把样例内容直接发给模型：
+
+```bash
+AW_SAMPLE_DIR="$(mktemp -d /tmp/aw-sec-demo.XXXXXX)"
+printf 'api_key=sk-abcdefghijklmnopqrstuvwxyz123456\n' > "$AW_SAMPLE_DIR/credential.env"
+printf '%s\n' "$AW_SAMPLE_DIR/credential.env"
+codex
+```
+
+在 Codex 完成 `/hooks` 信任后输入：“请用 shell 执行 `cat <上一步打印的完整文件路径>`。”预期 SecCore 调用增加 1 次，结果为 `sensitive`、`1 findings`；详情中 `rule_id=api_key`、`severity=high`、完整扫描 44 B。这里证明的是**后置内容检测**：命令已经执行，原工具输出保留，不能把检测告警当成脱敏或泄漏阻断。Codex 的 Tokenless 行明确显示 `unsupported adapter`，不会展示虚构的压缩或采用统计。
+
+回到 cosh 后删除本次样例：
+
+```bash
+rm -rf -- "$AW_SAMPLE_DIR"
+```
+
+每个新 pane 输入 `codex` 都有独立的运行时绑定、证据和观察器。普通追问累计当前会话；在 Codex 内切换 native session 后应退出再输入 `codex`，避免旧统计沿用。远程 Codex 和改变工作目录的 `--cd` 不在当前附着范围。此入口需要支持上述原生 hooks 和 `/hooks` 的 Codex CLI；仅有模型登录成功并不足以证明 hook 可用。
 
 ## 4. 固定场景彩排与现场演示
 

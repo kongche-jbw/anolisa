@@ -69,7 +69,7 @@ git status --short
 qoder
 ```
 
-Exit Qoder/Herdr with `Ctrl+B`, then `q`. You return to the same cosh shell, preserving its current directory and variables. Run `pwd` again or type `codex` to attach another native Herdr terminal. Codex uses the installed CLI and existing login; this entry currently connects **only its terminal**, and explicitly displays `AW hooks: not connected`. SecCore and Tokenless live evidence below applies to Qoder. Native agent arguments follow the command normally, for example `qoder --model auto` or `codex --help`. Avoid aliasing these names in Bash startup files. `--shell zsh` is not supported by this Bash integration.
+Exit Qoder/Herdr with `Ctrl+B`, then `q`. You return to the same cosh shell, preserving its current directory and variables. Run `pwd` again or type `codex` to attach another native Herdr terminal. Codex uses the installed CLI and existing login, with native hooks configured for this invocation to connect SecCore. On first use, trust the AW hooks in Codex `/hooks`; Tokenless output replacement remains Qoder-only. Native agent arguments follow the command normally, for example `qoder --model auto` or `codex --help`. Avoid aliasing these names in Bash startup files. `--shell zsh` is not supported by this Bash integration.
 
 Qoder opens in the selected directory. The native Herdr client inherits the current terminal and handles keyboard input and resizing itself. The launcher manages process lifecycles without reading or forwarding keys. Enter tasks and follow-up questions, scroll, cancel generation and confirm permissions normally. The launcher sends no prompt and creates no fixture. It does not modify repository source, the Git branch, or existing configuration files; actual development operations you authorize Qoder to perform can still change the project. You decide any initial directory-trust prompt; the launcher does not accept it automatically.
 
@@ -114,7 +114,7 @@ The multi-turn entry point uses `scripts/session.py` to launch Herdr/Qoder. `ses
 
 After starting a fresh Herdr instance through cosh, press `Ctrl+B`, release, then `v` for side-by-side panes or `-` for stacked panes. The pane border context menu also offers **Split right** and **Split down**. Enter `qoder` or `qodercli` at the new pane’s shell prompt. Each invocation discovers the configured Providers, creates private hook settings and evidence, and starts its own observer. Sidebar statistics belong to that pane’s Agent. `Ctrl+B p` opens details for the focused pane. Closing the first Qoder leaves the second running; restarting Qoder in a pane creates fresh statistics.
 
-The instance uses a private Bash rc file that sources your normal `~/.bashrc` before defining these commands; it does not modify user startup files. Agent subprocesses do not inherit the entry functions. Calling the agent executable by absolute path bypasses this integration. Codex panes display that AW is not connected; they do not claim SecCore or Tokenless execution. A shared instance retains the original startup deadline and explicit output-replacement consent.
+The instance uses a private Bash rc file that sources your normal `~/.bashrc` before defining these commands; it does not modify user startup files. Agent subprocesses do not inherit the entry functions. Calling the agent executable by absolute path bypasses this integration. Codex panes independently connect SecCore and explicitly mark Tokenless replacement unsupported. A shared instance retains the original startup deadline and explicit output-replacement consent.
 
 Existing Herdr instances keep their old shell configuration. Save ongoing work, leave the old instance, then start the updated entry; already running Agents are not retrofitted.
 
@@ -127,6 +127,31 @@ printf 'api_key=sk-abcdefghijklmnopqrstuvwxyz123456\n'
 ```
 
 Open `Ctrl+B p` and select Recent calls. The verified native run reports `inspection: sensitive`, rule `api_key`, count `1`, severity `high`, and `Scanned: 43/43 B | complete: True`. Overview shows the actual SecCore executable and source path. A clean comparison is `printf 'version=1\n'`, which reports `clean`. These are post-tool observations: the command ran, and the original output is retained. This demonstrates scanner detection, not command blocking, output redaction, or OS isolation. Qoder also receives the native hook warning. Local `provider-details.json` and `evidence/` preserve the corresponding receipt and findings.
+
+### Codex inspection and first-use trust
+
+Type `codex` at the cosh prompt, then `/hooks` inside Codex. Trust the `SessionStart` and `PostToolUse` entries whose command points to this clone's `src/aw/scripts/codex_hooks.py`. The launcher adds invocation-local hook configuration without rewriting user or project Codex configuration files. Codex persists your trust choice through its native UI; see the [Codex hooks documentation](https://learn.chatgpt.com/docs/hooks). The launcher does not bypass hook trust.
+
+Startup `Provider installed (not a call)` only confirms local programs are available. Until a native hook arrives, the sidebar says `waiting for Codex hook`. After trusting, run a shell task to obtain actual results. If `SessionStart` was skipped before trust, the first `PostToolUse` can still bind the native session. `Ctrl+B p` shows the focused pane's actual Provider path, version, rules, scanned bytes and invocation ID.
+
+To demonstrate scanning of tool output, create a temporary synthetic file in cosh before entering Codex. Put only the file path in your prompt so the sample content is not sent directly to the model beforehand:
+
+```bash
+AW_SAMPLE_DIR="$(mktemp -d /tmp/aw-sec-demo.XXXXXX)"
+printf 'api_key=sk-abcdefghijklmnopqrstuvwxyz123456\n' > "$AW_SAMPLE_DIR/credential.env"
+printf '%s\n' "$AW_SAMPLE_DIR/credential.env"
+codex
+```
+
+After trusting via `/hooks`, ask Codex: “Use the shell to execute `cat <the full file path printed above>`.” Expect one additional SecCore call, `sensitive`, and `1 findings`. Details show `rule_id=api_key`, `severity=high`, and complete scanning of 44 B. This proves **post-tool content detection**: the command has run and its original output is retained. A detection warning does not prove redaction or leakage prevention. Codex explicitly shows Tokenless as `unsupported adapter`, without fabricated compression or adoption statistics.
+
+Back in cosh, remove the sample:
+
+```bash
+rm -rf -- "$AW_SAMPLE_DIR"
+```
+
+Each new pane's `codex` invocation has a separate runtime binding, evidence and observer. Follow-ups accumulate within that session. After switching native sessions inside Codex, exit and launch `codex` again to avoid reusing stale statistics. Remote Codex and changing the workspace with `--cd` are outside this attachment contract. This entry requires a Codex CLI supporting these native hooks and `/hooks`; successful model login alone does not establish hook support.
 
 ## 4. Rehearse and present a fixed scenario
 

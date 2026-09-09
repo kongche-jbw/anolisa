@@ -63,6 +63,6 @@ OS 防护应持续限制受控进程的系统访问。`os-protection-binding` �
 
 在真实项目中自由多轮交互：`python3 /path/to/anolisa-demo/src/aw/scripts/session.py --workspace "$PWD" --allow-unrecoverable`。该入口保留 Qoder 权限确认和原生历史，独立观察器持续验证 Bash 的会话统计。需要新会话时退出后重新运行；原生会话切换会清除旧统计并提示重新启动。
 
-setup 后在 clone 根目录运行 `src/aw/scripts/cosh --allow-unrecoverable`，启动从源码编译的 Rust cosh-shell。普通命令保持原始 shell，输入 `qoder` 或 `codex` 才打开 Herdr，退出回到同一个 shell。Qoder 接通 AW；Codex 目前只附着终端，明确显示 AW hooks 未接通。`Ctrl+B p` 打开可点击切页、滚轮滚动的 Provider 详情，查看实际路径和扫描 findings；用户指南提供合成 API key 检测示例。
+setup 后在 clone 根目录运行 `src/aw/scripts/cosh --allow-unrecoverable`，启动从源码编译的 Rust cosh-shell。普通命令保持原始 shell，输入 `qoder` 或 `codex` 才打开 Herdr，退出回到同一个 shell。Qoder 接通检查与压缩；Codex 在首次通过 `/hooks` 信任后接通原生 SecCore 检查，并明确标注 Tokenless 替换不支持。`Ctrl+B p` 打开可点击切页、滚轮滚动的 Provider 详情，查看实际路径和扫描 findings；用户指南提供合成 API key 检测示例。
 
 Herdr 分屏中的 `qoder` 和 `qodercli` 使用独立 AW 会话；Provider 详情跟随当前面板，退出一个 Agent 保留其他面板。更新后需启动新的 Herdr 实例，已有进程保留原 hooks 配置。

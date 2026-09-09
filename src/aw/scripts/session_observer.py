@@ -49,7 +49,28 @@ class Observer:
         self.sequence += 1
         config = read(self.root / "runtime.json")
         state = read(self.root / "state.json")
-        if state["session_id"] != config["session_id"]:
+        codex = config.get("agent_kind") == "codex"
+        if codex and state["session_id"] is None:
+            failures = len(list((self.root / "errors").glob("*.json")))
+            tokens = {
+                **{key: None for key in bridge.TOKEN_NAMES},
+                "aw": "AW: waiting for Codex hook",
+                "aw_sec": "SecCore: not invoked",
+                "aw_tokenless": "Tokenless: unsupported adapter",
+                "aw_usage": f"{failures} hook errors | /hooks to review"
+                if failures
+                else "/hooks: trust AW, then run shell",
+            }
+            bridge.publish(self.socket, self.pane, tokens, self.sequence)
+            write(self.root / "display.json", tokens)
+            write(
+                self.root / "provider-details.json",
+                {"status": "waiting for Codex hook; review /hooks"},
+            )
+            return
+        if state.get("session_changed") or (
+            not codex and state["session_id"] != config["session_id"]
+        ):
             tokens = {
                 **{key: None for key in bridge.TOKEN_NAMES},
                 "aw": "AW unavailable: session changed",
@@ -71,6 +92,12 @@ class Observer:
             if completed["returncode"]:
                 self.finished.add(call.name)
                 write(call / "observation.json", {"status": "unhandled"})
+                continue
+            if codex:
+                # Inspection receipts have no replacement/adoption claim. The shared
+                # Rust verifier below checks their journal, runtime and native scope.
+                self.finished.add(call.name)
+                write(call / "observation.json", {"status": "inspection_recorded"})
                 continue
             try:
                 if not history_ready(read(call / "native.json")):
@@ -102,10 +129,10 @@ class Observer:
                 "pane.report_agent_session",
                 {
                     "pane_id": self.pane,
-                    "source": "herdr:qodercli",
+                    "source": "herdr:codex" if codex else "herdr:qodercli",
                     "seq": self.sequence,
                     "session_start_source": state.get("session_start_source", "startup"),
-                    "agent": "qodercli",
+                    "agent": "codex" if codex else "qodercli",
                     "agent_session_id": session,
                 },
             )
@@ -122,7 +149,7 @@ class Observer:
             for path in (self.root / "errors").glob("*.json")
         )
         failures += sum(
-            read(path)["status"] != "verified"
+            read(path)["status"] not in ("verified", "inspection_recorded")
             for path in (self.root / "calls").glob("*/observation.json")
             if read(path.parent / "before.json")["session_id"] == session
         )

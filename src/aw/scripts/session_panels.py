@@ -6,7 +6,6 @@ import shlex
 import signal
 import subprocess
 import sys
-import time
 
 from session_hooks import read, write
 from session_observer import bridge
@@ -61,7 +60,6 @@ class Panels:
         self.duration, self.log = duration, log
         self.observers = {}
         self.ended = set()
-        self.next_codex_update = {}
 
     def refresh(self, present_panes: set[str]) -> None:
         from session import live, stop_agent
@@ -80,22 +78,6 @@ class Panels:
                 stop_agent(root)
                 write(root / "provider-details.json", {"status": "agent exited"})
                 self.ended.add(root)
-                continue
-            if config["agent_kind"] == "codex":
-                if time.monotonic() >= self.next_codex_update.get(root, 0):
-                    bridge.publish(
-                        self.endpoint,
-                        pane,
-                        {
-                            **{key: None for key in bridge.TOKEN_NAMES},
-                            "aw": "AW hooks: not connected",
-                            "aw_sec": "SecCore: not invoked",
-                            "aw_tokenless": "Tokenless: not invoked",
-                            "aw_usage": "Ctrl+B p: Provider configuration",
-                        },
-                        time.monotonic_ns(),
-                    )
-                    self.next_codex_update[root] = time.monotonic() + 2
                 continue
             if root not in self.observers:
                 command = [

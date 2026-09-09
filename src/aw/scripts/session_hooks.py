@@ -38,13 +38,13 @@ def ticks(pid: int) -> int:
 def authenticate(config: dict, event: dict) -> None:
     pid = config["agent_pid"]
     if ticks(pid) != config["agent_start_ticks"]:
-        raise ValueError("Qoder process generation changed")
+        raise ValueError("Agent process generation changed")
     parent = os.getppid()
     for _ in range(64):
         if parent == pid:
             break
         if parent <= 1:
-            raise ValueError("hook is not a descendant of the bound Qoder process")
+            raise ValueError("hook is not a descendant of the bound Agent process")
         parent = int(Path(f"/proc/{parent}/stat").read_text().rsplit(")", 1)[1].split()[1])
     else:
         raise ValueError("hook ancestry exceeds limit")

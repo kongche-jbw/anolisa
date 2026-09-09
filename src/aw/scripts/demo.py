@@ -247,7 +247,7 @@ def doctor(directory: Path, agent: bool = True) -> dict:
         print("Qoder configuration and login ready. Model access is verified by the live run.")
     for item in providers.values():
         print(
-            f"Ready: {item['id']} {item['version']} (native v{item['native_protocol']}) -> {item['program']}"
+            f"Provider installed (not a call): {item['id']} {item['version']} (native v{item['native_protocol']}) -> {item['program']}"
         )
     return providers
 

@@ -16,6 +16,7 @@ import time
 import uuid
 
 import demo
+import codex_hooks
 from session_hooks import read, ticks, write
 from session_observer import bridge
 
@@ -44,7 +45,7 @@ def settings(root: Path, config: dict) -> dict:
         "scope": {
             "environment_id": runtime["environment_id"],
             "execution_context_id": str(uuid.uuid4()),
-            "actor_id": "qoder-main",
+            "actor_id": config["agent_kind"] + "-main",
             "runtime_id": runtime["runtime_id"],
             "runtime_generation": 1,
             "binding_revision": 1,
@@ -78,10 +79,9 @@ def settings(root: Path, config: dict) -> dict:
 
 def agent(root: Path) -> None:
     config = read(root / "launch.json")
-    aw = None
+    aw = settings(root, config)
     command = [config["agent_program"]]
     if config["agent_kind"] == "qoder":
-        aw = settings(root, config)
         command += [
             "--model",
             "auto",
@@ -90,7 +90,16 @@ def agent(root: Path) -> None:
             "--settings",
             str(root / "qoder-settings.json"),
         ]
-    command += config.get("agent_args", [])
+    else:
+        aw.pop("tokenless")
+        aw["scope"].pop("session_id")
+    agent_args = config.get("agent_args", [])
+    if config["agent_kind"] == "codex":
+        # Codex exec has its own config list; root-level overrides can be lost
+        # when exec receives -c. Attach hooks at the final command's option layer.
+        boundary = agent_args.index("--") if "--" in agent_args else len(agent_args)
+        agent_args = agent_args[:boundary] + codex_hooks.arguments() + agent_args[boundary:]
+    command += agent_args
     config.update(
         aw=aw,
         agent_pid=os.getpid(),
@@ -101,7 +110,14 @@ def agent(root: Path) -> None:
         hook_bin=str(BINS / "aw-hook-cli"),
         stop_command=f"kill -TERM -- -{os.getpgrp()}",
     )
-    write(root / "state.json", {"session_id": config["session_id"], "turn_id": None, "sequence": 0})
+    write(
+        root / "state.json",
+        {
+            "session_id": config["session_id"] if config["agent_kind"] == "qoder" else None,
+            "turn_id": None,
+            "sequence": 0,
+        },
+    )
     write(root / "runtime.json", config)
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
     for name, value in config["xdg"].items():
@@ -119,6 +135,10 @@ def agent(root: Path) -> None:
         "_AW_ALLOW_UNRECOVERABLE",
     ):
         env.pop(name, None)
+    if config["agent_kind"] == "codex":
+        env["AW_CODEX_SESSION_DIR"] = str(root)
+    else:
+        env.pop("AW_CODEX_SESSION_DIR", None)
     os.chdir(config["workspace"])
     os.execve(command[0], command, env)
 
@@ -177,6 +197,10 @@ def prepare(args: argparse.Namespace) -> Path:
         for arg in agent_args
     ):
         raise ValueError("Qoder session identity and hook settings are owned by the launcher")
+    if kind == "codex" and any(
+        arg.split("=", 1)[0] in ("--remote", "-C", "--cd") for arg in agent_args
+    ):
+        raise ValueError("Codex attachment requires the local process and current workspace")
     if kind == "qoder" and not args.allow_unrecoverable:
         raise ValueError("--allow-unrecoverable is required for native tool-output replacement")
     if not sys.stdin.isatty() or not sys.stdout.isatty():
@@ -234,9 +258,13 @@ def prepare(args: argparse.Namespace) -> Path:
     print(f"Workspace: {workspace}\nSession evidence (includes Bash outputs): {root}", flush=True)
     print(f"Type tasks directly in {kind}. Ctrl+B, then q returns to cosh.", flush=True)
     if kind == "codex":
+        print(
+            "Codex AW: waiting for native hook. First use: /hooks -> trust AW hooks; then run a shell task.\nSecCore: post-tool inspection only. Tokenless: output replacement unsupported in this adapter.",
+            flush=True,
+        )
         write(
             root / "provider-details.json",
-            {"status": "not_connected", "session_id": launch["session_id"]},
+            {"status": "waiting for Codex hook; review /hooks", "session_id": None},
         )
     return root
 

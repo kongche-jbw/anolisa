@@ -102,17 +102,23 @@ PYTHONDONTWRITEBYTECODE=1 timeout 210 python3 integrations/herdr/live_smoke.py \
 
 `session.py` 为每次 Qoder 启动准备独立原生会话、hooks 文件、PID/启动代次绑定与证据目录；外层启动器拥有私有 Herdr 服务，`session_panels.py` 注册各面板并管理其观察器。私有 Bash rc 加载正常用户初始化后，在本实例定义 `qoder`、`qodercli`、`codex`。附着必须匹配实例 socket，且进程祖先属于原生面板 shell。Agent 使用原始 XDG 配置，并移除继承的入口函数。
 
-Provider 弹窗通过原生 `pane.current` 与存活 PID 代次选择该面板注册项。观察器重启使用单调时钟序列；每个观察器仍独立验证原生 session/PID 和 Rust 证据后发布。退出一个 Agent 会停止其观察器，其他面板继续；单面板保留退出返回 cosh 的行为。`Ctrl+B q` 结束整个实例拥有的进程。Codex 仍只附着终端，明确显示 AW 未连接。
+Provider 弹窗通过原生 `pane.current` 与存活 PID 代次选择该面板注册项。观察器重启使用单调时钟序列；每个观察器仍独立验证原生 session/PID 和 Rust 证据后发布。退出一个 Agent 会停止其观察器，其他面板继续；单面板保留退出返回 cosh 的行为。`Ctrl+B q` 结束整个实例拥有的进程。Codex 通过本次调用的内联配置接入原生 `SessionStart` / `PostToolUse` hooks；启动器不改写现有配置，也不绕过 Codex 的 hook 信任。`codex_hooks.py` 验证进程祖先、PID 代次、工作目录及原生 session/turn/tool 身份，只执行 SecCore 检查。`session_observer.py` 复用 Rust Journal 校验和原生 pane 绑定，Codex 不走 Qoder 历史采用。`codex exec` 的 `-c` 会建立自己的覆盖列表，因此 hook 参数放在最终子命令的参数层。未收到 hook 显示等待；Tokenless 替换明确显示不支持。
 
 ## 交互入口交接
 
-- **Status**: 每个面板的 Qoder/qodercli 独立 AW 接入、随焦点切换详情、独立退出及面板复用后的新统计已实现并通过实测。已有 Herdr 实例需重启；Codex 仍仅附着终端。
-- **Started**: 本次 cosh/Bash、Qoder、Codex help、Herdr、观察器和 Provider popup 均已结束，无新增服务或端口遗留；未操作已有用户会话。
-- **Changed**: `scripts/cosh`、`scripts/session.py`、`scripts/session_panels.py`、`scripts/session_observer.py`、`scripts/provider_details.py`；`tests/session_live.py`、`tests/multipane_scenario.py`、`tests/cosh_codex_live.py`、`tests/test_session_panels.py`；README、验收说明及 AW 演示指南的中英文版本。未改动 Rust 或 Provider 协议。
-- **Validation**: `session_live.py --multipane`：真实 Ctrl+B v 分屏、qodercli 接入、独立 clean/sensitive 调用及 session ID、详情定位第二面板、退出第一个或关闭其面板后第二个继续执行，以及同一面板重启 Qoder 后从 1 次调用重新统计。原生鼠标 popup 回归、Codex --help 分发及 SIGHUP 清理也通过。146 项 Rust、38 项 Python、fmt、Clippy、跨语言摘要、文档构建、格式化及 Bash 语法通过。
-- **Cleanup/remaining**: 已核验拥有的 PID 和临时 namespace 均不存在，合成 Qoder 历史和信任条目已清除。保留 `target/session-live-bfaa3ee2`, `target/session-live-2c3142a5`, `target/session-live-4e956619`, `target/cosh-codex-6e0e3b43`, `target/session-live-4a233443`（分别为鼠标、多面板退出/关闭两种情况、Codex、挂断证据）、下列对应会话 UUID 及 `target/panels-checks/` 检查日志。诊断重试产物在定向核验清理后已删除。原有 `target/demo/` 继续提供可运行 setup，前序里程碑产物保持不变。
+- **Status**: `3f06c5ca → 65090caf` 的两条 review 意见均已修复：主进程退出后仍有界清理登记的 Agent 进程组；旧激活入口正确透传原生参数。
+- **Started**: 合成父子进程、Bash、cosh、Codex help、Herdr 和观察器已停止。没有模型请求、新增服务或端口遗留；没有操作现有用户会话。
+- **Changed**: `scripts/session.py`、`scripts/session_panels.py`、`scripts/activate.sh`；`tests/test_session_cleanup.py`、`tests/test_session_panels.py`、`tests/test_session.py`；本中英文交接记录。未新增依赖或修改 Rust。
+- **Validation**: 新增孤儿子进程回归在 `65090caf` 上失败，修复后通过，覆盖忽略 SIGTERM 的子进程并确认进程组消失。Agent 自行退出、PID 复用拒绝、带空格的原生参数及 `codex --help` 返回通过。146 项 Rust、46 项 Python、fmt、Clippy、跨语言摘要、文档构建、Python 格式及 Bash 语法通过。
+- **Cleanup/remaining**: 已定向核验测试 PID、进程组和临时目录不存在；本次 help smoke 产物已删除。保留 review 日志 `src/aw/target/review-checks/`，在仓库根目录执行 `rm -rf -- src/aw/target/review-checks` 可删除。原有演示证据及 setup 保持不变，清理命令保留如下。
 
-在仓库根目录清理本里程碑测试产物：
+本次 Codex 证据（单面板、双面板、未信任、help、交互 TUI）以及检查日志的清理命令：
+
+```bash
+rm -rf -- src/aw/target/codex-session-a5ebefcf src/aw/target/sessions/ffd0373d-a0d4-46f3-9ac5-fa0f0bab25c2 src/aw/target/codex-session-6313febe src/aw/target/sessions/71a9efb1-df6c-4c05-bb02-4b9234705b70 src/aw/target/sessions/805efe5d-9a88-4a30-bcc8-17ee9d6492b0 src/aw/target/codex-session-e865444a src/aw/target/sessions/5c6e6433-daab-4ab5-bdab-db91d20fccfb src/aw/target/cosh-codex-94b18102 src/aw/target/sessions/1ef711ae-4d60-4d7d-9629-59469970945d src/aw/target/codex-session-6fb00d7a src/aw/target/sessions/f82ae3a4-824e-41ea-af2f-80da83126ac4 src/aw/target/codex-checks
+```
+
+前次多面板里程碑测试产物：
 
 ```bash
 rm -rf -- src/aw/target/session-live-bfaa3ee2 src/aw/target/session-live-2c3142a5 src/aw/target/cosh-codex-6e0e3b43 src/aw/target/session-live-4a233443 src/aw/target/sessions/96f0b56e-0709-427b-9f99-09d53b59821f src/aw/target/sessions/7e10c7fd-e85f-4daf-bceb-e4eaaf8b7f35 src/aw/target/sessions/7050557e-1084-4c5d-9727-1bd77c1409f0 src/aw/target/sessions/2a77e266-32b0-40e1-aa4f-79328da05ab0 src/aw/target/sessions/e42db68b-a89d-4a93-a187-6b0378f69ed0 src/aw/target/sessions/1d9e690e-f98e-45e9-a0d7-05ceb0fa473f src/aw/target/session-live-4e956619 src/aw/target/sessions/270dcf2a-eeaf-45c2-876f-ce26f71e6435 src/aw/target/sessions/11015fd8-f67a-4385-ae5b-b0899dc24532 src/aw/target/sessions/65c66003-3b59-420f-9609-852c2d91cad0 src/aw/target/panels-checks

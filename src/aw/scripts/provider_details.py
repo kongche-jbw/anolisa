@@ -53,6 +53,7 @@ def snapshot(root: Path, config: dict, view: dict) -> dict:
     calls.sort(key=lambda call: call["completed_at_ms"], reverse=True)
     return {
         "status": "verified",
+        "agent_kind": config.get("agent_kind", "qoder"),
         "verified_at_ms": int(time.time() * 1000),
         "session_id": view["scope"]["session_id"],
         "providers": config["providers"],
@@ -101,6 +102,14 @@ def sidebar(details: dict) -> dict:
         f"History: {projection.get('adopted', 0)} adopted | "
         f"saved {projection.get('saved_bytes', 0)} B"
     )
+    if details.get("agent_kind") == "codex":
+        tokens.update(
+            aw_tokenless="Tokenless: unsupported adapter",
+            aw_tokenless_result=None,
+            aw_savings="Post-tool inspection; output retained",
+        )
+        if not details["bash_results"]:
+            tokens["aw"] = "AW hook connected | awaiting Bash"
     return tokens
 
 
@@ -134,8 +143,9 @@ def lines(root: Path, page: int) -> list[str]:
     ]
     if config.get("agent_kind", "qoder") == "codex":
         heading += [
-            "Codex native terminal attached. AW hooks are not connected in this entry.",
-            "Provider configuration below is not evidence of execution.",
+            "Codex: native Bash post-tool inspection; /hooks to review AW hooks.",
+            "Tokenless output replacement is unsupported in this adapter.",
+            "Installed Provider configuration is not evidence of execution.",
             "",
         ]
     else:
