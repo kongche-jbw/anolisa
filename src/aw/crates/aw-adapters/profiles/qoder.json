@@ -1,0 +1,56 @@
+{
+  "format": 1,
+  "host": "qoder",
+  "boundaries": [
+    {
+      "native_event": "PreToolUse",
+      "descriptor": {
+        "adapter_id": "aw.native.qoder",
+        "adapter_version": "0.1.0",
+        "boundary_id": "qoder.pre_tool",
+        "revision": 1,
+        "boundary": "pre_tool",
+        "invocation_mode": "awaitable",
+        "can_replace_text": false,
+        "can_deny_dispatch": false,
+        "has_final_input_guard": false,
+        "proof_boundaries": [],
+        "ledger_policy": "best_effort",
+        "media_types": [
+          "text/plain"
+        ],
+        "reversibility": [],
+        "composition": {
+          "input_finality": "uncontrolled",
+          "gate": "none",
+          "result_finality": "subject_to_later_change"
+        }
+      }
+    },
+    {
+      "native_event": "PostToolUse",
+      "descriptor": {
+        "adapter_id": "aw.native.qoder",
+        "adapter_version": "0.1.0",
+        "boundary_id": "qoder.post_tool",
+        "revision": 1,
+        "boundary": "post_tool",
+        "invocation_mode": "awaitable",
+        "can_replace_text": true,
+        "can_deny_dispatch": false,
+        "has_final_input_guard": false,
+        "proof_boundaries": [],
+        "ledger_policy": "best_effort",
+        "media_types": [
+          "text/plain"
+        ],
+        "reversibility": [],
+        "composition": {
+          "input_finality": "uncontrolled",
+          "gate": "none",
+          "result_finality": "subject_to_later_change"
+        }
+      }
+    }
+  ]
+}

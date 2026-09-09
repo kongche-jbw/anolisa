@@ -11,6 +11,12 @@ authorization credentials and ledger storage out of that crate. The sibling
 owns its private execution journal. A schema URI is an identity, not permission
 to fetch a resource. Existing schema resources must remain byte-for-byte intact.
 
+`crates/aw-adapters` captures six native tool-hook surfaces and binds their text
+to trusted context before using Core. Its bundled profiles describe implemented
+adapter powers, not maximum framework features. Never infer a final input guard
+from a native block response. Keep raw native messages intact and keep plugin
+registration, security policy and output formatting owned by native integrations.
+
 Schema resources are authoritative wire shapes. Rust checks cross-record invariants; native callers authenticate observations and enforce atomicity. Keep these layers explicit in code and documentation. Never equate receipt production with adoption, process observation with ownership, or declared coverage with independently verified scanner behavior.
 
 The current schema bundle is a proposed freeze baseline. After acceptance, incompatible shape, enum, hashing or semantic changes require new schema IDs and negotiation; do not broaden an existing revision silently. Native provider protocols stay owned by their components. Unsupported profiles fail explicitly.

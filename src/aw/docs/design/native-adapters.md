@@ -1,0 +1,106 @@
+# Shared native adapters
+
+[中文版](native-adapters_zh.md)
+
+`aw-adapters` 0.1.0 captures native tool text, binds it to a trusted runtime
+context and executes existing capability plans through `aw-core`. It is an
+embedding library. Loading a profile does not install or activate a plugin.
+The public Schema resources and Core implementation remain unchanged.
+
+## Six host surfaces
+
+Each file in `crates/aw-adapters/profiles/` contains two existing
+`boundary-descriptor/v1` objects. The surrounding `format: 1` object is a
+private library resource, not a new AW wire protocol.
+
+| Host | Pre / post event | Command slot | Result slot | Observable IDs |
+| --- | --- | --- | --- | --- |
+| Qoder | `PreToolUse` / `PostToolUse` | `tool_input.command`, tool `Bash` | `tool_response` string | `session_id`, `tool_use_id` |
+| Codex | `PreToolUse` / `PostToolUse` | `tool_input.command`, tool `Bash` | `tool_response` string | `session_id`, `tool_use_id`, `turn_id` |
+| Qwen Code | `PreToolUse` / `PostToolUse` | `tool_input.command`, tool `run_shell_command` | `tool_response` string | `session_id`, `tool_use_id` |
+| Hermes | `pre_tool_call` / `post_tool_call` | `event.args.command`, tool `terminal` | `event.result` string | `context.session_id`, `context.tool_call_id` |
+| OpenClaw | `before_tool_call` / `after_tool_call` | `event.params.command`, tool `exec` | `event.result` string | `sessionId`, `toolCallId`, `runId` in event/context |
+| COSH | `PreToolUse` / `PostToolUse` | `tool_input.command`, tool `run_shell_command` or `shell` | `tool_response.llmContent` string | `session_id`, `tool_use_id` |
+
+Hermes and OpenClaw accept a **local** `{event, context}` container that the
+embedding code builds from callback arguments. This does not claim either SDK
+emits that envelope. For OpenClaw, the binding uses native `runId` as AW
+`turn_id`; event/context IDs must agree when both exist. Hermes has no inferred
+turn mapping. Qoder and Qwen Code also accept JSON-encoded `tool_input`, matching
+the existing native hook path.
+
+These mappings follow the native integrations in `src/agent-sec-core` and the
+COSH emitter in `src/cosh-ng/crates/cosh-core/src/hook.rs`. They establish source
+compatibility for the listed slots, not a complete framework support matrix.
+
+## Capture, admission and execution
+
+1. The embedding owner supplies `NativeContext`: authenticated runtime binding,
+   scope and a stable boundary occurrence ID. It must not derive authority from
+   model arguments or treat possession of a PID as control permission.
+2. `Adapter::capture` checks native IDs against that context, checks runtime
+   generation and session, and extracts one UTF-8 slot. Its digest covers the
+   exact bytes, including empty results and whitespace. The original decoded
+   payload remains intact, including native fields outside the AW contract.
+3. The policy owner supplies a resolved plan and per-step constraints, budgets
+   and deadlines. `Adapter::prepare` checks occurrence, source and boundary
+   binding, builds existing capability inputs, then calls `Core::prepare`.
+4. `Adapter::execute` calls `Core::execute` with the supplied Provider Host,
+   Journal, Clock and Cancellation ports. It returns Core records and unchanged
+   native data together. A native integration decides how to interpret the
+   outcome using its existing policy, approval and response conventions.
+
+The bridge implements `security.content.inspect/v2` and
+`security.code.inspect/v2`. It does not implement provider discovery, native
+security rules, command dispatch, text projection, recovery or adoption.
+A Core `proceed` outcome is not an emitted native tool permit.
+
+Only the listed text slots are supported. COSH preserves `returnDisplay` and
+extracts only `llmContent`; other object results, arrays, multimodal blocks and
+binary results return explicit errors. Native failure signals (`is_error`,
+interrupted/denied status, or supported SDK error fields) also return errors.
+The embedding code must retain its native failure behavior; this library never
+converts an extraction error into an allow response.
+
+## Why the profiles are conservative
+
+Native hook blocking is insufficient evidence of a non-bypassable final input
+guard. All six profiles therefore declare no final guard, no dispatch denial
+authority, no adoption proof boundaries and best-effort ledger requirements.
+Qoder's post-tool surface records its known text replacement ability, but this
+inspection bridge does not perform replacement. The other post-tool surfaces
+are observation-only in this implementation.
+
+Pre-tool capture is available. **Pre-tool plan execution is rejected** by the
+existing contract because these profiles cannot establish the mandatory final
+command gate. Enabling it requires a verified native enforcement integration
+and a separately reviewed descriptor revision. Setting a capability flag to
+true merely to pass admission would misrepresent the boundary.
+
+Receipt validation establishes consistency with the invocation and output;
+it does not certify scanner behavior. A persisted execution journal does not
+prove native adoption or OS enforcement. Existing plugins remain unchanged and
+continue to work independently; automatic coexistence, duplicate-hook avoidance
+and native result delivery still require integration tests with real hosts.
+
+## Run and validate
+
+From the repository root:
+
+```bash
+cd src/aw
+cargo test --workspace --locked
+cargo run -p aw-adapters --example native_inspection --locked
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+python3 tests/check_canonical.py
+cargo doc --workspace --no-deps --locked
+```
+
+The example uses Qoder-shaped fixture data, the real adapter and Core, a
+**synthetic Provider**, and `FileJournal`. It reopens and verifies the journal,
+checks payload preservation and removes its temporary directory under `target`.
+It starts no Agent and calls no SecCore scanner. Tests cover all six mappings,
+identity mismatches, plan binding, provider failure, duplicate occurrences and
+pre-tool rejection. The checked environment is Linux ARM64; live framework
+activation and other operating systems are not validated by these tests.

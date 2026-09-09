@@ -4,7 +4,7 @@
 
 AW defines versioned capability contracts between native agent adapters, a coordinating core and component providers. The root `aw-contracts` crate bundles JSON Schemas and offline semantic validators; the sibling `aw-core` crate executes pinned capability plans through a trusted Host port. Provider output stays separate from environment adoption, and runtime observation stays separate from control authority. Existing components remain independently usable.
 
-**Status: Core implementation baseline 0.1.0; schema freeze review remains pending.** Core now implements whole-plan admission, serial execution, cancellation, receipt checks and a Linux file journal. It is an embeddable library, not a deployed service. Production Provider Host drivers, native adapters, process control and state providers remain separate integrations. Tests do not certify real Agent adoption or OS enforcement.
+**Status: Core implementation baseline 0.1.0; schema freeze review remains pending.** Core now implements whole-plan admission, serial execution, cancellation, receipt checks and a Linux file journal. It is an embeddable library, not a deployed service. The `aw-adapters` library adds shared native text capture and six host boundary profiles. Production Provider Host drivers, native plugin registration, process control and state providers remain separate integrations. Tests do not certify real Agent adoption or OS enforcement.
 
 ## Start from source
 
@@ -25,6 +25,8 @@ This validation used Linux ARM64 with Rust 1.97.1, Python 3.12.3 and Node.js 24.
 
 ## Read and integrate
 
+- [Shared adapters: six host mappings, API and limits](docs/design/native-adapters.md)
+- [Runnable native inspection example](crates/aw-adapters/examples/native_inspection.rs)
 - [Core baseline: API, guarantees, limits and source provenance](docs/design/core-baseline.md)
 - [Executable pinned-plan example](crates/aw-core/examples/pinned_plan.rs)
 - [PoC baseline and interface delta](docs/design/poc-schema-delta.md)
