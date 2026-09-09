@@ -193,3 +193,7 @@ PR 应根据变更文件选择组件矩阵中的对应行，运行相应的构�
 
 组件特有的构建细节、生成制品和运行配置应放在组件 README 或对应开发指南中。本页
 只维护仓库级入口，组件清单或脚本接口发生变化时同步更新这里。
+
+## AW 演示分支
+
+在包含 `src/aw/scripts/demo.py` 的分支，`python3 src/aw/scripts/demo.py setup` 编译 AW/Tokenless 并准备固定 SecCore/Herdr；产物集中在 `src/aw/target/demo/`。前提、clone 命令与完整演示流程见 [AW 演示指南](user-guide/zh/token-saving/aw-demo.md)。

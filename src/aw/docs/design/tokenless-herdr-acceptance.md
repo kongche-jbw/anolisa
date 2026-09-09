@@ -7,6 +7,21 @@ SecCore and Tokenless in one AW plan; an independent observer verifies the
 persisted native tool-result slot. Herdr displays only session-bound, verified
 results. No schema resources or Core implementation were changed.
 
+## Meeting demo from a fresh clone
+
+Follow the [complete setup, presentation and cleanup guide](../../../../docs/user-guide/en/token-saving/aw-demo.md). From the repository root:
+
+```bash
+python3 src/aw/scripts/demo.py setup
+python3 src/aw/scripts/demo.py providers
+python3 src/aw/scripts/demo.py doctor
+python3 src/aw/scripts/demo.py run --allow-unrecoverable --hold-seconds 30
+```
+
+The launcher discovers `src/aw/providers/*.json`, resolving relative paths against each manifest. Setup prepares pinned SecCore source and Python, this branch's Tokenless/AW binaries, and pinned Herdr without another local worktree. Discovery stays in the launcher; Host receives explicit pinned settings and Schema/Core remain unchanged. Unknown, missing, duplicate, or incompatible Providers fail explicitly. Agent workspaces are not scanned and global plugins are not installed.
+
+The presentation mirrors the real Herdr TUI, refreshing verified sidebar evidence for the selected hold duration before cleaning up its dedicated session. Code delimiters identify `cat fixture.json` in the prompt so punctuation is not mistaken for a command argument. Single-turn identity, plugin coexistence restrictions, and adoption evidence boundaries still apply. The low-level commands below remain available for diagnostics; fresh clones should use the new entry point.
+
 ## Build and run
 
 Use Linux ARM64 for the validated environment. Source Tokenless is 0.8.0 with
@@ -105,6 +120,8 @@ restarted. To discard all generated material in this worktree, run `cargo clean`
 with each of the AW and Tokenless Cargo manifests; save useful evidence first.
 
 ## Recorded results
+
+The setup/demo entry point passed in an independent Linux ARM64 clone with existing system tools and Qoder login, with changed files applied to the clone; this is not fresh-OS acceptance. Pinned Provider source was fetched again from the remote, with separate Python and Rust outputs in that clone. Real Herdr terminal display, no-gain, Provider failure, and interruption cleanup after verification passed, along with 144 Rust tests, 15 Herdr Python tests, seven launcher tests, fmt, Clippy, documentation builds and cross-language digest checks. New evidence lives under `target/demo/`, separately from the earlier records below.
 
 | Case | Observed result |
 | --- | --- |

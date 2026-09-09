@@ -16,6 +16,7 @@ import shutil
 import signal
 import struct
 import subprocess
+import sys
 import tempfile
 import termios
 import time
@@ -29,12 +30,23 @@ def main() -> None:
     parser.add_argument("binary", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
+        "--display",
+        action="store_true",
+        help="mirror the real Herdr TUI to this terminal",
+    )
+    parser.add_argument(
+        "--hold-seconds", type=int, choices=range(1, 121), default=3, metavar="1..120"
+    )
+    parser.add_argument(
         "--command-json",
         type=Path,
         required=True,
         help="trusted JSON argv for the AW Tokenless acceptance runner",
     )
     args = parser.parse_args()
+    if args.display and not sys.stdout.isatty():
+        parser.error("--display requires a terminal")
+    signal.signal(signal.SIGTERM, lambda _signal, _frame: sys.exit(130))
     binary = args.binary.resolve()
     root = Path(__file__).resolve().parent
     pin = json.loads((root / "upstream.json").read_text())
@@ -98,7 +110,7 @@ def main() -> None:
                         "cwd": str(runtime),
                         "server_command": [str(binary), "server"],
                         "stop": f"kill -TERM -- -{server.pid}",
-                        "lifetime": "<= 210 seconds",
+                        "lifetime": f"<= {210 + args.hold_seconds} seconds",
                     }
                 )
                 (output / "ownership.json").write_text(json.dumps(report, indent=2))
@@ -116,6 +128,8 @@ def main() -> None:
                         str(endpoint),
                         "--herdr-pane-id",
                         pane_id,
+                        "--hold-seconds",
+                        str(args.hold_seconds),
                     ]
                 )
                 report["agent_command"] = command
@@ -145,12 +159,16 @@ def main() -> None:
                     + "\n"
                 )
                 rpc(endpoint, "pane.send_input", {"pane_id": pane_id, "text": shell})
-                deadline = time.monotonic() + 180
+                deadline = time.monotonic() + 180 + args.hold_seconds
                 finished_at = None
                 while time.monotonic() < deadline:
                     readable, _, _ = select.select([master], [], [], 0.1)
                     if readable:
-                        screen.extend(os.read(master, 65536))
+                        chunk = os.read(master, 65536)
+                        screen.extend(chunk)
+                        if args.display:
+                            sys.stdout.buffer.write(chunk)
+                            sys.stdout.buffer.flush()
                     if status.exists():
                         finished_at = finished_at or time.monotonic()
                         if time.monotonic() - finished_at > 0.5:
@@ -202,9 +220,28 @@ def main() -> None:
                     }
                 )
                 (output / "result.json").write_text(json.dumps(report, indent=2))
-                print(json.dumps(report, indent=2))
+                if not args.display:
+                    print(json.dumps(report, indent=2))
             finally:
+                signal.signal(signal.SIGTERM, signal.SIG_IGN)
+                signal.signal(signal.SIGINT, signal.SIG_IGN)
                 (output / "screen.ansi").write_bytes(screen)
+                # Give the acceptance runner time to remove its own Qoder session/trust.
+                lifecycle_path = evidence / "lifecycle.json"
+                if lifecycle_path.is_file():
+                    lifecycle = json.loads(lifecycle_path.read_text())
+                    pid = lifecycle.get("runner_pid")
+                    stat = Path(f"/proc/{pid}/stat")
+                    if pid and stat.exists():
+                        try:
+                            ticks = int(stat.read_text().rsplit(")", 1)[1].split()[19])
+                            if ticks == lifecycle.get("runner_start_ticks"):
+                                os.kill(pid, signal.SIGTERM)
+                                end = time.monotonic() + 8
+                                while stat.exists() and time.monotonic() < end:
+                                    time.sleep(0.1)
+                        except (ProcessLookupError, FileNotFoundError):
+                            pass
                 for process in (client, server):
                     if process is not None and process.poll() is None:
                         os.killpg(process.pid, signal.SIGTERM)
@@ -216,6 +253,13 @@ def main() -> None:
                 for fd in (master, slave):
                     if fd is not None:
                         os.close(fd)
+                if args.display:
+                    sys.stdout.write(
+                        "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l"
+                        "\x1b[?1015l\x1b[?2004l\x1b[?1004l\x1b[?2031l"
+                        "\x1b[<u\x1b[?7h\x1b[?1049l\x1b[?25h\x1b[0m"
+                    )
+                    sys.stdout.flush()
                 report["cleanup"] = (
                     "owned client/server exited; temporary namespace removed on return"
                 )

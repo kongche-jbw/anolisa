@@ -220,3 +220,7 @@ Component-specific build details, generated artifacts, and runtime setup belong
 in the component README or its linked developer guide. Keep this page focused
 on repository-wide entry points and update it when the component list or script
 interfaces change.
+
+## AW demo branch
+
+On the branch containing `src/aw/scripts/demo.py`, `python3 src/aw/scripts/demo.py setup` builds AW/Tokenless and prepares pinned SecCore/Herdr under `src/aw/target/demo/`. See the [AW demo guide](user-guide/en/token-saving/aw-demo.md) for prerequisites, clone commands and the complete presentation flow.

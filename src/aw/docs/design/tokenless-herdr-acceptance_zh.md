@@ -4,6 +4,21 @@
 
 本次在 Qoder/Codex 检查基线上继续接入：Qoder 在同一 AW 计划中调用 SecCore 和 Tokenless，独立观察器核验原生历史中的工具结果，Herdr 展示当前会话的已验证数据。公开 Schema 和 Core 实现保持不变。
 
+## 从新 clone 开始的组会演示
+
+已提供 [完整 setup、演示与清理流程](../../../../docs/user-guide/zh/token-saving/aw-demo.md)。在仓库根目录执行：
+
+```bash
+python3 src/aw/scripts/demo.py setup
+python3 src/aw/scripts/demo.py providers
+python3 src/aw/scripts/demo.py doctor
+python3 src/aw/scripts/demo.py run --allow-unrecoverable --hold-seconds 30
+```
+
+默认发现 `src/aw/providers/*.json`，相对路径以 manifest 位置解析。Setup 自动准备固定 SecCore 提交及 Python 环境、本分支 Tokenless/AW 二进制和固定 Herdr 制品；不再要求另一个本地工作树。发现只在启动器完成，Host 仍接收显式固定配置，Schema 与 Core 不变。未知、缺失、重复或版本/协议不符的 Provider 明确失败，不扫描 Agent 工作目录，也不安装全局插件。
+
+现场入口镜像真实 Herdr TUI，在独立采用验证后持续刷新侧栏，按选定时长保留画面，然后清理专属会话。提示词用代码标记限定 `cat fixture.json`，避免标点被误当成命令参数。单轮身份、插件共存限制和采用证据边界仍适用。以下低层命令保留用于诊断；新 clone 应优先使用上述入口。
+
 ## 构建与运行
 
 本次核验环境为 Linux ARM64。源码 Tokenless 为 0.8.0，使用 native protocol v2；系统原有的 0.7.0 二进制不适用。Herdr 固定为官方未经修改的 v0.9.0。Qoder 验收使用 1.1.47，原位沿用已有登录。SecCore 仍依赖显式选定的 0.11.0 原生 Provider 源码及 Python 3.11.6 环境，详见[检查接入说明](qoder-codex-inspection_zh.md)。
@@ -57,6 +72,8 @@ PYTHONDONTWRITEBYTECODE=1 timeout 210 python3 integrations/herdr/live_smoke.py \
 各入口在 `lifecycle.json` 或 `ownership.json` 中记录命令、版本、PID 与启动代次、路径和停止命令。成功清理只删除本次新 UUID 会话、同名状态目录、临时 home，以及测试目录的信任条目。认证不复制、不删除，日志与合成证据保留在所选目录。共享 VM 和现有 Herdr 不会被重启。若不再保留本工作树的生成材料，可分别对 AW 与 Tokenless 的 Cargo manifest 执行 `cargo clean`；先保存需要的证据。
 
 ## 本次核验结果
+
+新增 setup/demo 入口在 Linux ARM64 上通过独立 clone 验证（已有系统工具链与 Qoder 登录，变更文件带入新 clone；不是全新 OS 安装验收）。固定 Provider 源码重新从远端获取，Python 环境与 Rust 产物在该 clone 独立生成。真实 Herdr 终端展示、无收益、Provider 故障及验证后中断清理均通过；144 项 Rust 测试、15 项 Herdr Python 测试、7 项启动器测试、fmt、Clippy、文档构建与跨语言摘要检查通过。新证据在 `target/demo/`，不与下面的早期记录混用。
 
 | 场景 | 实际结果 |
 | --- | --- |

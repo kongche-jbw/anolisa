@@ -1,0 +1,8 @@
+{
+  "id": "sec-core",
+  "kind": "security",
+  "version": "0.11.0",
+  "native_protocol": 1,
+  "program": "../target/demo/sec-core/src/agent-sec-core/agent-sec-cli/.venv/bin/python",
+  "source": "../target/demo/sec-core/src/agent-sec-core/agent-sec-cli/src"
+}

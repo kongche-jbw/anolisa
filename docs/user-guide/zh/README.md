@@ -105,3 +105,5 @@ ANOLISA 为 AI Agent 提供完整的服务端运行时能力。通过 `anolisa` 
 | 适配器（Adapter） | 将组件接入 Agent 框架的桥接包 |
 | system mode | 需要 root 权限的安装模式（`sudo anolisa install`） |
 | user mode | 安装到用户目录，无需 sudo |
+
+- [AW 组会演示](token-saving/aw-demo.md)：开发分支的 clone、setup、Provider 发现与真实 Qoder/Herdr 演示。

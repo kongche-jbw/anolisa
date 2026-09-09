@@ -1,0 +1,7 @@
+{
+  "id": "tokenless",
+  "kind": "projection",
+  "version": "0.8.0",
+  "native_protocol": 2,
+  "program": "../target/demo/build/tokenless/debug/tokenless"
+}

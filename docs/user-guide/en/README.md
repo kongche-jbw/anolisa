@@ -105,3 +105,5 @@ ANOLISA provides a complete server-side runtime for AI Agent workloads. Componen
 | Adapter | A bridge package connecting a component to an Agent framework |
 | system mode | Installation requiring root privileges (`sudo anolisa install`) |
 | user mode | Installation into user-local paths (no sudo required) |
+
+- [AW meeting demo](token-saving/aw-demo.md): development-branch clone, setup, Provider discovery and real Qoder/Herdr presentation.

@@ -56,3 +56,7 @@ cargo doc --workspace --no-deps --locked
 状态操作目前只有通用的审批与幂等状态机。快照和恢复的具体输入输出，以及恢复实现，需要单独设计和评审。
 
 OS 防护应持续限制受控进程的系统访问。`os-protection-binding` 记录目标、策略和控制项的生效证据；必需防护缺失、过期或仅声明支持时，`validate_dispatch` 会拒绝准入。内核限制是否生效、跳过 hook 后能否继续阻断访问、子进程是否受保护，都需要后续实现与实机验证。
+
+## 组会演示
+
+从新 clone 执行 `python3 src/aw/scripts/demo.py setup`，再用 `doctor` 检查、`run --allow-unrecoverable` 展示真实 Qoder/Herdr。Provider 默认从 `src/aw/providers/` 发现，依赖和证据保存在 `src/aw/target/demo/`。完整命令、前提与清理见[演示指南](../../docs/user-guide/zh/token-saving/aw-demo.md)。

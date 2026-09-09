@@ -101,6 +101,7 @@ def run(args):
     native_smoke.write_json(
         work / ".qoder" / "settings.json",
         {
+            "general": {"enableAutoUpdate": False},
             "hooks": {
                 "PostToolUse": [
                     {
@@ -108,7 +109,7 @@ def run(args):
                         "hooks": [{"type": "command", "command": hook, "timeout": 30}],
                     }
                 ]
-            }
+            },
         },
     )
     command = [
@@ -141,9 +142,11 @@ def run(args):
         "import os,sys,time\nfrom pathlib import Path\nend=time.monotonic()+5\nwhile not Path(sys.argv[1]).exists():\n if time.monotonic()>end: raise SystemExit(90)\n time.sleep(.02)\nos.execv(sys.argv[2],sys.argv[2:])\n"
     )
     lifecycle = {
+        "runner_pid": os.getpid(),
+        "runner_start_ticks": native_smoke.start_ticks(os.getpid()),
         "command": command,
         "working_directory": str(work),
-        "expected_lifetime_seconds": 120,
+        "expected_lifetime_seconds": 150 + args.hold_seconds,
         "session_id": session,
         "transcript": str(transcript),
         "authentication": "existing login in place, not copied",
@@ -448,7 +451,19 @@ def run(args):
                     args.herdr_socket, "pane.get", {"pane_id": args.herdr_pane_id}
                 ),
             )
-            time.sleep(3)
+            hold_deadline = time.monotonic() + args.hold_seconds
+            while time.monotonic() < hold_deadline:
+                time.sleep(min(1, max(0, hold_deadline - time.monotonic())))
+                if not bridge.refresh(
+                    args.herdr_socket,
+                    args.herdr_pane_id,
+                    args.view_bin,
+                    root / "view-binding.json",
+                    time.time_ns(),
+                ):
+                    raise RuntimeError(
+                        "Herdr lost the live binding during presentation"
+                    )
         result = {
             "status": "passed",
             "case": args.case,
@@ -463,8 +478,10 @@ def run(args):
         subprocess.SubprocessError,
         KeyboardInterrupt,
     ) as error:
-        result = {"status": "failed", "reason": str(error)}
+        result = {"status": "failed", "reason": str(error) or "interrupted"}
     finally:
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
         if process is not None:
             for sig in (signal.SIGTERM, signal.SIGKILL):
                 try:
@@ -561,11 +578,19 @@ def main():
     parser.add_argument("--interactive", action="store_true")
     parser.add_argument("--herdr-socket", type=Path)
     parser.add_argument("--herdr-pane-id")
+    parser.add_argument(
+        "--hold-seconds", type=int, choices=range(1, 121), default=3, metavar="1..120"
+    )
     args = parser.parse_args()
     if bool(args.herdr_socket) != bool(args.herdr_pane_id) or (
         args.herdr_socket and not args.interactive
     ):
         parser.error("Herdr requires socket, pane ID and interactive mode together")
+
+    def interrupted(_signal, _frame):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, interrupted)
     return run(args)
 
 

@@ -54,3 +54,7 @@ Text projection covers **one UTF-8 text slot**, preserving the surrounding nativ
 Effect operation records provide a generic approval/idempotency state machine. They do not define or execute checkpoint, restore or arbitrary state capabilities. Those payload profiles and recovery implementations require separate reviewed additions.
 
 OS protection independently enforces ongoing system restrictions; it is not a scanner activated after plugin failure. `os-protection-binding` binds target, policy digest, required controls and coverage evidence. `validate_dispatch` rejects missing, expired or merely declared mandatory protection. Actual kernel restrictions, hook-bypassing access denial and child-process coverage require later native implementation and live validation.
+
+## Meeting demo
+
+From a fresh clone, run `python3 src/aw/scripts/demo.py setup`, then `doctor` to check readiness and `run --allow-unrecoverable` to display real Qoder/Herdr. Providers are discovered from `src/aw/providers/`; dependencies and evidence stay in `src/aw/target/demo/`. See the [demo guide](../../docs/user-guide/en/token-saving/aw-demo.md) for commands, prerequisites and cleanup.

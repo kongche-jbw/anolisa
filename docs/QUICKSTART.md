@@ -81,3 +81,5 @@ anolisa adapter scan
 - [anolisa CLI reference](user-guide/en/user-entrypoint/anolisa-cli.md) — lifecycle and adapter commands
 - [Troubleshooting](user-guide/en/troubleshooting.md) — common installation and runtime failures
 - [Build from source](BUILDING.md) — developer builds only
+
+For a development-branch meeting demo, clone and run setup to show the verified Qoder, SecCore, Tokenless and Herdr flow. See the [AW demo guide](user-guide/en/token-saving/aw-demo.md). This combination is not yet available through the release installer.

@@ -79,3 +79,5 @@ anolisa adapter scan
 - [anolisa CLI 参考](user-guide/zh/user-entrypoint/anolisa-cli.md)——生命周期与 Adapter 命令
 - [故障排查](user-guide/zh/troubleshooting.md)——常见安装和运行问题
 - [从源码构建](BUILDING_zh.md)——仅面向开发者构建
+
+开发分支的组会演示：从新 clone 运行 setup，展示 Qoder、SecCore、Tokenless 与 Herdr 的已验证流程。见 [AW 演示指南](user-guide/zh/token-saving/aw-demo.md)。此组合尚未通过发布版安装器提供。
