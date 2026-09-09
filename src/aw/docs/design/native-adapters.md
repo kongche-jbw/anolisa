@@ -15,7 +15,7 @@ private library resource, not a new AW wire protocol.
 
 | Host | Pre / post event | Command slot | Result slot | Observable IDs |
 | --- | --- | --- | --- | --- |
-| Qoder | `PreToolUse` / `PostToolUse` | `tool_input.command`, tool `Bash` | `tool_response` string | `session_id`, `tool_use_id` |
+| Qoder | `PreToolUse` / `PostToolUse` | `tool_input.command`, tool `Bash` | `tool_response` string or completed Bash `tool_response.stdout` | `session_id`, `tool_use_id` |
 | Codex | `PreToolUse` / `PostToolUse` | `tool_input.command`, tool `Bash` | `tool_response` string | `session_id`, `tool_use_id`, `turn_id` |
 | Qwen Code | `PreToolUse` / `PostToolUse` | `tool_input.command`, tool `run_shell_command` | `tool_response` string | `session_id`, `tool_use_id` |
 | Hermes | `pre_tool_call` / `post_tool_call` | `event.args.command`, tool `terminal` | `event.result` string | `context.session_id`, `context.tool_call_id` |
@@ -56,7 +56,9 @@ security rules, command dispatch, text projection, recovery or adoption.
 A Core `proceed` outcome is not an emitted native tool permit.
 
 Only the listed text slots are supported. COSH preserves `returnDisplay` and
-extracts only `llmContent`; other object results, arrays, multimodal blocks and
+extracts only `llmContent`. Qoder completed Bash objects expose exact stdout only
+when exit code is zero and stderr is empty; interrupted, image and failed
+results are rejected, and surrounding metadata is preserved. Other objects, arrays, multimodal blocks and
 binary results return explicit errors. Native failure signals (`is_error`,
 interrupted/denied status, or supported SDK error fields) also return errors.
 The embedding code must retain its native failure behavior; this library never

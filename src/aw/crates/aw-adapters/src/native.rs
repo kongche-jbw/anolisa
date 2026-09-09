@@ -27,7 +27,7 @@ pub struct ExtractedCall {
 /// (`event`) and remaining keyword arguments (`context`). Neither container is
 /// claimed to be a native wire format. COSH post-tool extraction reads the
 /// explicit `tool_response.llmContent` string and preserves `returnDisplay` in
-/// the caller's snapshot. Other hosts accept direct strings only; arbitrary
+/// the caller's snapshot. Qoder also accepts a completed Bash stdout object. Other hosts accept direct strings only; arbitrary
 /// structured, binary and multi-block results remain unsupported.
 ///
 /// # Errors
@@ -115,6 +115,22 @@ pub fn extract(host: Host, native_event: &str, payload: &Value) -> Result<Extrac
         };
         if matches!(host, Host::Cosh) {
             text_field(object_field(event, key)?, "llmContent")?
+        } else if host == Host::Qoder && event[key].is_object() {
+            let response = &event[key];
+            // Only the observed successful Bash text slot is supported. Do not
+            // turn failed, image, or mixed stdout/stderr results into a clean scan.
+            if tool_name != "Bash"
+                || response["kind"] != "completed"
+                || response["exitCode"] != 0
+                || response.get("signal") != Some(&Value::Null)
+                || response["interrupted"] != false
+                || response["isImage"] != false
+                || response["noOutputExpected"] != false
+                || response["stderr"] != ""
+            {
+                return Err(Error::UnsupportedPayload("unsupported Qoder Bash result"));
+            }
+            text_field(response, "stdout")?
         } else {
             text_field(event, key)?
         }

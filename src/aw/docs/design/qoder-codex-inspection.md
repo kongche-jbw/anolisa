@@ -82,13 +82,16 @@ python3 tests/native_smoke.py --help
 
 The smoke script requires explicit absolute paths to `aw-hook-cli`, the
 Provider's Python executable and its source directory, plus a new output
-directory. It creates isolated Agent configuration, never copies authentication,
+directory. It defaults to isolated Agent configuration and optionally reuses
+the current Qoder login in place. Neither mode copies authentication,
 and preserves run evidence. Review its command and lifecycle record before
 interpreting a run. The Codex model is a local **scripted Responses fixture**;
 the Codex binary, shell tool, AW Core, scanner and journal are real. This tests
 native integration without asserting real remote-model reasoning.
 
-Qoder is attempted with isolated configuration and no session persistence.
+Qoder defaults to isolated configuration and no session persistence. With
+`--qoder-existing-login` it uses the current login in place and loads a dedicated
+project hook in the test workspace.
 Authentication absence is reported as blocked; a plugin stdin fixture is not a
 substitute for a Qoder runtime acceptance. Neither test proves Tokenless
 compression, final adoption, Herdr metrics, pre-tool enforcement or clean-VM
@@ -114,8 +117,10 @@ Codex passed sensitive (44 bytes), clean (34 bytes) and injected subprocess
 failure cases. The failure case deliberately exits before the scanner and
 requires a failed Receipt, no output and Core `preserve`; it is not a scanner
 success. Successful cases require a produced Receipt, matching coverage and
-Core `proceed`. Qoder stopped at the isolated login boundary, so its actual
-hook payload and end-to-end inspection remain unverified.
+Core `proceed`. Qoder initially stopped at the empty configuration login
+boundary. A later run reused the existing login and verified its real model
+and Bash hook: 43 sensitive bytes, complete coverage and a produced Receipt.
+That Qoder run did not use the scripted model.
 
 The default read-only Codex sandbox failed locally with a bubblewrap loopback
 permission error. The successful runs explicitly used `--sandbox
@@ -144,3 +149,23 @@ Agent homes are removed after each run; logs, settings, receipts and journal
 remain in the explicit output directory for review. Remove that directory to
 clean its evidence, or use `cargo clean` to remove all AW build/test outputs.
 This does not validate deployment on a clean machine.
+
+## Reuse the current Qoder login
+
+In the reproduction command use `--host qoder --qoder-existing-login`, omit the
+Codex `--sandbox` option and choose a fresh output directory. This option does
+not copy, recreate or delete the user's login configuration. It creates only a
+project hook, disables its own session persistence and cleans only its temporary
+directories. Existing interactive sessions are not restarted.
+
+The observed Qoder 1.1.5 Bash result is an object containing stdout, stderr,
+exit code and status fields. The adapter accepts only completed, successful,
+non-image results with empty stderr and extracts exact stdout bytes. Qoder had
+already removed the command's trailing newline, so AW inspects the received
+43 bytes without reconstructing 44 bytes. Other metadata is preserved; this
+does not replace text or establish adoption.
+
+The test stores one synthetic call's `native-event.json` and checks its stdout
+against the AW input digest. It reads no historical session. Qoder still uses
+a dedicated single-turn identity; general multi-turn integration, existing
+plugin coexistence and pre-tool enforcement remain unverified.

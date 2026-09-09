@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Exercise an isolated native CLI hook; never load existing agent credentials.
+"""Exercise native CLI hooks with isolated or explicitly reused Qoder login.
 
 Codex uses a scripted localhost Responses server, a real CLI tool execution,
 AW Core, and the configured real SecCore Provider. Qoder probes its isolated
-login boundary and reports blocked when authentication is unavailable.
+login boundary by default; --qoder-existing-login reuses the current login without copying it.
 """
 
 import argparse
@@ -200,6 +200,17 @@ def isolated_environment(home: Path) -> dict[str, str]:
     return env
 
 
+def qoder_environment(temporary: Path) -> dict[str, str]:
+    """Let Qoder access its normal login while keeping test caches separate."""
+    env = isolated_environment(temporary)
+    for key in ("HOME", "XDG_CONFIG_HOME"):
+        if key in os.environ:
+            env[key] = os.environ[key]
+        else:
+            env.pop(key, None)
+    return env
+
+
 def validate_codex(root: Path, server: FixtureServer, returncode: int, case: str) -> dict[str, Any]:
     expected_text, _ = fixture(case)
     if returncode != 0 or server.failure or len(server.requests) != 2:
@@ -215,6 +226,17 @@ def validate_codex(root: Path, server: FixtureServer, returncode: int, case: str
         tool_outputs[0].get("output", "")
     ):
         raise RuntimeError("Second model request did not preserve the actual synthetic tool output")
+    result = validate_inspection(root, case)
+    result.update(model_requests=2, original_tool_output_in_second_request=True)
+    return result
+
+
+def validate_inspection(root: Path, case: str, native_text: str | None = None) -> dict[str, Any]:
+    expected_text, _ = fixture(case)
+    if native_text is not None:
+        if native_text != expected_text.removesuffix("\n"):
+            raise RuntimeError("Unexpected Qoder native stdout")
+        expected_text = native_text
     paths = list((root / "evidence").glob("*.json"))
     if len(paths) != 1:
         raise RuntimeError("Expected exactly one native AW evidence record")
@@ -242,8 +264,6 @@ def validate_codex(root: Path, server: FixtureServer, returncode: int, case: str
         return {
             "status": "passed",
             "case": case,
-            "model_requests": 2,
-            "original_tool_output_in_second_request": True,
             "evidence": str(paths[0]),
             "receipt_disposition": "failed",
             "execution_decision": "preserve",
@@ -272,8 +292,6 @@ def validate_codex(root: Path, server: FixtureServer, returncode: int, case: str
     return {
         "status": "passed",
         "case": case,
-        "model_requests": 2,
-        "original_tool_output_in_second_request": True,
         "evidence": str(paths[0]),
         "inspection": evidence["calls"][0].get("output"),
         "adoption": "not_observed",
@@ -293,11 +311,32 @@ def run(args: argparse.Namespace) -> int:
     codex_home.mkdir()
     settings = root / "aw-settings.json"
     hook = shlex.join([str(args.hook_bin), args.host, str(settings)])
+    if args.host == "qoder" and args.qoder_existing_login:
+        # Only this test's fixed tool event is captured; no historical session is read.
+        capture = root / "capture_hook.py"
+        capture.write_text(
+            "import os,sys\n"
+            "raw=sys.stdin.buffer.read(1048577)\n"
+            "if len(raw)>1048576: raise SystemExit(1)\n"
+            "with open(sys.argv[1],'xb') as f: f.write(raw)\n"
+            "with open(sys.argv[1],'rb') as f: os.dup2(f.fileno(),0)\n"
+            "os.execv(sys.argv[2],sys.argv[2:])\n"
+        )
+        hook = shlex.join(
+            [
+                sys.executable,
+                str(capture),
+                str(root / "native-event.json"),
+                str(args.hook_bin),
+                args.host,
+                str(settings),
+            ]
+        )
     hooks = {
         "hooks": {
             "PostToolUse": [
                 {
-                    "matcher": "^Bash$",
+                    "matcher": "Bash" if args.host == "qoder" else "^Bash$",
                     "hooks": [{"type": "command", "command": hook, "timeout": 20}],
                 }
             ]
@@ -317,7 +356,11 @@ def run(args: argparse.Namespace) -> int:
     process = None
     lifecycle = {
         "launcher_pid": os.getpid(),
-        "authentication": "none; isolated empty homes",
+        "authentication": (
+            "existing Qoder login used in place; not copied"
+            if args.qoder_existing_login
+            else "none; isolated empty homes"
+        ),
         "expected_lifetime_seconds": 90,
         "output_dir": str(root),
         "working_directory": str(work),
@@ -372,7 +415,8 @@ def run(args: argparse.Namespace) -> int:
                 "Execute the single provided read-only printf command and finish. The API key is an explicitly synthetic scanner fixture.",
             ]
         else:
-            native_settings = root / "qoder-settings.json"
+            (work / ".qoder").mkdir()
+            native_settings = work / ".qoder" / "settings.json"
             write_json(native_settings, hooks)
             command = [
                 shutil.which("qodercli") or "qodercli",
@@ -380,8 +424,6 @@ def run(args: argparse.Namespace) -> int:
                 str(home / ".qoder"),
                 "--setting-sources",
                 "project",
-                "--settings",
-                str(native_settings),
                 "--no-session-persistence",
                 "--strict-mcp-config",
                 "--mcp-config",
@@ -395,6 +437,10 @@ def run(args: argparse.Namespace) -> int:
                 "-p",
                 f"Run only this read-only synthetic scanner fixture command: {tool_command}. Then finish.",
             ]
+            if args.qoder_existing_login:
+                # Retain the user's normal authentication root; settings stay per run.
+                index = command.index("--config-dir")
+                del command[index : index + 2]
         lifecycle["command"] = command
         lifecycle["server_command"] = sys.argv if server else None
         write_json(root / "lifecycle.json", lifecycle)
@@ -405,7 +451,11 @@ def run(args: argparse.Namespace) -> int:
             process = subprocess.Popen(
                 command,
                 cwd=work,
-                env=isolated_environment(home),
+                env=(
+                    qoder_environment(home)
+                    if args.qoder_existing_login
+                    else isolated_environment(home)
+                ),
                 stdin=subprocess.DEVNULL,
                 stdout=stdout,
                 stderr=stderr,
@@ -437,6 +487,19 @@ def run(args: argparse.Namespace) -> int:
                 raise subprocess.TimeoutExpired(command, 90)
         if args.host == "codex":
             result = validate_codex(root, server, returncode, args.case)
+        elif args.qoder_existing_login and returncode == 0:
+            native = json.loads((root / "native-event.json").read_text())
+            if native.get("tool_name") != "Bash" or native.get("hook_event_name") != "PostToolUse":
+                raise RuntimeError("Expected the real Qoder Bash post-tool event")
+            response = native["tool_response"]
+            if response.get("kind") != "completed" or response.get("exitCode") != 0:
+                raise RuntimeError("Qoder tool did not complete successfully")
+            result = validate_inspection(root, args.case, response["stdout"])
+            result.update(
+                real_qoder_hook=True,
+                model="Qoder configured model",
+                native_turn="launcher-owned single turn",
+            )
         else:
             logs = (root / "cli.stdout.log").read_text(errors="replace") + (
                 root / "cli.stderr.log"
@@ -497,6 +560,11 @@ def main() -> int:
     parser.add_argument("--host", required=True, choices=("codex", "qoder"))
     parser.add_argument("--provider-version", required=True)
     parser.add_argument(
+        "--qoder-existing-login",
+        action="store_true",
+        help="Qoder only: use the current login in place; do not copy or delete its configuration",
+    )
+    parser.add_argument(
         "--case", choices=("sensitive", "clean", "provider-failure"), default="sensitive"
     )
     parser.add_argument(
@@ -508,6 +576,8 @@ def main() -> int:
     for name in ("hook-bin", "provider-python", "provider-source", "output-dir"):
         parser.add_argument(f"--{name}", required=True, type=Path)
     args = parser.parse_args()
+    if args.qoder_existing_login and args.host != "qoder":
+        parser.error("--qoder-existing-login requires --host qoder")
     for name in ("hook_bin", "provider_python", "provider_source", "output_dir"):
         if not getattr(args, name).is_absolute():
             parser.error(f"--{name.replace('_', '-')} must be absolute")

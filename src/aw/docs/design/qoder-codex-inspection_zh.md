@@ -40,9 +40,9 @@ python3 tests/check_canonical.py
 python3 tests/native_smoke.py --help
 ```
 
-测试脚本要求显式提供 `aw-hook-cli`、Provider Python 和源码目录的绝对路径，以及一个尚不存在的输出目录。它创建独立 Agent 配置，不复制认证，并保留运行证据。判断结果前，应查看实际命令与生命周期记录。Codex 的模型是本地**脚本化 Responses 测试服务**；Codex 二进制、shell 工具、AW Core、扫描器和 Journal 都是真实实现。这能验收原生接入，但不代表真实远端模型推理已验证。
+测试脚本要求显式提供 `aw-hook-cli`、Provider Python 和源码目录的绝对路径，以及一个尚不存在的输出目录。默认创建独立 Agent 配置；Qoder 可显式沿用现有登录。两种方式都不复制认证，并保留运行证据。判断结果前，应查看实际命令与生命周期记录。Codex 的模型是本地**脚本化 Responses 测试服务**；Codex 二进制、shell 工具、AW Core、扫描器和 Journal 都是真实实现。这能验收原生接入，但不代表真实远端模型推理已验证。
 
-Qoder 使用独立配置，并关闭会话持久化。缺少认证时记录为阻塞，直接给插件 stdin 输入不能替代 Qoder 实机验收。这两类测试都不证明 Tokenless 压缩、最终采用、Herdr 指标、前置防护或干净 VM 安装完成。
+Qoder 默认使用独立配置，并关闭会话持久化；加 `--qoder-existing-login` 则原位使用当前登录，在测试工作目录加载专用 hook。空配置缺少认证时记录为阻塞，直接给插件 stdin 输入不能替代 Qoder 实机验收。这两类测试都不证明 Tokenless 压缩、最终采用、Herdr 指标、前置防护或干净 VM 安装完成。
 
 ## 原生接口依据
 
@@ -56,7 +56,7 @@ Qoder 的结果替换仍需单独实现交付链。Codex 没有与之相同的�
 
 本次核验环境为 Linux ARM64，Qoder CLI 1.1.5、Codex CLI 0.153.4。
 Codex 通过敏感文本（44 字节）、普通文本（34 字节）和子进程故障注入三种场景。
-故障场景在扫描器启动前主动退出，要求失败 Receipt、无输出和 Core `preserve`，不能算扫描成功。成功场景要求 produced Receipt、匹配的覆盖信息和 Core `proceed`。Qoder 停在隔离配置的登录边界，真实 hook 数据和完整检查链路仍未验收。
+故障场景在扫描器启动前主动退出，要求失败 Receipt、无输出和 Core `preserve`，不能算扫描成功。成功场景要求 produced Receipt、匹配的覆盖信息和 Core `proceed`。此前 Qoder 停在空配置的登录边界。随后沿用现有登录，已验证真实模型与 Bash hook：敏感文本 43 字节，完整覆盖并产生成功 Receipt；这不是脚本化模型测试。
 
 本机 Codex 默认 read-only sandbox 因 bubblewrap loopback 权限错误失败。通过的运行显式使用 `--sandbox danger-full-access`，仅执行脚本固定的 `printf`。本次没有验收 sandbox 保证，脚本也不会自动降级。
 
@@ -73,3 +73,11 @@ python3 tests/native_smoke.py \
 ```
 
 其他场景改用 `clean` 或 `provider-failure`，每次选择新的输出目录。隔离登录探测使用 `--host qoder`，省略 sandbox 选项。每次运行在 `lifecycle.json` 中记录命令、PID、端口、日志和停止命令；最终 `result.json` 明确区分 passed、failed 和 blocked。模型请求只包含合成测试对话。测试结束后删除独立 Agent 配置目录，日志、配置、Receipt 和 Journal 保留在指定输出目录供核验。删除该目录即可清理其证据，或用 `cargo clean` 删除全部 AW 构建与测试产物。本次没有验证干净环境部署。
+
+## 沿用现有 Qoder 登录
+
+在上述复现命令中改用 `--host qoder --qoder-existing-login`，去掉 Codex 的 `--sandbox` 参数，并选择新的输出目录。该选项不复制、重建或删除用户的登录配置；测试只创建项目级 hook，关闭自身会话持久化，退出后仅清理测试拥有的临时目录。已打开的交互会话不会被重启。
+
+Qoder 1.1.5 本次真实 Bash 事件的结果是对象，包含 stdout、stderr、退出码和状态字段。适配层只接受已完成、成功、非图像且 stderr 为空的结果，提取 stdout 的原始字节。Qoder 已去掉测试命令输出末尾的换行，因此 AW 检查的是收到的 43 字节，而不是自行补成 44 字节。其他元数据完整保留；本次仍未执行文本替换或确认采用。
+
+测试保存单次合成调用的 `native-event.json`，并核对其 stdout 与 AW 输入摘要一致。该文件不包含历史会话。Qoder 使用专属单轮身份，仍不代表多轮通用接入、旧插件共存或前置防护已验收。

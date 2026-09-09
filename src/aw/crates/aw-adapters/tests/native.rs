@@ -422,3 +422,37 @@ fn cosh_retains_its_explicit_shell_alias() {
     payload["tool_name"] = json!("shell");
     assert!(extract(Host::Cosh, event, &payload).is_ok());
 }
+
+#[test]
+fn qoder_completed_bash_extracts_exact_stdout_and_preserves_envelope() {
+    let (event, mut payload) = fixture(Host::Qoder, false);
+    payload["tool_response"] = json!({"kind":"completed","stdout":"exact text\n","stderr":"",
+        "exitCode":0,"signal":null,"interrupted":false,"isImage":false,"noOutputExpected":false,
+        "telemetryExecutionId":"native-metadata"});
+    let original = payload.clone();
+    assert_eq!(
+        extract(Host::Qoder, event, &payload).unwrap().text,
+        "exact text\n"
+    );
+    assert_eq!(payload, original);
+    for (field, value) in [
+        ("kind", json!("running")),
+        ("exitCode", json!(1)),
+        ("signal", json!("SIGTERM")),
+        ("interrupted", json!(true)),
+        ("isImage", json!(true)),
+        ("noOutputExpected", json!(true)),
+        ("stderr", json!("uninspected error")),
+        ("stdout", json!(["block"])),
+    ] {
+        let mut bad = payload.clone();
+        bad["tool_response"][field] = value;
+        assert!(extract(Host::Qoder, event, &bad).is_err(), "{field}");
+        bad = payload.clone();
+        bad["tool_response"].as_object_mut().unwrap().remove(field);
+        assert!(
+            extract(Host::Qoder, event, &bad).is_err(),
+            "missing {field}"
+        );
+    }
+}

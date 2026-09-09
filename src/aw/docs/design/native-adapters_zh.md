@@ -10,7 +10,7 @@
 
 | 宿主 | 前置 / 后置事件 | 命令位置 | 结果位置 | 可观测身份 |
 | --- | --- | --- | --- | --- |
-| Qoder | `PreToolUse` / `PostToolUse` | `tool_input.command`，工具 `Bash` | `tool_response` 字符串 | `session_id`、`tool_use_id` |
+| Qoder | `PreToolUse` / `PostToolUse` | `tool_input.command`，工具 `Bash` | `tool_response` 字符串，或已完成 Bash 的 `tool_response.stdout` | `session_id`、`tool_use_id` |
 | Codex | `PreToolUse` / `PostToolUse` | `tool_input.command`，工具 `Bash` | `tool_response` 字符串 | `session_id`、`tool_use_id`、`turn_id` |
 | Qwen Code | `PreToolUse` / `PostToolUse` | `tool_input.command`，工具 `run_shell_command` | `tool_response` 字符串 | `session_id`、`tool_use_id` |
 | Hermes | `pre_tool_call` / `post_tool_call` | `event.args.command`，工具 `terminal` | `event.result` 字符串 | `context.session_id`、`context.tool_call_id` |
@@ -30,7 +30,7 @@ Hermes 和 OpenClaw 使用由集成代码根据回调参数构造的**本地** `
 
 当前桥接实现 `security.content.inspect/v2` 和 `security.code.inspect/v2`。Provider 发现、安全规则、命令派发、文本投影、恢复和采用均不在实现范围内。Core 返回 `proceed`，也不等于已经向原生宿主发出工具许可。
 
-当前只支持表中指定的文本位置。COSH 保留 `returnDisplay`，只提取 `llmContent`；其他对象结果、数组、多模态内容块和二进制结果会明确报错。原生失败信号，如 `is_error`、interrupted/denied 状态或支持的 SDK error 字段，也会报错。调用方需要保留原生失败处理方式；本库不会把提取错误转成允许执行。
+当前只支持表中指定的文本位置。COSH 保留 `returnDisplay`，只提取 `llmContent`；Qoder 已完成、退出码为零且 stderr 为空的 Bash 对象只提取 stdout，保留其他元数据；中断、图像及失败结果拒绝。其他对象结果、数组、多模态内容块和二进制结果会明确报错。原生失败信号，如 `is_error`、interrupted/denied 状态或支持的 SDK error 字段，也会报错。调用方需要保留原生失败处理方式；本库不会把提取错误转成允许执行。
 
 ## 为什么边界描述保持保守
 
