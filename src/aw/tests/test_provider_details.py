@@ -12,6 +12,23 @@ from session_hooks import write
 
 
 class ProviderDetailsTests(unittest.TestCase):
+    def test_sensitive_result_exposes_rule_and_scanner_coverage(self):
+        call = {
+            "verdict": "sensitive",
+            "findings": [{"rule_id": "api_key", "count": 1, "severity": "high"}],
+            "coverage": {
+                "input_bytes": 43,
+                "scanned_bytes": 43,
+                "complete": True,
+                "ruleset_ids": ["sec-core/pii-regex/native-v1"],
+            },
+        }
+        self.assertEqual(panel.outcome(call), "inspection: sensitive | 1 findings")
+        detail = "\n".join(panel.inspection_lines(call))
+        self.assertIn("api_key | count 1 | severity high", detail)
+        self.assertIn("43/43 B | complete: True", detail)
+        self.assertIn("command already ran", detail)
+
     def test_no_savings_is_distinct_from_unknown_bypass_reason(self):
         self.assertEqual(
             panel.outcome({"status": "bypassed", "native_disposition": "no_savings"}),

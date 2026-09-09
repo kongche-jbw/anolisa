@@ -13,6 +13,7 @@ version_check = false
 manifest_check = false
 
 [ui]
+mouse_capture = true
 sidebar_width = 48
 sidebar_min_width = 42
 sidebar_max_width = 64

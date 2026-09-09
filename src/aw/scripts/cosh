@@ -1,0 +1,28 @@
+#!/bin/bash
+# Launch the real cosh shell; agent functions belong only to this shell tree.
+set -e
+_AW_CHECKOUT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+_AW_PYTHON="$(command -v python3)"
+_AW_ALLOW_UNRECOVERABLE=0
+if [[ "${1:-}" == --allow-unrecoverable ]]; then
+    _AW_ALLOW_UNRECOVERABLE=1
+    shift
+fi
+_AW_COSH="$_AW_CHECKOUT/target/demo/build/cosh/debug/cosh-shell"
+if [[ ! -x "$_AW_COSH" ]]; then
+    printf '%s\n' 'Build the repository cosh-shell first: python3 src/aw/scripts/demo.py setup' >&2
+    exit 1
+fi
+qoder() {
+    if [[ "$_AW_ALLOW_UNRECOVERABLE" != 1 ]]; then
+        printf '%s\n' 'Restart cosh with --allow-unrecoverable to enable Qoder output replacement.' >&2
+        return 1
+    fi
+    "$_AW_PYTHON" "$_AW_CHECKOUT/scripts/session.py" --allow-unrecoverable -- "$@"
+}
+codex() {
+    "$_AW_PYTHON" "$_AW_CHECKOUT/scripts/session.py" --agent-kind codex -- "$@"
+}
+export _AW_CHECKOUT _AW_PYTHON _AW_ALLOW_UNRECOVERABLE
+export -f qoder codex
+exec "$_AW_COSH" --shell bash "$@"

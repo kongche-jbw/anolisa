@@ -43,7 +43,7 @@ Real sessions retain user projects, Qoder history and user-selected trust settin
 
 ## Native terminal entry and Provider details
 
-After sourcing `scripts/activate.sh --allow-unrecoverable` in Bash/cosh-shell, the `qoder` function invokes the launcher. Herdr inherits the original terminal stdin/stdout/stderr. Python no longer creates an intermediate PTY, reads keys, sets raw mode or relays resizing. Exit returns to the original shell; the function applies only to that shell.
+`scripts/cosh --allow-unrecoverable` executes the repository-built Rust `cosh-shell`, exporting agent functions only into its Bash process tree. `pwd`, `cd`, pipelines and other shell commands do not start Herdr. Typing `qoder` or `codex` starts the private native Herdr session; exit returns to the same Bash PID. Agent subprocesses have the entry functions removed. The installed legacy Node.js `cosh` is distinct; the guide selects this repository entry explicitly. Herdr inherits the cosh terminal and handles native mouse events. Provider popup tabs and Close are clickable, with wheel scrolling. SecCore details expose verified rule/count/severity and scanner-declared coverage; these remain post-tool observations, not enforcement. Codex uses its native CLI and existing configuration, with no AW hooks registered by this entry and no claimed Provider calls.
 
 `Ctrl+B p` opens a native Herdr popup running `scripts/provider_details.py`. Sidebar rows explicitly set foreground colors and `dim = false`. Provider details show actual launch configuration, versions, protocols, program/source paths and verified call outcomes, timing and compression operations. `aw-view-cli` returns the event keys verified in that snapshot, and the observer extracts details only from those events, excluding later arrivals.
 
@@ -132,7 +132,7 @@ reports the captured session ID before publishing verified counters.
   not erase previously verified savings.
 
 The low-level smoke owns one explicitly bounded Qoder turn; `session.py` supplies
-real multi-turn binding. Native plugin coexistence, automatic COSH lifecycle integration,
+real multi-turn binding. Native plugin coexistence,
 checkpoint actions, OS isolation and clean-machine packaging remain separate
 work. Codex retains its inspection path and rejects Tokenless projection;
 its hook does not provide this Qoder replacement contract. ARM64 is validated;
@@ -148,17 +148,19 @@ with each of the AW and Tokenless Cargo manifests; save useful evidence first.
 
 ## Interactive handoff
 
-- **Status**: the `qoder` shell entry and native Herdr terminal path passed, including the Provider details popup. Exit and rerun for a new bound session.
-- **Started**: owned synthetic Qoder, Herdr server/client, observer and details popup processes all ended; no services remain.
-- **Changed**: `activate.sh` supplies the shell entry, `session.py` removes the intermediate PTY relay, and `provider_details.py` plus the observer expose details. Updated Herdr layout, Tokenless native result recording, View verification and related tests/bilingual documentation. No cosh-shell, upstream Herdr, public Schema or Core changes.
-- **Validation**: real Bash `source` → `qoder` → native Herdr terminal, two turns, three history adoptions and 4056 B saved. Actual Provider popup rendering, native failure, session switching and exit cleanup passed. Installed cosh-shell isolated command mode validated activation and removal. Terminal capture contains explicit high-contrast colors. 146 Rust and 33 Python tests, fmt, Clippy and documentation builds passed, as did SIGHUP hangup cleanup. Check logs are retained below.
-- **Cleanup/remaining**: owned PIDs, temporary namespace, synthetic Qoder history and trust entries were verified removed; failed diagnostic directories were deleted. Retained `target/session-live-5040dc10/` (native terminal/popup acceptance), `target/sessions/a6a20627-1c23-4a76-a033-3232826cf058/` (execution evidence), and `target/native-entry-checks/` (check logs). Existing `target/demo/` supports launch, and previous interactive evidence is unchanged.
+- **Status**: Repository cosh entry and agent-only Herdr attachment implemented. Qoder inspection/projection verified; Codex terminal attachment only, with AW explicitly not connected.
+- **Started**: Owned cosh/Bash, Qoder, Codex help, Herdr server/client, observer and popup processes ended; no services or ports remain.
+- **Changed**: `scripts/cosh`, `demo.py`, `session.py`, `provider_details.py`, Herdr config, `tests/session_live.py`, `tests/cosh_codex_live.py`, `tests/test_provider_details.py`, README pair, acceptance pair and user-guide pair. The cosh binary is compiled from unchanged repository Rust source.
+- **Validation**: Real cosh PTY: ordinary command without Herdr, Qoder launch, return to the same Bash PID, sensitive api_key finding (high, 1, 43/43 B), three history adoptions/4056 B saved, SGR mouse page/close, and SIGHUP cleanup passed. Codex native --help dispatch and return passed without a model request. Tests use cosh --isolated to avoid user rc/history changes. 146 Rust and 34 Python tests, fmt, Clippy, canonical vectors, docs build and Bash syntax passed.
+- **Cleanup/remaining**: Verified all owned process IDs and temporary namespaces absent; synthetic Qoder histories/trust were removed by the live harness. Retained `target/session-live-1b52c36f`, `target/session-live-d106e035`, `target/session-live-a3a71efe`, `target/cosh-codex-79333e1c` (security, mouse, hangup, and final Codex checks), corresponding `target/sessions/` UUIDs in the cleanup command, and `target/cosh-entry-checks/` (gate logs). Existing `target/demo/` retains setup builds, including cosh, and tooling caches. Earlier milestones remain unchanged. Superseded Codex check `cosh-codex-694abc2b` and its owned session were deleted and absence verified.
 
-To discard this acceptance material, run from the repository root:
+Discard only this milestone’s verification outputs from the repository root:
 
 ```bash
-rm -rf -- src/aw/target/session-live-5040dc10 src/aw/target/sessions/a6a20627-1c23-4a76-a033-3232826cf058 src/aw/target/native-entry-checks
+rm -rf -- src/aw/target/session-live-1b52c36f src/aw/target/session-live-d106e035 src/aw/target/session-live-a3a71efe src/aw/target/cosh-codex-79333e1c src/aw/target/sessions/cee93856-712f-4ef5-8451-d7aa53d1572f src/aw/target/sessions/dbd7898d-8474-4109-bcce-4772fe2df9dc src/aw/target/sessions/9a9113fc-2c90-4754-b45a-4a9517ddc136 src/aw/target/sessions/51f5a00d-1ece-4694-a781-d5e93303a5ff src/aw/target/cosh-entry-checks
 ```
+
+To remove setup builds and caches, exit all demo sessions first, then run `rm -rf -- src/aw/target/demo`. Rebuild with `python3 src/aw/scripts/demo.py setup` before using the entry again.
 
 ## Recorded results
 

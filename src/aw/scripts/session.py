@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run an interactive Qoder workspace with verified AW statistics in Herdr."""
+"""Attach a native Herdr terminal for a Qoder or Codex invocation."""
 
 import argparse
 import json
@@ -78,20 +78,23 @@ def settings(root: Path, config: dict) -> dict:
 
 def agent(root: Path) -> None:
     config = read(root / "launch.json")
-    aw = settings(root, config)
-    command = [
-        config["qoder"],
-        "--model",
-        "auto",
-        "--session-id",
-        config["session_id"],
-        "--settings",
-        str(root / "qoder-settings.json"),
-    ]
+    aw = None
+    command = [config["agent_program"]]
+    if config["agent_kind"] == "qoder":
+        aw = settings(root, config)
+        command += [
+            "--model",
+            "auto",
+            "--session-id",
+            config["session_id"],
+            "--settings",
+            str(root / "qoder-settings.json"),
+        ]
+    command += config.get("agent_args", [])
     config.update(
         aw=aw,
         agent_pid=os.getpid(),
-        agent_start_ticks=aw["agent_start_ticks"],
+        agent_start_ticks=ticks(os.getpid()),
         agent_pgid=os.getpgrp(),
         command=command,
         started_at_ms=int(time.time() * 1000),
@@ -106,8 +109,17 @@ def agent(root: Path) -> None:
             env.pop(name, None)
         else:
             env[name] = value
+    # Do not recursively attach Herdr for commands run inside an agent.
+    for name in (
+        "BASH_FUNC_qoder%%",
+        "BASH_FUNC_codex%%",
+        "_AW_CHECKOUT",
+        "_AW_PYTHON",
+        "_AW_ALLOW_UNRECOVERABLE",
+    ):
+        env.pop(name, None)
     os.chdir(config["workspace"])
-    os.execve(config["qoder"], command, env)
+    os.execve(command[0], command, env)
 
 
 def workspace_check(workspace: Path) -> None:
@@ -155,13 +167,26 @@ def stop_agent(root: Path) -> None:
 
 
 def run(args: argparse.Namespace) -> None:
-    if not args.allow_unrecoverable:
+    kind = getattr(args, "agent_kind", "qoder")
+    agent_args = getattr(args, "agent_args", [])
+    if agent_args[:1] == ["--"]:
+        agent_args = agent_args[1:]
+    if kind == "qoder" and any(
+        arg.split("=", 1)[0] in ("--session-id", "--settings", "--resume", "--continue", "-c", "-r")
+        for arg in agent_args
+    ):
+        raise ValueError("Qoder session identity and hook settings are owned by the launcher")
+    if kind == "qoder" and not args.allow_unrecoverable:
         raise ValueError("--allow-unrecoverable is required for native tool-output replacement")
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         raise ValueError("an interactive terminal is required")
     workspace = args.workspace.resolve()
-    workspace_check(workspace)
-    providers = demo.doctor(args.provider_dir)
+    if kind == "qoder":
+        workspace_check(workspace)
+    providers = demo.doctor(args.provider_dir, agent=kind == "qoder")
+    program = shutil.which("qodercli" if kind == "qoder" else "codex")
+    if not program:
+        raise ValueError(f"{kind} executable is not installed on PATH")
     root = AW / "target/sessions" / str(uuid.uuid4())
     root.mkdir(parents=True, mode=0o700)
     for name in (
@@ -187,18 +212,28 @@ def run(args: argparse.Namespace) -> None:
         if event in ("PreToolUse", "PostToolUse", "PostToolUseFailure"):
             entry["matcher"] = "Bash"
         hooks[event] = [entry]
-    write(root / "qoder-settings.json", {"hooks": hooks, "general": {"enableAutoUpdate": False}})
+    if kind == "qoder":
+        write(
+            root / "qoder-settings.json", {"hooks": hooks, "general": {"enableAutoUpdate": False}}
+        )
     launch = {
         "workspace": str(workspace),
         "providers": providers,
-        "qoder": shutil.which("qodercli"),
+        "agent_kind": kind,
+        "agent_program": program,
+        "agent_args": agent_args,
         "session_id": str(uuid.uuid4()),
         "duration_seconds": args.duration,
         "xdg": {key: os.environ.get(key) for key in ("XDG_CONFIG_HOME", "XDG_STATE_HOME")},
     }
     write(root / "launch.json", launch)
     print(f"Workspace: {workspace}\nSession evidence (includes Bash outputs): {root}", flush=True)
-    print("Type tasks directly in Qoder. Ctrl+B, then Q ends this session.", flush=True)
+    print(f"Type tasks directly in {kind}. Ctrl+B, then q returns to cosh.", flush=True)
+    if kind == "codex":
+        write(
+            root / "provider-details.json",
+            {"status": "not_connected", "session_id": launch["session_id"]},
+        )
     binary = str(demo.DATA / "herdr/herdr")
     server = client = observer = None
     original_terminal = termios.tcgetattr(sys.stdin.fileno())
@@ -224,6 +259,8 @@ def run(args: argparse.Namespace) -> None:
         )
         (runtime / "config.toml").write_text(config_text)
         env = {key: value for key, value in os.environ.items() if not key.startswith("HERDR_")}
+        for name in ("BASH_FUNC_qoder%%", "BASH_FUNC_codex%%"):
+            env.pop(name, None)
         env.update(
             HERDR_SOCKET_PATH=str(endpoint),
             HERDR_CONFIG_PATH=str(runtime / "config.toml"),
@@ -281,6 +318,8 @@ def run(args: argparse.Namespace) -> None:
                     {"pane_id": pane, "text": shlex.join(command) + "\n"},
                 )
                 deadline = time.monotonic() + args.duration
+                codex_metadata_at = 0.0
+                codex_sequence = 0
                 while time.monotonic() < deadline:
                     if client.poll() is not None:
                         break
@@ -291,6 +330,22 @@ def run(args: argparse.Namespace) -> None:
                         config = read(root / "runtime.json")
                         if not live(config["agent_pid"], config["agent_start_ticks"]):
                             break
+                        if kind == "codex":
+                            if time.monotonic() >= codex_metadata_at:
+                                codex_sequence += 1
+                                bridge.publish(
+                                    endpoint,
+                                    pane,
+                                    {
+                                        "aw": "AW hooks: not connected",
+                                        "aw_sec": "SecCore: not invoked",
+                                        "aw_tokenless": "Tokenless: not invoked",
+                                        "aw_usage": "Ctrl+B p: Provider configuration",
+                                    },
+                                    codex_sequence,
+                                )
+                                codex_metadata_at = time.monotonic() + 2
+                            continue
                         if observer is None:
                             observer_command = [
                                 sys.executable,
@@ -348,13 +403,13 @@ def run(args: argparse.Namespace) -> None:
                         config = read(root / "runtime.json")
                         if live(config["agent_pid"], config["agent_start_ticks"]):
                             raise RuntimeError(
-                                "owned Qoder process survived cleanup; inspect runtime.json"
+                                "owned agent process survived cleanup; inspect runtime.json"
                             )
                     ownership["cleanup"] = (
-                        "owned processes stopped; native Qoder history and workspace retained"
+                        "owned processes stopped; native agent history and workspace retained"
                     )
                     write(root / "ownership.json", ownership)
-    print(f"Session ended. Workspace and Qoder history retained.\nAW evidence: {root}")
+    print(f"Session ended. Workspace and native agent history retained.\nAW evidence: {root}")
 
 
 def main() -> int:
@@ -363,6 +418,8 @@ def main() -> int:
         agent(Path(sys.argv[2]))
         return 0
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--agent-kind", choices=("qoder", "codex"), default="qoder")
+    parser.add_argument("agent_args", nargs=argparse.REMAINDER)
     parser.add_argument("--workspace", type=Path, default=Path.cwd())
     parser.add_argument("--provider-dir", type=Path, default=AW / "providers")
     parser.add_argument("--allow-unrecoverable", action="store_true")

@@ -40,7 +40,7 @@ Qoder 没有提供此处所需的原生 `turn_id`；生成值明确属于启动�
 
 ## 原生终端入口与 Provider 详情
 
-当前 Bash/cosh-shell 执行 `source scripts/activate.sh --allow-unrecoverable` 后，`qoder` 函数调用启动器。Herdr 客户端继承原终端 stdin/stdout/stderr；Python 不再创建中间 PTY、读取键盘、设置 raw mode 或转发窗口大小。退出回到原 shell；仅本次 shell 的函数生效。
+`scripts/cosh --allow-unrecoverable` 执行本仓库编译的 Rust `cosh-shell`，仅向该进程树的 Bash 导出 Agent 函数。`pwd`、`cd`、管道等普通命令不启动 Herdr；输入 `qoder` 或 `codex` 才打开私有 Herdr 会话，退出返回同一个 Bash PID。Agent 子进程移除入口函数。已安装的旧 Node.js `cosh` 是不同入口，指南明确选用本仓库入口。Herdr 继承 cosh 终端并处理原生鼠标事件；Provider 弹窗支持点击标签、关闭和滚轮滚动。SecCore 详情展示校验后的规则、数量、严重级别及扫描器声明的覆盖范围，仍是后置观察而非强制执行。Codex 使用原生 CLI 和已有配置，此入口不注册 AW hooks，也不声明 Provider 已调用。
 
 `Ctrl+B p` 打开 Herdr 原生 popup，运行 `scripts/provider_details.py`。侧栏显式指定前景色与 `dim = false`；详情按 Provider 展示实际 launch 配置、版本、协议、程序/源码路径，以及通过校验的调用结果、耗时和压缩操作。`aw-view-cli` 返回本次校验的事件键，观察器只从这些事件生成详情，排除校验后才到达的事件。
 
@@ -94,23 +94,25 @@ PYTHONDONTWRITEBYTECODE=1 timeout 210 python3 integrations/herdr/live_smoke.py \
 - `view-binding.json` 选定原生会话。可选的 `adoption_bindings` 按事件键索引各自的可信采用绑定文件，不能用一个调用的原生输入核验另一个调用。只有独立采用验证通过，才累计节省；Journal 损坏或绑定不符会明确失败，其他会话被排除。
 - `herdr-view.json`、`herdr-metadata.json` 和实际 `screen.ansi` 分别对应校验器输出、原生 metadata 与渲染结果。侧栏写作 `history adopted`，不表示模型已消费。混合失败或绕过不会抹掉已有采用与节省。
 
-上述低层 smoke 仍使用显式单轮身份；真实多轮绑定由 `session.py` 提供。原生插件共存、COSH 自动生命周期接入、Checkpoint 操作、OS 隔离和干净机器打包需要后续处理。Codex 保留检查路径，配置 Tokenless 投影时明确拒绝；其 hook 没有这里使用的 Qoder 替换合同。ARM64 已核验；x86_64 Herdr 制品虽已固定，本次未运行。
+上述低层 smoke 仍使用显式单轮身份；真实多轮绑定由 `session.py` 提供。原生插件共存、Checkpoint 操作、OS 隔离和干净机器打包需要后续处理。Codex 保留检查路径，配置 Tokenless 投影时明确拒绝；其 hook 没有这里使用的 Qoder 替换合同。ARM64 已核验；x86_64 Herdr 制品虽已固定，本次未运行。
 
 合成测试入口在 `lifecycle.json` 或 `ownership.json` 中记录命令、版本、PID 与启动代次、路径和停止命令。成功清理只删除本次新 UUID 会话、同名状态目录、临时 home，以及测试目录的信任条目。认证不复制、不删除，日志与合成证据保留在所选目录。共享 VM 和现有 Herdr 不会被重启。若不再保留本工作树的生成材料，可分别对 AW 与 Tokenless 的 Cargo manifest 执行 `cargo clean`；先保存需要的证据。
 
 ## 交互入口交接
 
-- **Status**：`qoder` shell 入口和 Herdr 原生终端接入通过；Provider 详情 popup 已实测。需要新会话时退出后重新运行。
-- **Started**：合成测试的 Qoder、Herdr 服务/客户端、观察器与详情 popup 均已结束，无遗留服务。
-- **Changed**：`activate.sh` 提供 shell 入口，`session.py` 删除中间 PTY 转发，`provider_details.py` 与观察器提供详情；更新 Herdr 布局、Tokenless 原生结果记录、View 校验和相关测试/中英文文档。未修改 cosh-shell、Herdr 上游、公开 Schema 或 Core。
-- **Validation**：实际 Bash `source` → `qoder` → Herdr 原生终端，两轮交互、三次历史采用、4056 B 节省；Provider popup 的实际渲染、原生失败、会话切换、退出清理通过。已安装 cosh-shell 的隔离命令模式验证 shell 激活与撤销。终端捕获含明确高对比度颜色。146 项 Rust、33 项 Python 测试及 fmt、Clippy、文档构建通过；SIGHUP 挂断清理也通过。检查日志见下述目录。
-- **Cleanup/remaining**：核验本次拥有的 PID、临时 namespace、合成 Qoder 历史及信任条目已移除；失败诊断目录已删除。保留 `target/session-live-5040dc10/`（原生终端和 popup 验收）、`target/sessions/a6a20627-1c23-4a76-a033-3232826cf058/`（执行证据）、`target/native-entry-checks/`（检查日志）。原有 `target/demo/` 用于启动，前一轮交互证据保持不变。
+- **Status**: 仓库 cosh 入口和仅 Agent 触发 Herdr 已实现。Qoder 检查/投影已验证；Codex 目前仅附着终端，明确显示 AW 未连接。
+- **Started**: 本次 cosh/Bash、Qoder、Codex help、Herdr 服务/客户端、观察器和 popup 进程均已结束，无遗留服务或端口。
+- **Changed**: `scripts/cosh`、`demo.py`、`session.py`、`provider_details.py`、Herdr 配置、`tests/session_live.py`、`tests/cosh_codex_live.py`、`tests/test_provider_details.py` 及 README、验收说明、用户指南的中英文版本。cosh 二进制从未改动的本仓库 Rust 源码编译。
+- **Validation**: 真实 cosh PTY：普通命令不启动 Herdr、Qoder 启动后返回同一 Bash PID、敏感 api_key 检测（high、1 次、43/43 B）、三次历史采用/4056 B 节省、SGR 鼠标切页/关闭和 SIGHUP 清理通过。Codex 原生 --help 参数传递及返回通过，没有发起模型请求。测试使用 cosh --isolated 避免改动用户 rc/历史。146 项 Rust、34 项 Python、fmt、Clippy、跨语言摘要、文档构建及 Bash 语法检查通过。
+- **Cleanup/remaining**: 已核验本次所有进程 PID 和临时 namespace 不存在；合成 Qoder 历史/信任由测试清除。保留 `target/session-live-1b52c36f`, `target/session-live-d106e035`, `target/session-live-a3a71efe`, `target/cosh-codex-79333e1c`（依次为安全、鼠标、挂断、最终 Codex 验证）、下方清理命令列出的对应 `target/sessions/` UUID 和 `target/cosh-entry-checks/`（检查日志）。原有 `target/demo/` 保留 setup 产物（含 cosh）与工具缓存，前序里程碑不变。已删除并核验重复的 `cosh-codex-694abc2b` 及其拥有的会话。
 
-不再需要本次验收材料时，在仓库根目录执行：
+在仓库根目录仅清理本里程碑验证产物：
 
 ```bash
-rm -rf -- src/aw/target/session-live-5040dc10 src/aw/target/sessions/a6a20627-1c23-4a76-a033-3232826cf058 src/aw/target/native-entry-checks
+rm -rf -- src/aw/target/session-live-1b52c36f src/aw/target/session-live-d106e035 src/aw/target/session-live-a3a71efe src/aw/target/cosh-codex-79333e1c src/aw/target/sessions/cee93856-712f-4ef5-8451-d7aa53d1572f src/aw/target/sessions/dbd7898d-8474-4109-bcce-4772fe2df9dc src/aw/target/sessions/9a9113fc-2c90-4754-b45a-4a9517ddc136 src/aw/target/sessions/51f5a00d-1ece-4694-a781-d5e93303a5ff src/aw/target/cosh-entry-checks
 ```
+
+若要移除 setup 产物和缓存，先退出所有演示会话，再执行 `rm -rf -- src/aw/target/demo`；之后需重新执行 `python3 src/aw/scripts/demo.py setup` 才能使用入口。
 
 ## 本次核验结果
 

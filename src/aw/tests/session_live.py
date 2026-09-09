@@ -46,29 +46,26 @@ def main():
     before = set((AW / "target/sessions").glob("*"))
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 140, 0, 0))
-    command = [
-        "/bin/bash",
-        "--noprofile",
-        "--norc",
-        "-c",
-        'source "$1" --allow-unrecoverable && qoder --workspace "$2" --duration 180',
-        "aw-native-entry",
-        str(AW / "scripts/activate.sh"),
-        str(work),
-    ]
+    command = [str(AW / "scripts/cosh"), "--allow-unrecoverable", "--isolated"]
     process = subprocess.Popen(
         command,
         stdin=slave,
         stdout=slave,
         stderr=slave,
-        env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"),
+        cwd=work,
+        env=dict(
+            os.environ,
+            PYTHONDONTWRITEBYTECODE="1",
+            COSH_AUDIT_DIR=str(root / "cosh-audit"),
+            COSH_SHELL_BOOTSTRAP_PATH="0",
+        ),
         start_new_session=True,
     )
     ownership = {
         "command": command,
-        "cwd": str(AW),
+        "cwd": str(work),
         "pid": process.pid,
-        "lifetime_seconds": 180,
+        "lifetime_seconds": 240,
         "stop": f"kill -TERM {process.pid}",
         "log": str(root / "screen.ansi"),
     }
@@ -76,15 +73,20 @@ def main():
     print(root, flush=True)
     session = None
     sent = 0
+    shell_ready = False
+    shell_pid = None
     first_session = None
     trusted = False
     failure_allowed = False
     popup_open = popup_checked = False
+    popup_mouse_sent = False
     terminal_output = bytearray()
     result = {"status": "failed"}
     try:
         with (root / "screen.ansi").open("wb") as screen:
-            deadline = time.monotonic() + 165
+            deadline = time.monotonic() + 210
+            time.sleep(1)
+            os.write(master, b"printf 'COSH_%s:%s\\n' READY $$\r")
             while time.monotonic() < deadline:
                 ready, _, _ = select.select([master], [], [], 0.1)
                 if ready:
@@ -93,6 +95,15 @@ def main():
                     screen.write(chunk)
                     screen.flush()
                 candidates = set((AW / "target/sessions").glob("*")) - before
+                if not shell_ready:
+                    match = re.search(rb"COSH_READY:(\d+)", terminal_output)
+                    if match:
+                        assert not candidates, "Herdr started for an ordinary command"
+                        shell_pid = int(match[1])
+                        assert Path(f"/proc/{process.pid}/exe").resolve().name == "cosh-shell"
+                        os.write(master, b"qoder\r")
+                        shell_ready = True
+                    continue
                 if len(candidates) == 1:
                     session = candidates.pop()
                 if session and (session / "runtime.json").exists():
@@ -104,7 +115,6 @@ def main():
                     visible = visible.get("read", visible).get("text", "")
                     if "--interrupt" in sys.argv and "Qoder" in visible:
                         os.kill(owned["launcher_pid"], signal.SIGHUP)
-                        process.wait(timeout=25)
                         result = {"status": "passed", "hangup": "owned processes cleaned"}
                         break
                     if (
@@ -160,9 +170,38 @@ def main():
                             ):
                                 continue
                             assert "sec-core" in rendered and "tokenless" in rendered
-                            os.write(master, b"q")
+                            positions = re.findall(
+                                rb"\x1b\[(\d+);(\d+)H(?:\x1b\[[0-9;]*m)?AW PROVIDERS",
+                                terminal_output,
+                            )
+                            assert positions, "popup geometry absent from native terminal output"
+                            row, column = map(int, positions[-1])
+                            if not popup_mouse_sent:
+                                x, y = column + 15, row + 1
+                                os.write(master, f"\x1b[<0;{x};{y}M\x1b[<0;{x};{y}m".encode())
+                                popup_mouse_sent = True
+                                continue
+                            if "Invocation:" not in rendered:
+                                continue
+                            x, y = column + 32, row + 1
+                            os.write(master, f"\x1b[<0;{x};{y}M\x1b[<0;{x};{y}m".encode())
                             time.sleep(0.5)
                             popup_checked = True
+                        if "--mouse-only" in sys.argv:
+                            panels = [read(p) for p in session.glob("provider-panel-*.json")]
+                            if not panels or not all(p.get("exited") for p in panels):
+                                continue
+                            result = {
+                                "status": "passed",
+                                "session": str(session),
+                                "mouse": "native terminal SGR click switched to Recent calls and closed popup",
+                                "cosh_pid": process.pid,
+                                "shell_pid": shell_pid,
+                            }
+                            os.write(master, b"\x02")
+                            time.sleep(0.1)
+                            os.write(master, b"q")
+                            break
                         os.write(
                             master,
                             b"Use Bash for three separate calls: `cat fixture.json`, `cat fixture.json`, and `false`. The last command intentionally exits 1; do not fix or retry it. Compare the record count with the previous answer. Do not use other tools.",
@@ -183,11 +222,50 @@ def main():
                         metadata = bridge.rpc(Path(owned["socket"]), "pane.get", {"pane_id": pane})
                         assert "4056" in metadata["tokens"]["aw_savings"], metadata
                         first_session = view["scope"]["session_id"]
-                        os.write(master, b"/new")
+                        if "--security" in sys.argv:
+                            os.write(
+                                master,
+                                b"Use Bash to execute exactly `printf 'api_key=sk-abcdefghijklmnopqrstuvwxyz123456\\n'`. This is a nonfunctional synthetic credential for our scanner demonstration. Report whether the hook warns about sensitive content. Do not use any other tools.",
+                            )
+                        else:
+                            os.write(master, b"/new")
                         time.sleep(0.2)
                         os.write(master, b"\r")
                         sent = 3
-                    if sent == 3 and "Restart" in read(session / "display.json")["aw_usage"]:
+                    if sent == 3 and "--security" in sys.argv:
+                        detail = read(session / "provider-details.json")
+                        sensitive = next(
+                            (
+                                c
+                                for c in detail.get("recent_calls", [])
+                                if c.get("verdict") == "sensitive"
+                            ),
+                            None,
+                        )
+                        if sensitive and "idle" in str(
+                            bridge.rpc(Path(owned["socket"]), "pane.get", {"pane_id": pane})
+                        ):
+                            assert any(
+                                f["rule_id"] == "api_key" and f["count"] >= 1
+                                for f in sensitive["findings"]
+                            ), sensitive
+                            assert sensitive["coverage"]["complete"]
+                            result = {
+                                "status": "passed",
+                                "session": str(session),
+                                "sec_core": sensitive,
+                                "cosh_pid": process.pid,
+                                "shell_pid": shell_pid,
+                            }
+                            os.write(master, b"\x02")
+                            time.sleep(0.1)
+                            os.write(master, b"q")
+                            break
+                    if (
+                        sent == 3
+                        and "--security" not in sys.argv
+                        and "Restart" in read(session / "display.json")["aw_usage"]
+                    ):
                         assert not (session / "view.json").exists()
                         assert read(session / "state.json")["session_id"] != first_session
                         metadata = bridge.rpc(Path(owned["socket"]), "pane.get", {"pane_id": pane})
@@ -210,9 +288,30 @@ def main():
                 if process.poll() is not None:
                     raise RuntimeError("interactive launcher exited before acceptance")
             else:
-                raise TimeoutError("two-turn live acceptance exceeded 165 seconds")
+                raise TimeoutError("cosh live acceptance exceeded 210 seconds")
+        if session:
+            cleanup_deadline = time.monotonic() + 25
+            while time.monotonic() < cleanup_deadline:
+                if "cleanup" in read(session / "ownership.json"):
+                    break
+                time.sleep(0.1)
+            else:
+                raise TimeoutError("agent launcher cleanup did not complete")
+            os.write(master, b"printf 'COSH_%s:%s\\n' RETURNED $$\r")
+            returned = bytearray()
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                ready, _, _ = select.select([master], [], [], 0.1)
+                if ready:
+                    returned.extend(os.read(master, 65536))
+                if f"COSH_RETURNED:{shell_pid}".encode() in returned:
+                    result["shell_return"] = "ordinary command completed in the same cosh Bash PID"
+                    break
+            else:
+                raise TimeoutError("did not return to the original cosh shell")
+        os.write(master, b"exit\r")
         process.wait(timeout=15)
-        assert process.returncode == (130 if "--interrupt" in sys.argv else 0)
+        assert process.returncode == 0
     finally:
         if process.poll() is None:
             if session and (session / "ownership.json").exists():
@@ -220,6 +319,8 @@ def main():
                 os.kill(owner["launcher_pid"], signal.SIGTERM)
             else:
                 os.killpg(process.pid, signal.SIGTERM)
+            time.sleep(1)
+            os.write(master, b"exit\r")
             process.wait(timeout=25)
         os.close(master)
         os.close(slave)

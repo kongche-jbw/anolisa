@@ -163,6 +163,7 @@ def setup() -> None:
     for component, package, target in (
         (AW.parent / "tokenless", "tokenless-cli", "tokenless"),
         (AW, "aw-hook-cli", "aw"),
+        (AW.parent / "cosh-ng", "cosh-shell", "cosh"),
     ):
         execute(
             [

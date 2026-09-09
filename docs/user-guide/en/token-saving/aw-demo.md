@@ -43,7 +43,7 @@ Setup performs these steps, each with a timeout and separate log:
 
 1. Fetch SecCore commit `5ebfc0b3905fa2f5f74aff2da4aec2b3be639647`, checking out only the Python project containing its native Provider.
 2. Install Python 3.11.6 and runtime dependencies using that commit's `uv.lock`. Only the scanner native entry point is used; the SecCore daemon is neither built nor installed.
-3. Build Tokenless 0.8.0 and `aw-hook-cli`, `aw-view-cli`, and `aw-adoption-cli` from this clone.
+3. Build Tokenless 0.8.0 and `aw-hook-cli`, `aw-view-cli`, `aw-adoption-cli`, and `cosh-shell` from this clone.
 4. Download unmodified Herdr v0.9.0, verify its pinned SHA-256, and retain its license.
 5. Check Provider imports, versions, protocols, and build artifacts.
 
@@ -53,19 +53,23 @@ Doctor also checks Qoder version, login state, and integration conflicts without
 
 ## 3. Interact freely in a real repository
 
-After setup, enter your working repository at cosh-shell’s Bash prompt, activate the entry once for this shell, then type `qoder`. `AW_CHECKOUT` points to the clone containing AW, while `$PWD` is your real project:
+Start the repository’s `cosh` entry from the clone root. It runs the Rust `cosh-shell` built by setup. The installed Node.js `cosh` is a different entry; the temporary PATH below selects this clone without replacing installed files. Ordinary commands stay in the original shell; Herdr starts only when you type an agent command.
 
 ```bash
-AW_CHECKOUT=/path/to/anolisa-demo
-source "$AW_CHECKOUT/src/aw/scripts/activate.sh" --allow-unrecoverable
+AW_CHECKOUT="$PWD"
+export PATH="$AW_CHECKOUT/src/aw/scripts:$PATH"
+cosh --allow-unrecoverable
+```
+
+At the cosh prompt, run ordinary commands first, then enter Qoder:
+
+```bash
+pwd
+git status --short
 qoder
 ```
 
-Alternatively, run from the AW clone root:
-
-```bash
-python3 src/aw/scripts/session.py --workspace "$PWD" --allow-unrecoverable
-```
+Exit Qoder/Herdr with `Ctrl+B`, then `q`. You return to the same cosh shell, preserving its current directory and variables. Run `pwd` again or type `codex` to attach another native Herdr terminal. Codex uses the installed CLI and existing login; this entry currently connects **only its terminal**, and explicitly displays `AW hooks: not connected`. SecCore and Tokenless live evidence below applies to Qoder. Native agent arguments follow the command normally, for example `qoder --model auto` or `codex --help`. Avoid aliasing these names in Bash startup files. `--shell zsh` is not supported by this Bash integration.
 
 Qoder opens in the selected directory. The native Herdr client inherits the current terminal and handles keyboard input and resizing itself. The launcher manages process lifecycles without reading or forwarding keys. Enter tasks and follow-up questions, scroll, cancel generation and confirm permissions normally. The launcher sends no prompt and creates no fixture. It does not modify repository source, the Git branch, or existing configuration files; actual development operations you authorize Qoder to perform can still change the project. You decide any initial directory-trust prompt; the launcher does not accept it automatically.
 
@@ -76,22 +80,25 @@ Try this sequence in the ANOLISA repository:
 3. Ask a real follow-up, such as: “Which layer selects the compressor? Read the code and explain the call path.”
 4. Watch Herdr cumulative calls, `history adopted`, and saved bytes. Not every output compresses; short output, unsupported formats, and failed commands do not count as savings.
 
-`activate.sh` defines an AW `qoder` function only in the current Bash. It neither edits startup files nor replaces the Qoder program on disk. Exiting Qoder/Herdr returns to the original shell, where you can type `qoder` again. To remove this shell integration:
+The `scripts/cosh` launcher exports two Bash functions only to its own cosh process tree. Agent children have those functions removed to prevent recursive attachment. No startup file is changed. To leave cosh, type `exit` after leaving Herdr. In the parent shell, remove the temporary PATH entry:
 
 ```bash
-unset -f qoder
-unset _AW_SESSION_ENTRY
+export PATH="${PATH#"$AW_CHECKOUT/src/aw/scripts:"}"
+hash -r
 ```
+
 
 The sidebar uses explicit high-contrast text, separating Bash result counts, SecCore/Tokenless versions, per-Provider calls, latest results, and independently verified history adoption and saved bytes. One Bash result can invoke two Providers; their summed invocation count is no longer presented as Bash activity.
 
-Press `Ctrl+B`, release, then press `p` to open the **AW PROVIDERS** popup. Press `1` for actual executable paths, SecCore source directory, native protocols, configured/executed versions, manifest digests and cumulative statistics. Press `2` for the latest 40 Provider calls: tool IDs, outcomes, elapsed time, source/candidate bytes and actual compression operations. Scroll with arrow keys and press `q` to return to Qoder.
+Press `Ctrl+B`, release, then press `p` to open the **AW PROVIDERS** popup. Press `1` for actual executable paths, SecCore source directory, native protocols, configured/executed versions, manifest digests and cumulative statistics. Press `2` for the latest 40 Provider calls: tool IDs, outcomes, elapsed time, source/candidate bytes and actual compression operations. Click Overview, Recent calls, or Close; use the wheel or arrow keys to scroll. Native Herdr sidebar selection, divider dragging, and right-click menus remain available when the outer terminal supports mouse events.
+
+Herdr’s top-level agent `blocked` state means the agent is waiting; it is not a SecCore rejection. Assess scanner activity using the separate inspection result and findings.
 
 A native Tokenless `no_savings` result displays `preserved: no savings`; timeouts display failure codes. Older evidence without native reasons explicitly says `native reason not recorded`, rather than guessing from `bypassed`. Details come only from events verified by Rust for the current session. Verification errors or session changes clear previous details. Source paths and Provider results remain local.
 
 AW currently handles the main Agent's Bash post-tool output. Other tools, including Read and Edit, remain available normally in Qoder, while the sidebar labels its coverage `Bash only`. Bash failures, native capture size-limit failures, and unverifiable results appear as `unverified` without increasing adopted savings. Results awaiting permission confirmation or native history persistence show `pending` and do not count as adopted. SecCore performs post-tool content inspection here, not pre-command enforcement or OS protection.
 
-Ordinary follow-up questions retain cumulative session counts. To start from zero, exit and run the launcher again. Pinned Herdr v0.9.0 cannot replace Qoder session identity. If you use `/new` or switch native sessions inside Qoder, AW clears stale sidebar statistics and asks you to restart; subsequent tools in that process retain native behavior without AW inspection or compression. Previous evidence remains. The default deadline is one hour; `--duration 7200` selects two hours, with a supported range of 60–14400 seconds.
+Ordinary follow-up questions retain cumulative session counts. To start from zero, exit and run the launcher again. Pinned Herdr v0.9.0 cannot replace Qoder session identity. If you use `/new` or switch native sessions inside Qoder, AW clears stale sidebar statistics and asks you to restart; subsequent tools in that process retain native behavior without AW inspection or compression. Previous evidence remains. The default deadline is one hour; direct invocation with `session.py --duration 7200 --allow-unrecoverable` selects two hours, with a supported range of 60–14400 seconds.
 
 To exit, press `Ctrl+B`, release, then press `q`. This ends the Qoder, observer, and Herdr processes managed by this entry point. A normal Qoder process exit also ends the launcher. Native Qoder history, project changes, and trust settings you chose to save remain. Startup and exit print `src/aw/target/sessions/<UUID>/`, a 0700 AW evidence directory containing this session's original Bash output, adoption records, and logs; retain it according to the actual data requirements. Removing one AW evidence directory neither deletes Qoder history nor rolls back code.
 
@@ -102,6 +109,16 @@ rm -rf -- "$AW_CHECKOUT/src/aw/target/sessions/<UUID>"
 `--workspace` defaults to the current directory. `--provider-dir` defaults to the AW clone's `src/aw/providers/` and can select another explicit trusted manifest directory. User/project hook and plugin coexistence is not validated; configured hooks or installed Qoder plugins cause an explicit startup failure. The launcher uses default `~/.qoder` login configuration and does not support `QODER_CONFIG_DIR`. Resuming old sessions, subagents, custom cwd changes, and other native tool projections remain outside this binding contract; failed binding preserves native behavior and reports unverified results.
 
 The multi-turn entry point uses `scripts/session.py` to launch Herdr/Qoder. `session_hooks.py` generates launcher turn identities from native `UserPromptSubmit` events and snapshots each tool's turn at `PreToolUse`; `PostToolUse` invokes the same Rust `aw-hook-cli`. Independent process `session_observer.py` waits for complete history lines, verifies with `aw-adoption-cli` and `aw-view-cli`, then publishes counters. Verification runs independently of native Herdr input. Providers, AW Core, and Schema use the setup implementations, and this runtime path does not import test runners. Native event references: [Qoder hooks](https://docs.qoder.com/cli/hooks).
+
+### Demonstrate that SecCore detects sensitive content
+
+Inside Qoder, ask it to execute exactly the following command using Bash and report any hook warning. The value is a nonfunctional synthetic credential. Keep this as the last call while presenting the latest-result panel.
+
+```bash
+printf 'api_key=sk-abcdefghijklmnopqrstuvwxyz123456\n'
+```
+
+Open `Ctrl+B p` and select Recent calls. The verified native run reports `inspection: sensitive`, rule `api_key`, count `1`, severity `high`, and `Scanned: 43/43 B | complete: True`. Overview shows the actual SecCore executable and source path. A clean comparison is `printf 'version=1\n'`, which reports `clean`. These are post-tool observations: the command ran, and the original output is retained. This demonstrates scanner detection, not command blocking, output redaction, or OS isolation. Qoder also receives the native hook warning. Local `provider-details.json` and `evidence/` preserve the corresponding receipt and findings.
 
 ## 4. Rehearse and present a fixed scenario
 
