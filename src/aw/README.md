@@ -2,9 +2,9 @@
 
 [中文](README_zh.md)
 
-AW defines versioned capability contracts between native agent adapters, a coordinating core and component providers. This portable Rust library bundles JSON Schemas and offline semantic validators. It separates provider output from environment adoption, runtime observation from control authority, and effect preparation from completion. Existing components remain independently usable.
+AW defines versioned capability contracts between native agent adapters, a coordinating core and component providers. The root `aw-contracts` crate bundles JSON Schemas and offline semantic validators; the sibling `aw-core` crate executes pinned capability plans through a trusted Host port. Provider output stays separate from environment adoption, and runtime observation stays separate from control authority. Existing components remain independently usable.
 
-**Status: proposed freeze baseline for review, not a released compatibility promise.** This component does not yet implement an AW Core service, Provider Host, native adapter, ledger backend, process controller or state provider. Its tests validate contract consistency with synthetic fixtures; they do not certify a framework integration.
+**Status: Core implementation baseline 0.1.0; schema freeze review remains pending.** Core now implements whole-plan admission, serial execution, cancellation, receipt checks and a Linux file journal. It is an embeddable library, not a deployed service. Production Provider Host drivers, native adapters, process control and state providers remain separate integrations. Tests do not certify real Agent adoption or OS enforcement.
 
 ## Start from source
 
@@ -25,6 +25,8 @@ This validation used Linux ARM64 with Rust 1.97.1, Python 3.12.3 and Node.js 24.
 
 ## Read and integrate
 
+- [Core baseline: API, guarantees, limits and source provenance](docs/design/core-baseline.md)
+- [Executable pinned-plan example](crates/aw-core/examples/pinned_plan.rs)
 - [PoC baseline and interface delta](docs/design/poc-schema-delta.md)
 - [Freeze decision and incremental acceptance gates](docs/design/interface-freeze.md)
 - [Every schema: fields, reasoning and review boundaries](docs/design/schema-reference.md)
@@ -33,7 +35,7 @@ This validation used Linux ARM64 with Rust 1.97.1, Python 3.12.3 and Node.js 24.
 
 Callers parse untrusted wire bytes with `canonical::parse` and reuse a `Registry`. Core checks a pinned ordered plan with `validate_plan`, admits each invocation with both `validate_plan_invocation` and `validate_invocation`, and checks all settled steps and receipts with `validate_plan_execution`. Final adoption uses `validate_plan_adoption`; final dispatch uses `validate_dispatch` to check the whole plan, current execution intent and independent OS protection binding.
 
-`validate_result`, `validate_adoption` and `validate_execution_gate` are local consistency checks, not complete plan admission. Shape-only `Registry::validate` is also insufficient for authorization. The library neither schedules providers nor installs OS rules. Native executors authenticate evidence, serialize final checks with actions and claim each event_id once to prevent duplicate dispatch.
+`validate_result`, `validate_adoption` and `validate_execution_gate` are local consistency checks, not complete plan admission. Shape-only `Registry::validate` is also insufficient for authorization. The contract crate neither schedules providers nor installs OS rules. Core schedules capability calls; native executors still authenticate evidence, serialize final checks with actions and prevent duplicate tool dispatch.
 
 ## Contract boundaries
 

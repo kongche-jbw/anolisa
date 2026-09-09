@@ -4,7 +4,12 @@ Read the root AGENTS.md and repository documentation standard before changing th
 
 ## Responsibilities
 
-This is a portable, side-effect-free contract library. Do not add process control, network calls, provider execution, native agent hooks, authorization credentials or ledger storage here. A schema URI is an identity, not permission to fetch a resource.
+The root crate remains a portable, side-effect-free contract library. Keep
+process control, network calls, provider execution, native agent hooks,
+authorization credentials and ledger storage out of that crate. The sibling
+`crates/aw-core` runtime orchestrates calls through explicit Host ports and
+owns its private execution journal. A schema URI is an identity, not permission
+to fetch a resource. Existing schema resources must remain byte-for-byte intact.
 
 Schema resources are authoritative wire shapes. Rust checks cross-record invariants; native callers authenticate observations and enforce atomicity. Keep these layers explicit in code and documentation. Never equate receipt production with adoption, process observation with ownership, or declared coverage with independently verified scanner behavior.
 

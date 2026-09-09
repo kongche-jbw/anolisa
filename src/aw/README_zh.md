@@ -2,9 +2,9 @@
 
 [English](README.md)
 
-AW 为原生 Agent adapter、AW Core 和组件 Provider 定义版本化能力合同。这个 Rust 库提供 JSON Schema 和离线语义校验，供各层核对调用与结果。Provider 生成的候选需要经过独立的采用观测，才能确认环境用了什么。进程控制和状态操作也分别记录授权与执行结果，现有组件继续按原有路径运行。
+AW 为原生 Agent adapter、AW Core 和组件 Provider 定义版本化能力合同。根目录的 `aw-contracts` 提供 JSON Schema 和离线语义校验，独立的 `aw-core` crate 通过可信 Host 接口执行固定计划。Provider 生成的候选仍需独立观测，才能确认实际采用；进程观测也不授予控制权限。现有组件继续按原有路径运行。
 
-**当前版本用于接口评审，尚未冻结。** 本次提供合同和校验器，AW Core 服务、Provider Host 及原生 adapter 的接入仍需后续实现。Ledger 存储、进程控制和状态 Provider 也不在本次交付中。测试使用合成样例检查合同是否一致，实际接入需要另行验收。
+**当前固定 Core 实现基线为 0.1.0，Schema 冻结仍待评审。** Core 已实现完整计划准入、串行调用、取消、Receipt 检查和 Linux 文件日志。它是可嵌入的库，尚未部署为服务。生产 Provider Host driver、原生 adapter、进程控制和状态 Provider 仍需接入；测试不能证明真实 Agent 采用或 OS 防护生效。
 
 ## 运行本地检查
 
@@ -25,6 +25,8 @@ cargo doc --workspace --no-deps --locked
 
 ## 阅读与接入
 
+- [Core 基线：接口、保证、限制与参考来源](docs/design/core-baseline_zh.md)
+- [可运行的固定计划示例](crates/aw-core/examples/pinned_plan.rs)
 - [PoC 基线与本次增量](docs/design/poc-schema-delta_zh.md)
 - [冻结决策与分阶段验收](docs/design/interface-freeze_zh.md)
 - [每个 Schema 的字段、取舍和评审边界](docs/design/schema-reference_zh.md)
@@ -35,7 +37,7 @@ cargo doc --workspace --no-deps --locked
 
 确认采用时调用 `validate_plan_adoption`。最终派发工具时调用 `validate_dispatch`，一并核对计划结果、当前执行意图和独立 OS 防护绑定。`validate_result`、`validate_adoption` 和 `validate_execution_gate` 只检查局部记录；完整准入还需要上述计划级校验。`Registry::validate` 通过也只说明结构符合合同。
 
-原生执行器负责认证证据，并保证最终检查与实际动作之间不会插入未经检查的变更。它还要按 `event_id` 防止重复派发。Provider 调度和 OS 策略安装由后续运行时实现。
+原生执行器负责认证证据，并保证最终检查与实际动作之间不会插入未经检查的变更。Core 调度能力调用；实际工具执行仍由原生执行器防止重复派发，OS 策略也由独立系统层安装。
 
 ## 合同范围
 
