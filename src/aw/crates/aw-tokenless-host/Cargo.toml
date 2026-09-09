@@ -1,0 +1,15 @@
+[package]
+name = "aw-tokenless-host"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Bounded Tokenless native protocol bridge to AW projection"
+publish = false
+
+[dependencies]
+aw-contracts = { workspace = true }
+aw-core = { workspace = true }
+libc = { workspace = true }
+serde_json = { workspace = true }
+tokenless-protocol = { workspace = true }
+thiserror = { workspace = true }

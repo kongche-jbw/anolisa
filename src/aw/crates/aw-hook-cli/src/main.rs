@@ -8,6 +8,7 @@ use aw_core::{
     ports::{Clock, NeverCancel, ProviderHost},
 };
 use aw_sec_host::{Config, Limits, SecHost};
+use aw_tokenless_host::TokenlessHost;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
@@ -34,6 +35,7 @@ struct Settings {
     journal: PathBuf,
     evidence: PathBuf,
     provider: ProviderSettings,
+    tokenless: Option<TokenlessSettings>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -43,6 +45,46 @@ struct ProviderSettings {
     program: PathBuf,
     args: Vec<String>,
     environment: BTreeMap<String, String>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TokenlessSettings {
+    provider_id: String,
+    provider_version: String,
+    program: PathBuf,
+    args: Vec<String>,
+    environment: BTreeMap<String, String>,
+    // This opt-in is separate from enabling the Provider or native claims.
+    allow_unrecoverable: bool,
+}
+struct Providers {
+    sec: SecHost,
+    tokenless: Option<TokenlessHost>,
+}
+impl ProviderHost for Providers {
+    fn descriptor(&self, id: &str) -> Option<&Value> {
+        self.sec
+            .descriptor(id)
+            .or_else(|| self.tokenless.as_ref().and_then(|p| p.descriptor(id)))
+    }
+    fn invoke(
+        &mut self,
+        invocation: &Value,
+    ) -> std::result::Result<aw_core::ports::ProviderResult, aw_core::ports::HostError> {
+        if self
+            .sec
+            .descriptor(invocation["provider_id"].as_str().unwrap_or(""))
+            .is_some()
+        {
+            self.sec.invoke(invocation)
+        } else if let Some(provider) = self.tokenless.as_mut() {
+            provider.invoke(invocation)
+        } else {
+            Err(aw_core::ports::HostError {
+                code: "provider_not_registered".into(),
+            })
+        }
+    }
 }
 struct WallClock;
 impl Clock for WallClock {
@@ -170,7 +212,7 @@ fn run() -> Result<()> {
         payload,
         context: NativeContext {
             scope,
-            runtime: settings.runtime,
+            runtime: settings.runtime.clone(),
             event_id,
         },
     })?;
@@ -179,7 +221,17 @@ fn run() -> Result<()> {
         .as_str()
         .ok_or_else(|| invalid("missing captured text"))?
         .len();
-    let mut provider = SecHost::new(Config {
+    if host == Host::Codex && settings.tokenless.is_some() {
+        return Err(invalid("Codex observation hook cannot replace tool results").into());
+    }
+    if settings
+        .tokenless
+        .as_ref()
+        .is_some_and(|config| !config.allow_unrecoverable)
+    {
+        return Err(invalid("Tokenless requires explicit allow_unrecoverable=true").into());
+    }
+    let sec = SecHost::new(Config {
         provider_id: settings.provider.provider_id.clone(),
         provider_version: settings.provider.provider_version,
         program: settings.provider.program,
@@ -192,13 +244,13 @@ fn run() -> Result<()> {
             stderr_bytes: 16 * 1024,
         },
     })?;
-    let descriptor = provider
+    let descriptor = sec
         .descriptor(&settings.provider.provider_id)
         .ok_or_else(|| invalid("missing provider descriptor"))?;
     let registry = Registry::new()?;
     let input_schema = registry.reference("security-content-inspect-input-v2")?;
     let output_schema = registry.reference("security-content-inspect-output-v2")?;
-    let plan = json!({
+    let mut plan = json!({
         "plan_id":captured.event_id(), "revision":1,"event_id":captured.event_id(),"scope":captured.scope(),
         "boundary_id":captured.boundary()["boundary_id"],"boundary_revision":captured.boundary()["revision"],
         "boundary":"post_tool","policy_revision":1,"source_digest":source_digest,
@@ -208,11 +260,53 @@ fn run() -> Result<()> {
           }],"required":true,"on_failure":"reject_plan","input_source":"boundary_source"}]
     });
     let now = WallClock.now_ms();
-    let prepared = adapter.prepare(captured, plan, BTreeMap::from([("inspect".into(), StepOptions {
-        constraints:json!({"include_low_confidence":false}),
-        budget:json!({"input_bytes":MAX_INPUT,"output_bytes":128*1024,"wall_time_ms":10_000}),
-        deadline_at_ms:now+15_000,
-    })]), &provider, now)?;
+    let mut options = BTreeMap::from([(
+        "inspect".into(),
+        StepOptions {
+            constraints: json!({"include_low_confidence":false}),
+            budget: json!({"input_bytes":MAX_INPUT,"output_bytes":128*1024,"wall_time_ms":10_000}),
+            deadline_at_ms: now + 15_000,
+        },
+    )]);
+    let tokenless = settings
+        .tokenless
+        .map(|config| -> Result<TokenlessHost> {
+            Ok(TokenlessHost::new(aw_tokenless_host::Config {
+                provider_id: config.provider_id,
+                provider_version: config.provider_version,
+                program: config.program,
+                args: config.args,
+                environment: config.environment,
+                limits: aw_tokenless_host::Limits {
+                    timeout_ms: 10_000,
+                    input_bytes: MAX_INPUT,
+                    output_bytes: MAX_INPUT,
+                    stderr_bytes: 16 * 1024,
+                },
+            })?)
+        })
+        .transpose()?;
+    if let Some(provider) = &tokenless {
+        let descriptor = provider.registered_descriptor();
+        if descriptor["provider_id"] == settings.provider.provider_id {
+            return Err(invalid("Provider identities must be distinct").into());
+        }
+        plan["steps"].as_array_mut().ok_or_else(|| invalid("invalid steps"))?.push(json!({
+            "step_id":"project","capability":"context.projection.prepare/v2",
+            "input_schema":registry.reference("context-projection-prepare-input-v2")?,
+            "output_schema":registry.reference("context-projection-prepare-output-v2")?,
+            "selection":"exactly_one","providers":[{"provider_id":descriptor["provider_id"],
+                "provider_version":descriptor["provider_version"],"manifest_digest":descriptor["manifest_digest"]}],
+            "required":true,"on_failure":"reject_plan","input_source":"boundary_source"
+        }));
+        options.insert("project".into(), StepOptions {
+            constraints:json!({"allow_text_reencoding":false,"accepted_reversibility":["unrecoverable"]}),
+            budget:json!({"input_bytes":MAX_INPUT,"output_bytes":MAX_INPUT,"wall_time_ms":10_000}),
+            deadline_at_ms:now+25_000,
+        });
+    }
+    let mut provider = Providers { sec, tokenless };
+    let prepared = adapter.prepare(captured, plan, options, &provider, now)?;
     let key = prepared.event_key().to_owned();
     let mut journal = FileJournal::new(&settings.journal)?;
     let result = adapter.execute(
@@ -227,12 +321,36 @@ fn run() -> Result<()> {
     let calls: Vec<_> = execution
         .calls()
         .iter()
-        .map(|c| json!({"receipt":c.result().receipt,"output":c.result().output}))
+        .map(|c| {
+            let mut invocation = c.invocation().clone();
+            if let Some(artifact) = invocation["input"]["artifact"].as_object_mut() {
+                artifact.remove("content");
+            }
+            json!({"invocation":invocation,"receipt":c.result().receipt,"output":c.result().output})
+        })
         .collect();
     fs::create_dir_all(&settings.evidence)?;
+    let projected = execution
+        .calls()
+        .iter()
+        .find(|call| call.result().receipt["capability"] == "context.projection.prepare/v2");
+    let candidate = projected
+        .and_then(|call| call.result().output.as_ref())
+        .map(|output| &output["candidate"]);
+    let inspection = execution
+        .calls()
+        .first()
+        .and_then(|call| call.result().output.as_ref());
+    let hook_response = projection_response(&execution.record()["decision"], candidate, inspection);
     let evidence = json!({"host":host.as_str(),"event_key":key,"source_digest":source_digest,"source_bytes":source_bytes,
         "execution":execution.record(),"journal_ack":execution.journal_ack(),"calls":calls,
-        "native_payload_preserved":true,"adoption":"not_observed","enforcement":"not_attempted"});
+        "runtime":settings.runtime,"boundary":execution.boundary(),"plan":execution.plan(),
+        "invocation_content":"omitted_reconstruct_from_native_capture",
+        "tokenless_mapping":provider.tokenless.as_ref().and_then(TokenlessHost::native_mapping),
+        "native_payload_preserved":true,"adoption":"not_observed","enforcement":"not_attempted",
+        "candidate_digest":candidate.and_then(|c|c["content"].as_str()).map(|c|canonical::digest(c.as_bytes())),
+        "candidate_bytes":candidate.and_then(|c|c["content"].as_str()).map(str::len),
+        "hook_response":hook_response,"delivery":if hook_response.is_some(){"prepared_for_return"}else{"original_retained"}});
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -244,10 +362,13 @@ fn run() -> Result<()> {
     file.write_all(&serde_json::to_vec_pretty(&evidence)?)?;
     file.sync_all()?;
     fs::File::open(&settings.evidence)?.sync_all()?;
-    let inspection = execution
-        .calls()
-        .first()
-        .and_then(|c| c.result().output.as_ref());
+    if let Some(response) = hook_response {
+        println!("{response}");
+        return Ok(());
+    }
+    if projected.is_some_and(|call| call.result().receipt["disposition"] == "failed") {
+        eprintln!("aw-hook: Tokenless projection failed; original tool result retained");
+    }
     match inspection.and_then(|o| o["inspection"]["verdict"].as_str()) {
         Some("clean") => println!("{{}}"),
         Some(_) => println!(
@@ -272,9 +393,43 @@ fn run() -> Result<()> {
     Ok(())
 }
 
+fn projection_response(
+    decision: &Value,
+    candidate: Option<&Value>,
+    inspection: Option<&Value>,
+) -> Option<Value> {
+    if decision != "proceed" {
+        return None;
+    }
+    let candidate = candidate?;
+    let mut response = json!({"suppressOutput":true,"hookSpecificOutput":{
+        "hookEventName":"PostToolUse","updatedToolOutput":candidate["content"]}});
+    if inspection.is_some_and(|output| output["inspection"]["verdict"] != "clean") {
+        response["systemMessage"] = json!("AW SecCore found sensitive or suspicious content. Observation only; Tokenless candidate returned.");
+    }
+    Some(response)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replacement_retains_security_observation_and_requires_proceed() {
+        let candidate = json!({"content":"short"});
+        let sensitive = json!({"inspection":{"verdict":"sensitive"}});
+        let response =
+            projection_response(&json!("proceed"), Some(&candidate), Some(&sensitive)).unwrap();
+        assert_eq!(response["hookSpecificOutput"]["updatedToolOutput"], "short");
+        assert!(response["systemMessage"]
+            .as_str()
+            .unwrap()
+            .contains("SecCore"));
+        assert!(
+            projection_response(&json!("reject"), Some(&candidate), Some(&sensitive)).is_none()
+        );
+        assert!(projection_response(&json!("proceed"), None, Some(&sensitive)).is_none());
+    }
 
     #[test]
     fn hook_input_limit_is_enforced_before_decoding() {

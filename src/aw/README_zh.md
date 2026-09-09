@@ -23,8 +23,13 @@ cargo doc --workspace --no-deps --locked
 
 本次验证使用 Linux ARM64，工具版本为 Rust 1.97.1、Python 3.12.3 和 Node.js 24.15.0。这组版本用于复现本次检查。最低支持版本尚未核定，其他操作系统也尚未验证。
 
+可选 Qoder hook 已将 SecCore 检查和 Tokenless 投影接到同一 Core 计划。Tokenless 固定为 0.8.0 及原生 protocol v2，不可恢复替换需要显式授权。独立观察器核验本地历史采用，未经修改的 Herdr v0.9.0 侧栏展示当前会话的已验证证据。当前仍是有界接入基线，尚未完成 COSH 自动启用，也不证明最终模型请求采用。
+
 ## 阅读与接入
 
+- [Tokenless 投影与显式授权](docs/design/tokenless-projection_zh.md)
+- [固定版本 Herdr 与证据展示](docs/design/herdr-integration_zh.md)
+- [组合验收与复现](docs/design/tokenless-herdr-acceptance_zh.md)
 - [Qoder/Codex 检查入口与真实 SecCore Host](docs/design/qoder-codex-inspection_zh.md)
 - [共享适配层：六类宿主映射、接口与限制](docs/design/native-adapters_zh.md)
 - [可运行的原生检查示例](crates/aw-adapters/examples/native_inspection.rs)

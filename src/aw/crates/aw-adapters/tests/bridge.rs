@@ -315,7 +315,7 @@ fn changed_plan_identity_or_source_never_invokes_provider() {
         ("/scope/session_id", json!("other")),
         ("/event_id", json!("other")),
         ("/boundary_id", json!("other")),
-        ("/boundary_revision", json!(2)),
+        ("/boundary_revision", json!(99)),
         ("/boundary", json!("pre_tool")),
     ] {
         let captured = adapter.capture(request(Host::Qoder, false)).unwrap();
@@ -466,10 +466,10 @@ fn core_inspection_does_not_manufacture_native_adoption() {
     let result = adapter
         .execute(prepared, &mut host, &mut journal, &FixedClock, &NeverCancel)
         .unwrap();
-    assert!(result.execution().boundary()["proof_boundaries"]
-        .as_array()
-        .unwrap()
-        .is_empty());
+    assert_eq!(
+        result.execution().boundary()["proof_boundaries"],
+        json!(["local_history"])
+    );
     assert!(result.execution().record().get("adoption").is_none());
     assert!(journal
         .records

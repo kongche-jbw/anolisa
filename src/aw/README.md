@@ -23,8 +23,13 @@ These checks run as a regular user without starting an Agent or signing into a s
 
 This validation used Linux ARM64 with Rust 1.97.1, Python 3.12.3 and Node.js 24.15.0. These versions reproduce the checked environment. Minimum supported versions have not been established, and other operating systems have not been validated.
 
+The optional Qoder hook now runs SecCore inspection and Tokenless projection in one Core plan. Tokenless 0.8.0 is pinned to its native protocol v2; unrecoverable replacement requires explicit consent. A separate observer verifies local-history adoption, and the unmodified Herdr v0.9.0 sidebar displays verified session evidence. This is a bounded integration baseline, not automatic COSH activation or model-request proof.
+
 ## Read and integrate
 
+- [Tokenless projection and explicit consent](docs/design/tokenless-projection.md)
+- [Pinned Herdr and evidence display](docs/design/herdr-integration.md)
+- [Combined acceptance and reproduction](docs/design/tokenless-herdr-acceptance.md)
 - [Qoder/Codex inspection runner and real SecCore Host](docs/design/qoder-codex-inspection.md)
 - [Shared adapters: six host mappings, API and limits](docs/design/native-adapters.md)
 - [Runnable native inspection example](crates/aw-adapters/examples/native_inspection.rs)

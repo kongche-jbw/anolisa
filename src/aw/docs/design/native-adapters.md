@@ -2,6 +2,8 @@
 
 [中文版](native-adapters_zh.md)
 
+This page describes the initial inspection baseline. The subsequent [Tokenless extension](tokenless-projection.md) adds explicitly authorized Qoder projection and a revision-2 local-history observer; its guarantees supersede the initial Qoder profile limits below.
+
 `aw-adapters` 0.1.0 captures native tool text, binds it to a trusted runtime
 context and executes existing capability plans through `aw-core`. It is an
 embedding library. Loading a profile does not install or activate a plugin.

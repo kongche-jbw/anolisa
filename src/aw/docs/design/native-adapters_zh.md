@@ -2,6 +2,8 @@
 
 [English](native-adapters.md)
 
+本页记录最初的检查基线。后续 [Tokenless 扩展](tokenless-projection_zh.md) 新增了显式授权的 Qoder 投影和 revision 2 本地历史观察器；其保证范围更新了下文初版 Qoder profile 的限制。
+
 `aw-adapters` 0.1.0 提取原生工具文本，将其绑定到可信运行上下文，再通过 `aw-core` 执行已有能力计划。它是供原生集成调用的库；加载边界描述不会安装或启用插件。本次保留所有公开 Schema 和 Core 实现。
 
 ## 六类宿主边界

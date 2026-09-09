@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/aw-core", "crates/aw-adapters", "crates/aw-sec-host", "crates/aw-hook-cli"]
+members = [".", "crates/aw-core", "crates/aw-adapters", "crates/aw-sec-host", "crates/aw-hook-cli", "crates/aw-tokenless-host"]
 resolver = "2"
 
 [workspace.dependencies]
@@ -7,6 +7,8 @@ aw-contracts = { path = "." }
 aw-core = { path = "crates/aw-core" }
 aw-adapters = { path = "crates/aw-adapters" }
 aw-sec-host = { path = "crates/aw-sec-host" }
+aw-tokenless-host = { path = "crates/aw-tokenless-host" }
+tokenless-protocol = { path = "../tokenless/crates/tokenless-protocol" }
 libc = "0.2"
 jsonschema = { version = "0.53", default-features = false }
 serde = { version = "1", features = ["derive"] }

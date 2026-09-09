@@ -13,3 +13,4 @@ aw-adapters = { workspace = true }
 aw-sec-host = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+aw-tokenless-host = { workspace = true }

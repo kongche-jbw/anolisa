@@ -22,7 +22,14 @@ fn six_hosts_map_exact_native_events_to_existing_aw_boundaries() {
             assert_eq!(boundary["boundary"], phase);
             assert_eq!(boundary["can_deny_dispatch"], false);
             assert_eq!(boundary["has_final_input_guard"], false);
-            assert_eq!(boundary["proof_boundaries"], json!([]));
+            assert_eq!(
+                boundary["proof_boundaries"],
+                if host == Host::Qoder && phase == "post_tool" {
+                    json!(["local_history"])
+                } else {
+                    json!([])
+                }
+            );
             assert_eq!(boundary["ledger_policy"], "best_effort");
             assert_eq!(boundary["composition"]["gate"], "none");
             assert_eq!(
@@ -40,7 +47,11 @@ fn six_hosts_map_exact_native_events_to_existing_aw_boundaries() {
 fn native_result_replacement_does_not_claim_adoption() {
     let qoder = profiles::boundary(Host::Qoder, "PostToolUse").unwrap();
     assert_eq!(qoder["can_replace_text"], true);
-    assert_eq!(qoder["proof_boundaries"], json!([]));
+    assert_eq!(qoder["proof_boundaries"], json!(["local_history"]));
+    assert_eq!(
+        qoder["composition"]["result_finality"],
+        "subject_to_later_change"
+    );
     for (host, event) in [
         (Host::Codex, "PostToolUse"),
         (Host::QwenCode, "PostToolUse"),

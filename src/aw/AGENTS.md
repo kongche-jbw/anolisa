@@ -18,9 +18,11 @@ from a native block response. Keep raw native messages intact and keep plugin
 registration, security policy and output formatting owned by native integrations.
 
 `crates/aw-sec-host` executes the existing SecCore native protocol with bounded
-Linux process I/O. `crates/aw-hook-cli` is an opt-in observation runner, not a
-native security policy replacement. Keep failure receipts visible, retain raw
-tool results, and never claim live acceptance from a direct stdin fixture.
+Linux process I/O. `crates/aw-hook-cli` provides opt-in inspection and explicitly authorized Qoder
+projection, not a native security policy replacement. `aw-adoption-cli` observes
+local history independently; `aw-view-cli` verifies session-scoped evidence. Keep
+failure receipts visible, require explicit consent for unrecoverable changes,
+and never claim live acceptance from a direct stdin fixture.
 
 Schema resources are authoritative wire shapes. Rust checks cross-record invariants; native callers authenticate observations and enforce atomicity. Keep these layers explicit in code and documentation. Never equate receipt production with adoption, process observation with ownership, or declared coverage with independently verified scanner behavior.
 

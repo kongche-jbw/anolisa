@@ -106,7 +106,12 @@ fn validate_profile(host: Host, value: &Value) -> Result<(), Error> {
         require(
             descriptor["adapter_id"] == format!("aw.native.{}", host.as_str())
                 && descriptor["adapter_version"] == "0.1.0"
-                && descriptor["revision"] == 1
+                && descriptor["revision"]
+                    == if host == Host::Qoder && phase == "post_tool" {
+                        2
+                    } else {
+                        1
+                    }
                 && descriptor["boundary_id"] == format!("{}.{}", host.as_str(), phase)
                 && descriptor["boundary"] == phase,
             "boundary identity differs from the pinned native mapping",
@@ -115,7 +120,12 @@ fn validate_profile(host: Host, value: &Value) -> Result<(), Error> {
         require(
             descriptor["can_deny_dispatch"] == false
                 && descriptor["has_final_input_guard"] == false
-                && descriptor["proof_boundaries"] == serde_json::json!([])
+                && descriptor["proof_boundaries"]
+                    == if host == Host::Qoder && phase == "post_tool" {
+                        serde_json::json!(["local_history"])
+                    } else {
+                        serde_json::json!([])
+                    }
                 && descriptor["ledger_policy"] == "best_effort"
                 && descriptor["composition"]["input_finality"] == "uncontrolled"
                 && descriptor["composition"]["gate"] == "none"
@@ -132,7 +142,12 @@ fn validate_profile(host: Host, value: &Value) -> Result<(), Error> {
             descriptor["can_replace_text"] == replaces
                 && descriptor["invocation_mode"] == mode
                 && descriptor["media_types"] == serde_json::json!(["text/plain"])
-                && descriptor["reversibility"] == serde_json::json!([]),
+                && descriptor["reversibility"]
+                    == if replaces {
+                        serde_json::json!(["unrecoverable"])
+                    } else {
+                        serde_json::json!([])
+                    },
             "boundary powers differ from the supported native adapter",
         )?;
     }
@@ -192,7 +207,8 @@ mod tests {
 
         let mut changed = original;
         let descriptor = &mut changed["boundaries"][1]["descriptor"];
-        descriptor["proof_boundaries"] = json!(["local_history"]);
+        descriptor["proof_boundaries"] = json!(["final_tool_result"]);
+        descriptor["composition"]["result_finality"] = json!("final");
         descriptor["ledger_policy"] = json!("required_before_delivery");
         Registry::new()
             .unwrap()
