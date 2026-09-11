@@ -363,3 +363,45 @@ fn directory_creation_rejects_a_regular_file() {
     assert!(FileJournal::new(&path).is_err());
     assert_eq!(fs::read(path).unwrap(), b"unchanged");
 }
+
+#[test]
+fn release_closes_successful_or_poisoned_writers_and_preserves_evidence() {
+    for poisoned in [false, true] {
+        let directory = Directory::new();
+        let mut journal = FileJournal::new(&directory.0).unwrap();
+        let mut tip = journal.claim(KEY, &json!({})).unwrap();
+        if poisoned {
+            assert!(journal
+                .append(KEY, &json!({"invalid_number": 1.5}))
+                .is_err());
+        } else {
+            tip = journal
+                .append(KEY, &json!({"status": "completed"}))
+                .unwrap();
+        }
+        journal.release(KEY);
+        journal.release(KEY);
+        journal.release("unknown");
+        let path = fs::canonicalize(&directory.0).unwrap();
+        assert_eq!(
+            fs::read_dir("/proc/self/fd")
+                .unwrap()
+                .filter_map(|entry| fs::read_link(entry.ok()?.path()).ok())
+                .filter(|target| target.starts_with(&path))
+                .count(),
+            0
+        );
+        assert!(matches!(
+            journal.append(KEY, &json!({})),
+            Err(JournalError::InvalidRecord)
+        ));
+        assert!(matches!(
+            journal.claim(KEY, &json!({})),
+            Err(JournalError::AlreadyClaimed)
+        ));
+        assert_eq!(
+            journal.read_verified(KEY, &tip).unwrap().len(),
+            if poisoned { 1 } else { 2 }
+        );
+    }
+}

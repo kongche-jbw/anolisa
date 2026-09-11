@@ -36,7 +36,12 @@ Core 在分发前写入 claim 和 invocation start，继续执行前写入 recei
 `FileJournal` 在 Linux 上使用可信、服务所有的本地目录，通过原子创建文件及
 同步写入保存记录。新建目录和文件使用私有权限。claim 或写入失败仍保留事件
 预留；append 失败后该 writer 不可继续写入。其他对象或进程不能接管已有 claim
-的写入权。当前没有重试、回滚、删除 claim 或恢复 API。
+的写入权。`Journal::release` 关闭本地写入权并移除内存记账，持久预留和记录保持
+不变。Core 在返回或栈展开时释放每次成功 claim 的 writer，包括错误回执、取消及
+Host 或存储错误。claim 失败时，必须清理本次尝试取得的资源，不能释放已有 writer。
+直接使用 Journal 的调用方必须 release 自己的 claim 或丢弃 backend。release 不得
+panic 或执行可能失败的存储操作；释放后 append 会被拒绝。
+当前没有重试、回滚、删除 claim 或恢复 API。
 
 Format-1 envelope 包含 sequence、previous digest、record 和 digest，这是私有
 存储格式，不是另一套 AW wire schema。读取拒绝半条记录和损坏的链；完整前缀
@@ -56,5 +61,5 @@ Journal 记录计划元数据、ID、摘要、回执和决策，不保存原始�
 在仓库根目录运行 `python3 src/aw/scripts/check.py`。入口检查两个 crate，要求
 执行和 Journal 测试有非 ignored 用例，并强制已评审的依赖边界与 Rust 源文件
 大小限制。Core 测试使用合成 Host、受控时钟和隔离的临时 Journal，覆盖错误回执、
-失败、截止时间、取消、重复事件、重启、并发 claim 和损坏或截断的存储。
+失败、截止时间、取消、重复事件、重启、并发 claim、有界 writer 生命周期和损坏或截断的存储。
 这些测试不认证掉电行为、生产 Provider 接入或原生 Agent 采用。

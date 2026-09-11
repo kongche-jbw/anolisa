@@ -7,12 +7,24 @@ use crate::{
 use aw_contracts::canonical;
 use serde_json::{json, Value};
 
+struct JournalClaim<'a, J: Journal> {
+    journal: &'a mut J,
+    event_key: &'a str,
+}
+
+impl<J: Journal> Drop for JournalClaim<'_, J> {
+    fn drop(&mut self) {
+        self.journal.release(self.event_key);
+    }
+}
+
 impl Core {
     /// Executes a pinned plan once, acknowledging records before further dispatch.
     ///
     /// No retries or candidate adoption occur here. All selected providers in
     /// one step settle before its decision is reduced; terminal decisions skip
-    /// later steps. A failed storage/Host boundary leaves an interrupted claim.
+    /// later steps. Local journal ownership is released on return or unwinding;
+    /// a failed storage/Host boundary leaves its durable reservation intact.
     ///
     /// # Errors
     /// Returns errors for duplicate events, journal failures, descriptor drift,
@@ -33,7 +45,14 @@ impl Core {
             event_key,
             steps,
         } = prepared;
-        let claim = self.validate_journal_ack(journal.claim(&event_key, &plan)?)?;
+        let claim = journal.claim(&event_key, &plan)?;
+        // Own cleanup before validating the acknowledgement: even a malformed
+        // successful claim must release its writer, while failed claims must not.
+        let reservation = JournalClaim {
+            journal,
+            event_key: &event_key,
+        };
+        let claim = self.validate_journal_ack(claim)?;
         let mut entries = Vec::new();
         let mut calls = Vec::new();
         let mut decision = "proceed";
@@ -49,7 +68,7 @@ impl Core {
             }
             sequence += 1;
             let started = sequence;
-            self.validate_journal_ack(journal.append(
+            self.validate_journal_ack(reservation.journal.append(
                 &event_key,
                 &json!({
                     "kind": "step_started", "step_id": step["step_id"], "sequence": started
@@ -80,7 +99,7 @@ impl Core {
                 )?;
                 // A durable start marker precedes dispatch. If the process dies
                 // or Host cannot return a receipt, this event stays reserved.
-                self.validate_journal_ack(journal.append(
+                self.validate_journal_ack(reservation.journal.append(
                     &event_key,
                     &json!({
                         "kind": "invocation_started",
@@ -129,7 +148,7 @@ impl Core {
                 {
                     return Err(Error::HostTime);
                 }
-                self.validate_journal_ack(journal.append(
+                self.validate_journal_ack(reservation.journal.append(
                     &event_key,
                     &json!({
                         "kind": "invocation_settled",
@@ -180,7 +199,9 @@ impl Core {
                 }
             }
             self.validate_journal_ack(
-                journal.append(&event_key, &json!({"kind": "step_settled", "entry": entry}))?,
+                reservation
+                    .journal
+                    .append(&event_key, &json!({"kind": "step_settled", "entry": entry}))?,
             )?;
             entries.push(entry);
         }
@@ -201,7 +222,7 @@ impl Core {
         let evidence = calls.iter().map(CallRecord::evidence).collect::<Vec<_>>();
         self.registry
             .validate_plan_execution(&plan, &execution, &evidence, &boundary)?;
-        let journal_ack = self.validate_journal_ack(journal.append(
+        let journal_ack = self.validate_journal_ack(reservation.journal.append(
             &event_key,
             &json!({
                 "kind": "execution_settled", "execution": execution

@@ -36,6 +36,8 @@ impl Cancellation for CancelFlag {
 #[derive(Default)]
 struct MemoryJournal {
     claims: BTreeSet<String>,
+    writers: BTreeSet<String>,
+    releases: usize,
     records: Vec<Value>,
     fail_claim: bool,
     fail_append: Option<usize>,
@@ -48,14 +50,19 @@ impl Journal for MemoryJournal {
         if !self.claims.insert(event_key.to_owned()) {
             return Err(JournalError::AlreadyClaimed);
         }
+        self.writers.insert(event_key.to_owned());
         Ok(ack(plan, "claim"))
     }
     fn append(&mut self, event_key: &str, record: &Value) -> Result<Value, JournalError> {
-        if !self.claims.contains(event_key) || self.fail_append == Some(self.records.len()) {
+        if !self.writers.contains(event_key) || self.fail_append == Some(self.records.len()) {
             return Err(JournalError::InvalidRecord);
         }
         self.records.push(record.clone());
         Ok(ack(record, &format!("record-{}", self.records.len())))
+    }
+    fn release(&mut self, event_key: &str) {
+        self.writers.remove(event_key);
+        self.releases += 1;
     }
 }
 fn ack(record: &Value, id: &str) -> Value {
@@ -245,3 +252,6 @@ mod decisions;
 mod storage;
 #[path = "execution/timing.rs"]
 mod timing;
+
+#[path = "execution/lifecycle.rs"]
+mod lifecycle;

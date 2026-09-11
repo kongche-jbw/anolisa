@@ -24,6 +24,8 @@ fn journal_claim_or_pre_dispatch_append_failure_prevents_call() {
             Err(Error::Journal(_))
         ));
         assert!(host.invoked.is_empty());
+        assert!(journal.writers.is_empty());
+        assert_eq!(journal.releases, usize::from(!fail_claim));
     }
 }
 
@@ -48,6 +50,8 @@ fn settlement_write_failure_stops_later_calls_and_keeps_claim() {
     ));
     assert_eq!(host.invoked.len(), 1);
     assert_eq!(journal.claims.len(), 1);
+    assert!(journal.writers.is_empty());
+    assert_eq!(journal.releases, 1);
     let retry = core.prepare(request(false), &host, 1000).unwrap();
     assert!(matches!(
         core.execute(
@@ -114,6 +118,8 @@ fn terminal_journal_failure_never_returns_a_usable_execution() {
     assert_eq!(host.invoked.len(), 2);
     assert_eq!(journal.records.last().unwrap()["kind"], "step_settled");
     assert_eq!(journal.claims.len(), 1);
+    assert!(journal.writers.is_empty());
+    assert_eq!(journal.releases, 1);
 }
 
 struct MalformedJournal {
@@ -139,6 +145,10 @@ impl Journal for MalformedJournal {
         } else {
             valid
         })
+    }
+
+    fn release(&mut self, event_key: &str) {
+        self.inner.release(event_key);
     }
 }
 
@@ -178,6 +188,8 @@ fn malformed_acknowledgements_stop_at_every_storage_boundary() {
             assert_eq!(host.invoked.len(), expected_calls, "acknowledgement {at}");
             assert_eq!(journal.inner.records.len(), at);
             assert_eq!(journal.inner.claims.len(), 1);
+            assert!(journal.inner.writers.is_empty());
+            assert_eq!(journal.inner.releases, 1);
             let retry = core.prepare(request(false), &host, 1000).unwrap();
             assert!(matches!(
                 core.execute(
@@ -190,6 +202,7 @@ fn malformed_acknowledgements_stop_at_every_storage_boundary() {
                 Err(Error::Journal(JournalError::AlreadyClaimed))
             ));
             assert_eq!(host.invoked.len(), expected_calls);
+            assert_eq!(journal.inner.releases, 1);
         }
     }
 }

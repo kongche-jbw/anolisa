@@ -83,6 +83,8 @@ pub trait Journal {
     /// # Errors
     /// Reject an existing claim, including an interrupted run or changed plan.
     /// Returns a common/v1 evidence object only after acknowledging the claim.
+    /// On error, release resources acquired by this attempt without disturbing
+    /// any existing writer or deleting a reservation already made durable.
     fn claim(&mut self, event_key: &str, plan: &Value) -> Result<Value, JournalError>;
 
     /// Appends one private runtime record and returns common/v1 evidence.
@@ -90,4 +92,12 @@ pub trait Journal {
     /// # Errors
     /// Reject unowned claims, invalid records or writes not acknowledged by storage.
     fn append(&mut self, event_key: &str, record: &Value) -> Result<Value, JournalError>;
+
+    /// Releases local write ownership without deleting the durable reservation.
+    ///
+    /// Must not panic, perform fallible storage work, or permit another claim for
+    /// this event. Unknown or already released keys are a no-op. Core calls this
+    /// after every successful claim, including errors and unwinding; direct
+    /// Journal callers must release their claims or drop the implementation.
+    fn release(&mut self, event_key: &str);
 }

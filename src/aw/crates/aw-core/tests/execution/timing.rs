@@ -69,6 +69,10 @@ impl Journal for InterleavingJournal {
         }
         Ok(evidence)
     }
+
+    fn release(&mut self, event_key: &str) {
+        self.inner.release(event_key);
+    }
 }
 
 struct TimedHost {

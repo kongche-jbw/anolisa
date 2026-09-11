@@ -46,7 +46,14 @@ append is acknowledged.
 trusted, service-owned local directory. New directories/files have private
 permissions. Claim/write failures retain the reservation; a failed append poisons
 that writer. Another object or process cannot acquire write ownership for an
-existing claim. There is no retry, rollback, claim deletion or recovery API.
+existing claim. `Journal::release` closes local write ownership and removes its
+in-memory bookkeeping without changing the durable reservation or records. Core
+releases every successful claim on return or unwinding, including malformed
+acknowledgements, cancellation and Host/storage errors. Failed claims must clean
+up resources from that attempt without releasing an existing writer. Direct
+Journal callers must release their claims or drop the backend. Release must not
+panic or perform fallible storage work; appends after release are rejected.
+There is no retry, rollback, claim deletion or recovery API.
 
 Format-1 envelopes contain sequence, previous digest, record and digest. This is
 private storage framing, not another AW wire schema. Reads reject partial records
@@ -72,5 +79,5 @@ crates, requires non-ignored execution/journal tests, and enforces reviewed
 crate dependencies and Rust source size limits. Core tests use synthetic Hosts,
 controlled clocks and isolated temporary journals. They cover malformed
 acknowledgements, failures, deadlines, cancellation, duplicate events, restarts,
-concurrent claims and corrupt/truncated storage. They do not certify power-loss
+concurrent claims, bounded writer lifetimes and corrupt/truncated storage. They do not certify power-loss
 behavior, production Provider integration or native Agent adoption.

@@ -28,6 +28,8 @@ struct Claim {
 ///
 /// Only the object that successfully claimed an event may append to it. Opening
 /// another journal never recovers write ownership or retries interrupted work.
+/// [`Journal::release`] closes the event's writer and frees its bookkeeping;
+/// its reservation and readable records remain on disk.
 /// Callers supply metadata records; this storage layer does not obtain or redact
 /// capability input/output. Directory access is a trusted local storage boundary.
 pub struct FileJournal {
@@ -208,6 +210,10 @@ impl Journal for FileJournal {
             .to_owned();
         claim.poisoned = false;
         Ok(evidence(event_key, sequence, &claim.digest))
+    }
+
+    fn release(&mut self, event_key: &str) {
+        self.claims.remove(event_key);
     }
 }
 
