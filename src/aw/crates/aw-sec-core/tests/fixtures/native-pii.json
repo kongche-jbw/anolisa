@@ -1,0 +1,311 @@
+{
+  "profile": "agent-sec-cli/scan-pii/0.12.0",
+  "native_source_commit": "830b841063fa827f2f68e6fb0b29dda1e29b22b2",
+  "cases": [
+    {
+      "name": "clean",
+      "content": "hello world",
+      "include_low_confidence": false,
+      "rules_yaml": null,
+      "exit_code": 0,
+      "output": {
+        "ok": true,
+        "verdict": "pass",
+        "summary": {
+          "total": 0,
+          "by_type": {},
+          "by_category": {},
+          "by_severity": {},
+          "source": "tool_output",
+          "bytes_scanned": 11,
+          "truncated": false,
+          "custom_rules": {
+            "status": "absent",
+            "rule_count": 0,
+            "runtime_error_count": 0,
+            "budget_exhausted": false,
+            "truncated": false
+          }
+        },
+        "findings": [],
+        "elapsed_ms": 0
+      },
+      "expected_aw_verdict": "clean"
+    },
+    {
+      "name": "unicode",
+      "content": "备注🙂 alice@securecorp.cn\n",
+      "include_low_confidence": false,
+      "rules_yaml": null,
+      "exit_code": 0,
+      "output": {
+        "ok": true,
+        "verdict": "warn",
+        "summary": {
+          "total": 1,
+          "by_type": {
+            "email": 1
+          },
+          "by_category": {
+            "personal_data": 1
+          },
+          "by_severity": {
+            "warn": 1
+          },
+          "source": "tool_output",
+          "bytes_scanned": 31,
+          "truncated": false,
+          "custom_rules": {
+            "status": "absent",
+            "rule_count": 0,
+            "runtime_error_count": 0,
+            "budget_exhausted": false,
+            "truncated": false
+          }
+        },
+        "findings": [
+          {
+            "type": "email",
+            "category": "personal_data",
+            "severity": "warn",
+            "confidence": 0.82,
+            "evidence_redacted": "a***@securecorp.cn",
+            "span": {
+              "start": 4,
+              "end": 23
+            },
+            "metadata": {
+              "validator": "email_syntax",
+              "detector": "regex",
+              "engine": "regex_v1"
+            }
+          }
+        ],
+        "elapsed_ms": 0
+      },
+      "expected_aw_verdict": "suspicious"
+    },
+    {
+      "name": "credential",
+      "content": "api_key=sk-abcdefghijklmnopqrstuvwxyz123456",
+      "include_low_confidence": false,
+      "rules_yaml": null,
+      "exit_code": 0,
+      "output": {
+        "ok": true,
+        "verdict": "deny",
+        "summary": {
+          "total": 1,
+          "by_type": {
+            "api_key": 1
+          },
+          "by_category": {
+            "credential": 1
+          },
+          "by_severity": {
+            "deny": 1
+          },
+          "source": "tool_output",
+          "bytes_scanned": 43,
+          "truncated": false,
+          "custom_rules": {
+            "status": "absent",
+            "rule_count": 0,
+            "runtime_error_count": 0,
+            "budget_exhausted": false,
+            "truncated": false
+          }
+        },
+        "findings": [
+          {
+            "type": "api_key",
+            "category": "credential",
+            "severity": "deny",
+            "confidence": 0.98,
+            "evidence_redacted": "sk-a...[REDACTED]...3456",
+            "span": {
+              "start": 8,
+              "end": 43
+            },
+            "metadata": {
+              "pattern": "token_prefix",
+              "detector": "regex",
+              "engine": "regex_v1"
+            }
+          }
+        ],
+        "elapsed_ms": 0
+      },
+      "expected_aw_verdict": "sensitive"
+    },
+    {
+      "name": "low_hidden",
+      "content": "example email test@example.invalid",
+      "include_low_confidence": false,
+      "rules_yaml": null,
+      "exit_code": 0,
+      "output": {
+        "ok": true,
+        "verdict": "pass",
+        "summary": {
+          "total": 0,
+          "by_type": {},
+          "by_category": {},
+          "by_severity": {},
+          "source": "tool_output",
+          "bytes_scanned": 34,
+          "truncated": false,
+          "custom_rules": {
+            "status": "absent",
+            "rule_count": 0,
+            "runtime_error_count": 0,
+            "budget_exhausted": false,
+            "truncated": false
+          }
+        },
+        "findings": [],
+        "elapsed_ms": 0
+      },
+      "expected_aw_verdict": "clean"
+    },
+    {
+      "name": "low_included",
+      "content": "example email test@example.invalid",
+      "include_low_confidence": true,
+      "rules_yaml": null,
+      "exit_code": 0,
+      "output": {
+        "ok": true,
+        "verdict": "warn",
+        "summary": {
+          "total": 1,
+          "by_type": {
+            "email": 1
+          },
+          "by_category": {
+            "personal_data": 1
+          },
+          "by_severity": {
+            "warn": 1
+          },
+          "source": "tool_output",
+          "bytes_scanned": 34,
+          "truncated": false,
+          "custom_rules": {
+            "status": "absent",
+            "rule_count": 0,
+            "runtime_error_count": 0,
+            "budget_exhausted": false,
+            "truncated": false
+          }
+        },
+        "findings": [
+          {
+            "type": "email",
+            "category": "personal_data",
+            "severity": "warn",
+            "confidence": 0.35,
+            "evidence_redacted": "t***@example.invalid",
+            "span": {
+              "start": 14,
+              "end": 34
+            },
+            "metadata": {
+              "validator": "email_syntax",
+              "context": "reserved_domain",
+              "detector": "regex",
+              "engine": "regex_v1"
+            }
+          }
+        ],
+        "elapsed_ms": 0
+      },
+      "expected_aw_verdict": "suspicious"
+    },
+    {
+      "name": "custom",
+      "content": "ORDER-ABC12345",
+      "include_low_confidence": false,
+      "rules_yaml": "- type: order_id\n  regex: 'ORDER-[A-Z0-9]{8}'\n  severity: deny\n",
+      "exit_code": 0,
+      "output": {
+        "ok": true,
+        "verdict": "deny",
+        "summary": {
+          "total": 1,
+          "by_type": {
+            "order_id": 1
+          },
+          "by_category": {
+            "custom": 1
+          },
+          "by_severity": {
+            "deny": 1
+          },
+          "source": "tool_output",
+          "bytes_scanned": 14,
+          "truncated": false,
+          "custom_rules": {
+            "status": "loaded",
+            "rule_count": 1,
+            "runtime_error_count": 0,
+            "budget_exhausted": false,
+            "truncated": false,
+            "ruleset_sha256": "7927482a182011559bef0becbb80ae08fb879aa9bfc343e8c4dfc646da1777eb"
+          }
+        },
+        "findings": [
+          {
+            "type": "order_id",
+            "category": "custom",
+            "severity": "deny",
+            "confidence": 1.0,
+            "evidence_redacted": "[ORDER_ID_REDACTED]",
+            "span": {
+              "start": 0,
+              "end": 14
+            },
+            "metadata": {
+              "detector": "custom_rule",
+              "engine": "regex"
+            }
+          }
+        ],
+        "elapsed_ms": 0
+      },
+      "expected_aw_verdict": "sensitive"
+    },
+    {
+      "name": "invalid_rules",
+      "content": "hello world",
+      "include_low_confidence": false,
+      "rules_yaml": "- type: order_id\n  regex: '[invalid'\n",
+      "exit_code": 0,
+      "output": {
+        "ok": true,
+        "verdict": "pass",
+        "summary": {
+          "total": 0,
+          "by_type": {},
+          "by_category": {},
+          "by_severity": {},
+          "source": "tool_output",
+          "bytes_scanned": 11,
+          "truncated": false,
+          "custom_rules": {
+            "status": "invalid",
+            "rule_count": 0,
+            "runtime_error_count": 0,
+            "budget_exhausted": false,
+            "truncated": false,
+            "ruleset_sha256": "ca7372d0cc5ff7329b1c6db6ca3e7bf7ea9213ad6b3d0cac4b61499374776f5c",
+            "error_code": "invalid_regex"
+          }
+        },
+        "findings": [],
+        "elapsed_ms": 0
+      },
+      "expected_aw_verdict": null
+    }
+  ]
+}

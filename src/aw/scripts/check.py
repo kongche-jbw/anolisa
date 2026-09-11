@@ -139,6 +139,7 @@ def check_inventory() -> None:
         ("aw-adapters", "profiles"),
         ("aw-adapters", "native"),
         ("aw-adapters", "bridge"),
+        ("aw-sec-core", "pii"),
     ):
         command = ["cargo", "test", "--locked", "-p", package, "--test", target, "--", "--list"]
         tests = inventory(run(command, AW, capture=True))
@@ -154,6 +155,7 @@ def structure(metadata: dict, root: Path) -> None:
         "aw-contracts": {"jsonschema", "serde", "serde_json", "sha2", "thiserror"},
         "aw-core": {"aw-contracts", "serde_json", "thiserror"},
         "aw-adapters": {"aw-contracts", "aw-core", "serde_json", "thiserror"},
+        "aw-sec-core": {"aw-contracts", "serde", "serde_json", "thiserror"},
     }
     members = {
         p["name"]: p for p in metadata["packages"] if p["id"] in metadata["workspace_members"]
@@ -236,6 +238,11 @@ def check() -> None:
     actual = candidate()
     selftest()
     run(["cargo", "fmt", "--all", "--", "--check"], AW)
+    run(
+        [sys.executable, "-B", "crates/aw-sec-core/tests/regenerate_pii.py", "--self-test"],
+        AW,
+        timeout=30,
+    )
     structure(
         json.loads(
             run(

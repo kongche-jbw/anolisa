@@ -4,7 +4,7 @@
 
 AW provides versioned capability contracts, offline validation and embeddable Core orchestration. `aw-contracts` checks payload shapes and record relationships; `aw-core` executes pinned plans through caller-provided Hosts and journals execution facts. AW has no service process; native Agent control and final tool dispatch remain with the embedding application.
 
-The interfaces are experimental. Tests use synthetic records and do not certify runtime integration.
+The interfaces are experimental. Tests use synthetic records and frozen native outputs; they do not certify runtime integration.
 
 ## Run the checks
 
@@ -17,7 +17,7 @@ python3 src/aw/scripts/check.py
 
 The entry runs CI behavior tests, formatting, Clippy, all locked workspace tests,
 the Python/JavaScript digest vectors and rustdoc. Missing tools, empty or fully
-ignored contract, plan, Core execution, journal or adapter profile/native/bridge test targets, invalid vectors and command failures return
+ignored contract, plan, Core execution, journal, adapter profile/native/bridge or SecCore pii test targets, invalid vectors and command failures return
 nonzero. Each command has a timeout and its child process group is cleaned up on
 failure or interruption. Logs identify the failing command; individual commands
 can be run from `src/aw` for diagnosis.
@@ -48,7 +48,7 @@ events remain reserved; there is no automatic retry or recovery.
 See [Core execution and storage](docs/design/core-execution.md) for ownership,
 cancellation, failure and embedding contracts. The tests use synthetic Hosts;
 this crate does not connect a production Provider or establish native adoption.
-The shared check enforces the three-crate dependency boundaries and a 700-line Rust
+The shared check enforces the four-crate dependency boundaries and a 700-line Rust
 file limit (600-line warning); the existing contract validator remains capped at
 711 lines. These checks supplement review, not runtime acceptance.
 
@@ -64,6 +64,10 @@ ownership. This library installs no hooks, delivers no replacement and grants
 no final dispatch authority. Pre-tool capture is supported; pre-tool execution
 requires a separately verified final guard and is rejected by these profiles.
 The six mappings are covered by synthetic tests, not six live Agent integrations.
+
+## SecCore protocol mapping
+
+`aw-sec-core` maps post-tool content inspection to the supported native `scan-pii` protocol, preserving user rules and middleware semantics while validating native results. It is independent of the security engine implementation language. The library does not spawn processes or author Host receipts. See [SecCore native protocol adapter](docs/design/sec-core-adapter.md) for the native CLI fixtures, regeneration and compatibility checks.
 
 ## Source reference
 

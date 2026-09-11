@@ -103,6 +103,8 @@ class GateTests(unittest.TestCase):
             "if mode.startswith('adapter-empty-'):\n"
             "    target = mode.removeprefix('adapter-empty-')\n"
             "    mode = 'empty' if 'aw-adapters' in sys.argv and target in sys.argv else 'valid'\n"
+            "if mode == 'sec-core-empty-pii':\n"
+            "    mode = 'empty' if 'aw-sec-core' in sys.argv and 'pii' in sys.argv else 'valid'\n"
             "if mode == 'missing': sys.exit(7)\n"
             "if mode == 'empty' or (mode == 'valid' and '--ignored' in sys.argv):\n"
             "    print('0 tests, 0 benchmarks')\n"
@@ -119,6 +121,7 @@ class GateTests(unittest.TestCase):
             "adapter-empty-profiles",
             "adapter-empty-native",
             "adapter-empty-bridge",
+            "sec-core-empty-pii",
             "contract-empty-canonical", "contract-empty-schemas",
             "contract-empty-contracts", "contract-empty-orchestration",
         ):
@@ -154,6 +157,11 @@ class GateTests(unittest.TestCase):
                 self.root / "crates/aw-adapters",
                 ["aw-contracts", "aw-core", "serde_json", "thiserror"],
             ),
+            (
+                "aw-sec-core",
+                self.root / "crates/aw-sec-core",
+                ["aw-contracts", "serde", "serde_json", "thiserror"],
+            ),
         ):
             (directory / "src").mkdir(parents=True)
             (directory / "src/lib.rs").write_text("//! Fixture.\n", encoding="utf-8")
@@ -183,7 +191,18 @@ class GateTests(unittest.TestCase):
             )
         metadata = {"packages": packages, "workspace_members": [p["id"] for p in packages]}
         gate.structure(metadata, self.root)
-        for package, dependency in ((0, "aw-core"), (1, "aw-adapters"), (1, "tokio"), (2, "tokio")):
+        for package, dependency in (
+            (0, "aw-core"),
+            (0, "aw-sec-core"),
+            (1, "aw-adapters"),
+            (1, "aw-sec-core"),
+            (1, "tokio"),
+            (2, "tokio"),
+            (3, "aw-core"),
+            (3, "aw-adapters"),
+            (3, "tokio"),
+            (3, "agent-sec-core"),
+        ):
             invalid = json.loads(json.dumps(metadata))
             invalid["packages"][package]["dependencies"].append({"name": dependency})
             with self.assertRaises(ValueError):
