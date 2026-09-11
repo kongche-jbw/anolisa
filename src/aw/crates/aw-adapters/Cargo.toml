@@ -1,0 +1,13 @@
+[package]
+name = "aw-adapters"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Native Agent boundary capture and shared AW Core integration"
+publish = false
+
+[dependencies]
+aw-contracts = { workspace = true }
+aw-core = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

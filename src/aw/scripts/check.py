@@ -128,7 +128,7 @@ def inventory(text: str) -> set[str]:
 
 
 def check_inventory() -> None:
-    """Require runnable tests in each contract, execution and journal target."""
+    """Require runnable tests in each reviewed integration target."""
     for package, target in (
         ("aw-contracts", "canonical"),
         ("aw-contracts", "schemas"),
@@ -136,6 +136,9 @@ def check_inventory() -> None:
         ("aw-contracts", "orchestration"),
         ("aw-core", "execution"),
         ("aw-core", "journal"),
+        ("aw-adapters", "profiles"),
+        ("aw-adapters", "native"),
+        ("aw-adapters", "bridge"),
     ):
         command = ["cargo", "test", "--locked", "-p", package, "--test", target, "--", "--list"]
         tests = inventory(run(command, AW, capture=True))
@@ -146,10 +149,11 @@ def check_inventory() -> None:
 
 
 def structure(metadata: dict, root: Path) -> None:
-    """Keep the two reviewed crate boundaries and Rust source sizes explicit."""
+    """Keep the reviewed crate boundaries and Rust source sizes explicit."""
     allowed = {
         "aw-contracts": {"jsonschema", "serde", "serde_json", "sha2", "thiserror"},
         "aw-core": {"aw-contracts", "serde_json", "thiserror"},
+        "aw-adapters": {"aw-contracts", "aw-core", "serde_json", "thiserror"},
     }
     members = {
         p["name"]: p for p in metadata["packages"] if p["id"] in metadata["workspace_members"]
@@ -157,7 +161,7 @@ def structure(metadata: dict, root: Path) -> None:
     if members.keys() != allowed.keys():
         raise ValueError("AW workspace members changed; review the crate boundaries")
     for name, package in members.items():
-        directory = root if name == "aw-contracts" else root / "crates/aw-core"
+        directory = root if name == "aw-contracts" else root / "crates" / name
         if Path(package["manifest_path"]).resolve() != (directory / "Cargo.toml").resolve():
             raise ValueError(f"{name}: workspace crate moved outside its reviewed location")
         source_roots = [directory / kind for kind in ("src", "tests", "examples")]
@@ -168,14 +172,17 @@ def structure(metadata: dict, root: Path) -> None:
         for dependency in package["dependencies"]:
             if dependency["name"] not in allowed[name]:
                 raise ValueError(f"{name}: unreviewed dependency {dependency['name']}")
-            if dependency["name"] == "aw-contracts":
+            if dependency["name"] in ("aw-contracts", "aw-core"):
+                expected = root if dependency["name"] == "aw-contracts" else root / "crates/aw-core"
                 path = dependency.get("path")
                 if (
                     not path
                     or dependency.get("source") is not None
-                    or Path(path).resolve() != root.resolve()
+                    or Path(path).resolve() != expected.resolve()
                 ):
-                    raise ValueError("aw-core must use this workspace's aw-contracts")
+                    raise ValueError(
+                        f"{name}: {dependency['name']} must use the reviewed workspace path"
+                    )
             elif dependency.get("path") is not None or dependency.get("source", "").startswith(
                 "git+"
             ):

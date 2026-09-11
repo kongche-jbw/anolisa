@@ -16,7 +16,7 @@ python3 src/aw/scripts/check.py
 ```
 
 入口依次运行 CI 行为测试、格式检查、Clippy、完整的 locked workspace 测试、
-Python/JavaScript 摘要向量和 rustdoc。缺少工具、合同、计划、Core 执行或 Journal 测试目标为空或全部
+Python/JavaScript 摘要向量和 rustdoc。缺少工具、合同、计划、Core 执行、Journal 或 adapter profile/native/bridge 测试目标为空或全部
 ignored、向量错误及命令失败均返回非零。每条命令都有超时限制，失败或中断时
 回收其子进程组。日志标明失败命令，可在 `src/aw` 单独运行对应命令定位问题。
 
@@ -41,8 +41,14 @@ Linux ARM64、相同的运行时版本及固定 Rust 工具链。
 
 所有权、取消、失败和接入约束见 [Core 执行与存储](docs/design/core-execution_zh.md)。
 测试使用合成 Host；该 crate 尚未连接生产 Provider，也不证明原生宿主已采用结果。
-统一检查强制两个 crate 的依赖边界及 Rust 文件 700 行上限（600 行提醒）；现有
+统一检查强制三个 crate 的依赖边界及 Rust 文件 700 行上限（600 行提醒）；现有
 合同校验文件单独保持 711 行非增长上限。这些检查辅助代码评审，不替代运行时验收。
+
+## 原生 adapter 嵌入
+
+`aw-adapters` 为六种固定原生 profile 捕获受支持的工具文本，并将可观测 ID 与调用方认证的 runtime 上下文核对。它通过同一个 Core 执行 post-tool 内容/代码检查，保留原始 payload。每个 Adapter 实例只在初始化时验证 profile。
+
+受支持字段和责任划分见[原生 adapters](docs/design/native-adapters_zh.md)。此库不安装 hooks、不交付替换结果，也不授予最终 dispatch 权限。支持 pre-tool 捕获；pre-tool 执行需要单独验证的 final guard，当前 profile 会拒绝。六种映射有合成测试覆盖，不代表六个真实 Agent 已完成接入。
 
 ## 源码参考
 
