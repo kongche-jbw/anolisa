@@ -68,10 +68,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "aw-hook-cli"
+version = "0.1.0"
+dependencies = [
+ "aw-adapters",
+ "aw-contracts",
+ "aw-core",
+ "aw-sec-host",
+ "libc",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "aw-sec-core"
 version = "0.1.0"
 dependencies = [
  "aw-contracts",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "aw-sec-host"
+version = "0.1.0"
+dependencies = [
+ "aw-contracts",
+ "aw-core",
+ "aw-sec-core",
+ "libc",
  "serde",
  "serde_json",
  "thiserror",

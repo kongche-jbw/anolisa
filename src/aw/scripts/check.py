@@ -105,7 +105,11 @@ def scope(event_name: str, event: dict, actual: str, repo: Path = REPO) -> bool:
             )
         )
     return any(
-        path.startswith("src/aw/") or path == ".github/workflows/aw-ci.yml" for path in changed
+        path.startswith("src/aw/") or path in {
+            ".github/workflows/aw-ci.yml",
+            "docs/user-guide/en/user-entrypoint/aw.md",
+            "docs/user-guide/zh/user-entrypoint/aw.md",
+        } for path in changed
     )
 
 
@@ -140,6 +144,8 @@ def check_inventory() -> None:
         ("aw-adapters", "native"),
         ("aw-adapters", "bridge"),
         ("aw-sec-core", "pii"),
+        ("aw-sec-host", "host"),
+        ("aw-hook-cli", "hook"),
     ):
         command = ["cargo", "test", "--locked", "-p", package, "--test", target, "--", "--list"]
         tests = inventory(run(command, AW, capture=True))
@@ -156,6 +162,13 @@ def structure(metadata: dict, root: Path) -> None:
         "aw-core": {"aw-contracts", "serde_json", "thiserror"},
         "aw-adapters": {"aw-contracts", "aw-core", "serde_json", "thiserror"},
         "aw-sec-core": {"aw-contracts", "serde", "serde_json", "thiserror"},
+        "aw-sec-host": {
+            "aw-contracts", "aw-core", "aw-sec-core", "serde", "serde_json", "thiserror", "libc",
+        },
+        "aw-hook-cli": {
+            "aw-contracts", "aw-core", "aw-adapters", "aw-sec-host",
+            "serde", "serde_json", "thiserror", "libc",
+        },
     }
     members = {
         p["name"]: p for p in metadata["packages"] if p["id"] in metadata["workspace_members"]
@@ -174,8 +187,11 @@ def structure(metadata: dict, root: Path) -> None:
         for dependency in package["dependencies"]:
             if dependency["name"] not in allowed[name]:
                 raise ValueError(f"{name}: unreviewed dependency {dependency['name']}")
-            if dependency["name"] in ("aw-contracts", "aw-core"):
-                expected = root if dependency["name"] == "aw-contracts" else root / "crates/aw-core"
+            if dependency["name"] in allowed:
+                expected = (
+                    root if dependency["name"] == "aw-contracts"
+                    else root / "crates" / dependency["name"]
+                )
                 path = dependency.get("path")
                 if (
                     not path
@@ -243,6 +259,7 @@ def check() -> None:
         AW,
         timeout=30,
     )
+    run([sys.executable, "-B", "tests/native_smoke.py", "--self-test"], AW, timeout=30)
     structure(
         json.loads(
             run(

@@ -67,6 +67,10 @@ class GateTests(unittest.TestCase):
         base = self.init_git()
         head = self.commit("other.txt", "no AW change")
         self.assertFalse(gate.scope("push", {"before": base, "after": head}, head, self.root))
+        for language in ("en", "zh"):
+            before = head
+            head = self.commit(f"docs/user-guide/{language}/user-entrypoint/aw.md", "AW CLI")
+            self.assertTrue(gate.scope("push", {"before": before, "after": head}, head, self.root))
         before = self.commit("src/aw/schema.json", "{}")
         self.git("mv", "src/aw/schema.json", "schema.json")
         self.git("commit", "-qm", "move out of AW")
@@ -105,6 +109,10 @@ class GateTests(unittest.TestCase):
             "    mode = 'empty' if 'aw-adapters' in sys.argv and target in sys.argv else 'valid'\n"
             "if mode == 'sec-core-empty-pii':\n"
             "    mode = 'empty' if 'aw-sec-core' in sys.argv and 'pii' in sys.argv else 'valid'\n"
+            "if mode == 'sec-host-empty-host':\n"
+            "    mode = 'empty' if 'aw-sec-host' in sys.argv and 'host' in sys.argv else 'valid'\n"
+            "if mode == 'hook-cli-empty-hook':\n"
+            "    mode = 'empty' if 'aw-hook-cli' in sys.argv and 'hook' in sys.argv else 'valid'\n"
             "if mode == 'missing': sys.exit(7)\n"
             "if mode == 'empty' or (mode == 'valid' and '--ignored' in sys.argv):\n"
             "    print('0 tests, 0 benchmarks')\n"
@@ -122,6 +130,8 @@ class GateTests(unittest.TestCase):
             "adapter-empty-native",
             "adapter-empty-bridge",
             "sec-core-empty-pii",
+            "sec-host-empty-host",
+            "hook-cli-empty-hook",
             "contract-empty-canonical", "contract-empty-schemas",
             "contract-empty-contracts", "contract-empty-orchestration",
         ):
@@ -162,6 +172,22 @@ class GateTests(unittest.TestCase):
                 self.root / "crates/aw-sec-core",
                 ["aw-contracts", "serde", "serde_json", "thiserror"],
             ),
+            (
+                "aw-sec-host",
+                self.root / "crates/aw-sec-host",
+                [
+                    "aw-contracts", "aw-core", "aw-sec-core",
+                    "serde", "serde_json", "thiserror", "libc",
+                ],
+            ),
+            (
+                "aw-hook-cli",
+                self.root / "crates/aw-hook-cli",
+                [
+                    "aw-contracts", "aw-core", "aw-adapters", "aw-sec-host",
+                    "serde", "serde_json", "thiserror", "libc",
+                ],
+            ),
         ):
             (directory / "src").mkdir(parents=True)
             (directory / "src/lib.rs").write_text("//! Fixture.\n", encoding="utf-8")
@@ -177,11 +203,14 @@ class GateTests(unittest.TestCase):
                             "path": (
                                 str(self.root)
                                 if dependency == "aw-contracts"
-                                else str(core) if dependency == "aw-core" else None
+                                else (
+                                    str(self.root / "crates" / dependency)
+                                    if dependency.startswith("aw-") else None
+                                )
                             ),
                             "source": (
                                 None
-                                if dependency in ("aw-contracts", "aw-core")
+                                if dependency.startswith("aw-")
                                 else "registry+fixture"
                             ),
                         }
@@ -202,9 +231,22 @@ class GateTests(unittest.TestCase):
             (3, "aw-adapters"),
             (3, "tokio"),
             (3, "agent-sec-core"),
+            (0, "aw-sec-host"),
+            (0, "aw-hook-cli"),
+            (1, "aw-sec-host"),
+            (1, "aw-hook-cli"),
+            (4, "tokio"),
+            (5, "tokio"),
         ):
             invalid = json.loads(json.dumps(metadata))
             invalid["packages"][package]["dependencies"].append({"name": dependency})
+            with self.assertRaises(ValueError):
+                gate.structure(invalid, self.root)
+        for package, dependency in ((4, 2), (5, 2), (5, 3)):
+            invalid = json.loads(json.dumps(metadata))
+            invalid["packages"][package]["dependencies"][dependency]["path"] = str(
+                self.root / "other-crate"
+            )
             with self.assertRaises(ValueError):
                 gate.structure(invalid, self.root)
         invalid = json.loads(json.dumps(metadata))
