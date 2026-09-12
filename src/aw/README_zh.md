@@ -16,7 +16,7 @@ python3 src/aw/scripts/check.py
 ```
 
 入口依次运行 CI 行为测试、格式检查、Clippy、完整的 locked workspace 测试、
-Python/JavaScript 摘要向量和 rustdoc。缺少工具、合同、计划、Core 执行、Journal 、adapter profile/native/bridge 、SecCore pii、原生 Host 或 hook CLI 测试目标为空或全部
+Python/JavaScript 摘要向量和 rustdoc。缺少工具、合同、计划、Core 执行、Journal 、adapter profile/native/bridge 、SecCore pii、共享进程、Tokenless projection/Core、原生 Host 或 hook CLI 测试目标为空或全部
 ignored、向量错误及命令失败均返回非零。每条命令都有超时限制，失败或中断时
 回收其子进程组。日志标明失败命令，可在 `src/aw` 单独运行对应命令定位问题。
 
@@ -41,7 +41,7 @@ Linux ARM64、相同的运行时版本及固定 Rust 工具链。
 
 所有权、取消、失败和接入约束见 [Core 执行与存储](docs/design/core-execution_zh.md)。
 测试使用合成 Host；该 crate 尚未连接生产 Provider，也不证明原生宿主已采用结果。
-统一检查强制六个 crate 的依赖边界及 Rust 文件 700 行上限（600 行提醒）；现有
+统一检查强制八个 crate 的依赖边界及 Rust 文件 700 行上限（600 行提醒）；现有
 合同校验文件单独保持 711 行非增长上限。这些检查辅助代码评审，不替代运行时验收。
 
 ## 原生 adapter 嵌入
@@ -70,6 +70,13 @@ src/aw/target/debug/aw-hook-cli --help
 可信 launcher 提供私有配置和存活 Agent 身份。Qoder 限于显式绑定的单轮调用。
 不自动安装 hooks，已有安全插件仍需保留。详见 [CLI 与配置参考](../../docs/user-guide/zh/user-entrypoint/aw.md)
 及 [Host 架构](docs/design/sec-core-host_zh.md)。
+
+## Tokenless 投影嵌入
+
+`aw-tokenless-host` 通过已准入的原生 Tokenless CLI 为 Core 生成投影候选，与 SecCore
+共享有界的 `aw-host-process`，仅引入原生纯协议 crate。计划选择 preserve 策略时，
+失败或无收益保留原文。候选要求显式接受 `unrecoverable`；生成不证明采用或模型收益。
+profile、配置及显式原生验收见 [Tokenless Host](docs/design/tokenless-host_zh.md)。
 
 ## 源码参考
 

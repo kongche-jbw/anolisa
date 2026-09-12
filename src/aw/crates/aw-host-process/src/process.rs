@@ -1,10 +1,13 @@
 //! Bounded native pipes and Linux process-group cleanup without helper threads.
 
-use crate::Config;
+use crate::{Config, Error};
 use aw_core::ports::Cancellation;
 
-pub(crate) struct Output {
+/// Native exit status and bounded stdout after verified process-group cleanup.
+pub struct Output {
+    /// Native exit code, or -1 for termination by a signal.
     pub exit_code: i32,
+    /// Exact captured native stdout; stderr is discarded.
     pub stdout: Vec<u8>,
 }
 
@@ -324,20 +327,31 @@ mod linux {
     }
 }
 
-pub(crate) fn run(
+/// Exchanges native pipes using an already validated, caller-pinned configuration.
+///
+/// The caller owns protocol selection, checks pins before/after the exchange, and
+/// exclusively owns child reaping. This function enforces configured stream limits
+/// and the supplied timeout, then verifies owned-group cleanup with a one-second
+/// grace. It installs no signal handlers and does not contain setsid escapes.
+///
+/// # Errors
+/// Returns bounded errors for spawn/I/O, stream limits, timeout, cancellation,
+/// unverifiable cleanup or unsupported platforms. Kernel-blocked operations have
+/// no hard realtime completion guarantee; Drop never performs a blocking wait.
+pub fn run(
     config: &Config,
     argv: &[&str],
     request: &[u8],
     timeout_ms: u64,
     cancellation: &dyn Cancellation,
-) -> Result<Output, &'static str> {
+) -> Result<Output, Error> {
     #[cfg(target_os = "linux")]
     {
-        linux::run(config, argv, request, timeout_ms, cancellation)
+        linux::run(config, argv, request, timeout_ms, cancellation).map_err(Error::Process)
     }
     #[cfg(not(target_os = "linux"))]
     {
         let _ = (config, argv, request, timeout_ms, cancellation);
-        Err("unsupported_platform")
+        Err(Error::Process("unsupported_platform"))
     }
 }

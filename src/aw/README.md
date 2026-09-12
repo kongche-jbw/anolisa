@@ -18,7 +18,7 @@ python3 src/aw/scripts/check.py
 The entry runs CI behavior tests, formatting, Clippy, all locked workspace tests,
 the Python/JavaScript digest vectors and rustdoc. Missing tools, empty or fully
 ignored contract, plan, Core execution, journal, adapter profile/native/bridge,
-SecCore pii, native Host or hook CLI test targets, invalid vectors and command
+SecCore pii, shared process, Tokenless projection/Core, native Host or hook CLI test targets, invalid vectors and command
 failures return nonzero. Each command has a timeout and its child process group is cleaned up on
 failure or interruption. Logs identify the failing command; individual commands
 can be run from `src/aw` for diagnosis.
@@ -50,7 +50,7 @@ events remain reserved; there is no automatic retry or recovery.
 See [Core execution and storage](docs/design/core-execution.md) for ownership,
 cancellation, failure and embedding contracts. The tests use synthetic Hosts;
 this crate does not connect a production Provider or establish native adoption.
-The shared check enforces the six-crate dependency boundaries and a 700-line Rust
+The shared check enforces the eight-crate dependency boundaries and a 700-line Rust
 file limit (600-line warning); the existing contract validator remains capped at
 711 lines. These checks supplement review, not runtime acceptance.
 
@@ -90,6 +90,16 @@ A trusted launcher supplies private settings and live Agent identity. Qoder is
 limited to an explicitly bound single turn. No hooks are installed automatically,
 and existing security plugins remain necessary. See the [CLI and configuration
 reference](../../docs/user-guide/en/user-entrypoint/aw.md) and [Host architecture](docs/design/sec-core-host.md).
+
+## Tokenless projection embedding
+
+`aw-tokenless-host` uses the admitted native Tokenless CLI to prepare projection
+candidates through Core. It shares the bounded `aw-host-process` runner with
+SecCore and imports only the native pure protocol crate. Failed or unhelpful
+projection preserves the source when the plan selects that policy. Candidates
+require explicit acceptance of `unrecoverable`; generation does not prove
+adoption or model savings. See [Tokenless Host](docs/design/tokenless-host.md)
+for the profile, configuration and explicit native acceptance checks.
 
 ## Source reference
 

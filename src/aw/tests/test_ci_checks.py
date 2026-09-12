@@ -93,6 +93,17 @@ class GateTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 gate.sha(invalid)
 
+    def test_scope_tracks_tokenless_protocol_and_workspace_manifest(self) -> None:
+        before = self.init_git()
+        for path in (
+            "src/tokenless/crates/tokenless-protocol/src/lib.rs", "src/tokenless/Cargo.toml",
+        ):
+            after = self.commit(path, "fixture")
+            self.assertTrue(gate.scope("push", {"before": before, "after": after}, after, self.root))
+            before = after
+        after = self.commit("src/tokenless/crates/tokenless-runtime/src/lib.rs", "fixture")
+        self.assertFalse(gate.scope("push", {"before": before, "after": after}, after, self.root))
+
     def test_inventory_rejects_empty_ignored_and_missing_targets(self) -> None:
         cargo = self.root / "cargo"
         cargo.write_text(
@@ -113,6 +124,11 @@ class GateTests(unittest.TestCase):
             "    mode = 'empty' if 'aw-sec-host' in sys.argv and 'host' in sys.argv else 'valid'\n"
             "if mode == 'hook-cli-empty-hook':\n"
             "    mode = 'empty' if 'aw-hook-cli' in sys.argv and 'hook' in sys.argv else 'valid'\n"
+            "if mode == 'process-empty-process':\n"
+            "    mode = 'empty' if 'aw-host-process' in sys.argv and 'process' in sys.argv else 'valid'\n"
+            "if mode.startswith('tokenless-empty-'):\n"
+            "    target = mode.removeprefix('tokenless-empty-')\n"
+            "    mode = 'empty' if 'aw-tokenless-host' in sys.argv and target in sys.argv else 'valid'\n"
             "if mode == 'missing': sys.exit(7)\n"
             "if mode == 'empty' or (mode == 'valid' and '--ignored' in sys.argv):\n"
             "    print('0 tests, 0 benchmarks')\n"
@@ -132,6 +148,7 @@ class GateTests(unittest.TestCase):
             "sec-core-empty-pii",
             "sec-host-empty-host",
             "hook-cli-empty-hook",
+            "process-empty-process", "tokenless-empty-projection", "tokenless-empty-core",
             "contract-empty-canonical", "contract-empty-schemas",
             "contract-empty-contracts", "contract-empty-orchestration",
         ):
@@ -157,6 +174,32 @@ class GateTests(unittest.TestCase):
                 gate.inventory(malformed)
 
     def test_structure_enforces_crate_boundaries_and_source_limits(self) -> None:
+        self.root = self.root / "aw"
+        self.root.mkdir()
+        native = self.root.parent / "tokenless"
+        protocol = native / "crates/tokenless-protocol/Cargo.toml"
+        protocol.parent.mkdir(parents=True)
+        protocol_text = (
+            '[package]\nname = "tokenless-protocol"\n[dependencies]\n'
+            'serde.workspace = true\nserde_json.workspace = true\nthiserror.workspace = true\n'
+        )
+        workspace_text = '[workspace.dependencies]\nserde = "1"\nserde_json = "1"\nthiserror = "2"\n'
+        protocol.write_text(protocol_text)
+        (native / "Cargo.toml").write_text(workspace_text)
+        gate.protocol_dependencies(self.root)
+        for extra in (
+            'tokenless-runtime = { path = "../tokenless-runtime" }\n',
+            '[target.\'cfg(unix)\'.dependencies]\ntokenless-compressors = "1"\n',
+            '[build-dependencies]\ntokenless-runtime = "1"\n',
+        ):
+            protocol.write_text(protocol_text + extra)
+            with self.assertRaises(ValueError):
+                gate.protocol_dependencies(self.root)
+        protocol.write_text(protocol_text)
+        (native / "Cargo.toml").write_text(workspace_text.replace('serde = "1"', 'serde = { path = "engine" }'))
+        with self.assertRaises(ValueError):
+            gate.protocol_dependencies(self.root)
+        (native / "Cargo.toml").write_text(workspace_text)
         core = self.root / "crates/aw-core"
         packages = []
         for name, directory, dependencies in (
@@ -176,8 +219,8 @@ class GateTests(unittest.TestCase):
                 "aw-sec-host",
                 self.root / "crates/aw-sec-host",
                 [
-                    "aw-contracts", "aw-core", "aw-sec-core",
-                    "serde", "serde_json", "thiserror", "libc",
+                    "aw-contracts", "aw-core", "aw-sec-core", "aw-host-process",
+                    "serde_json", "thiserror",
                 ],
             ),
             (
@@ -187,6 +230,15 @@ class GateTests(unittest.TestCase):
                     "aw-contracts", "aw-core", "aw-adapters", "aw-sec-host",
                     "serde", "serde_json", "thiserror", "libc",
                 ],
+            ),
+            (
+                "aw-host-process", self.root / "crates/aw-host-process",
+                ["aw-contracts", "aw-core", "serde", "serde_json", "thiserror", "libc"],
+            ),
+            (
+                "aw-tokenless-host", self.root / "crates/aw-tokenless-host",
+                ["aw-contracts", "aw-core", "aw-host-process", "tokenless-protocol",
+                 "serde", "serde_json", "thiserror"],
             ),
         ):
             (directory / "src").mkdir(parents=True)
@@ -205,12 +257,15 @@ class GateTests(unittest.TestCase):
                                 if dependency == "aw-contracts"
                                 else (
                                     str(self.root / "crates" / dependency)
-                                    if dependency.startswith("aw-") else None
+                                    if dependency.startswith("aw-") else (
+                                        str(self.root.parent / "tokenless/crates/tokenless-protocol")
+                                        if dependency == "tokenless-protocol" else None
+                                    )
                                 )
                             ),
                             "source": (
                                 None
-                                if dependency.startswith("aw-")
+                                if dependency.startswith("aw-") or dependency == "tokenless-protocol"
                                 else "registry+fixture"
                             ),
                         }
@@ -237,12 +292,16 @@ class GateTests(unittest.TestCase):
             (1, "aw-hook-cli"),
             (4, "tokio"),
             (5, "tokio"),
+            (0, "aw-host-process"), (1, "aw-host-process"),
+            (4, "libc"), (6, "aw-sec-core"), (6, "aw-tokenless-host"),
+            (6, "tokio"), (7, "tokio"), (7, "tokenless-runtime"),
+            (7, "tokenless-compressors"), (6, "tokenless-protocol"),
         ):
             invalid = json.loads(json.dumps(metadata))
             invalid["packages"][package]["dependencies"].append({"name": dependency})
             with self.assertRaises(ValueError):
                 gate.structure(invalid, self.root)
-        for package, dependency in ((4, 2), (5, 2), (5, 3)):
+        for package, dependency in ((4, 2), (4, 3), (5, 2), (5, 3), (7, 2), (7, 3)):
             invalid = json.loads(json.dumps(metadata))
             invalid["packages"][package]["dependencies"][dependency]["path"] = str(
                 self.root / "other-crate"

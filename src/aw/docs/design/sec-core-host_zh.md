@@ -15,11 +15,13 @@ Provider 声明 `security.content.inspect/v2`、`authority: advise` 和
 | `aw-core` | Contracts | 固定计划的准备、串行执行及经确认的 Journal 记录 |
 | `aw-adapters` | Contracts、Core | 原生文本捕获、身份一致性及检查计划桥接 |
 | `aw-sec-core` | Contracts | 内容检查与原生 PII JSON 之间的纯映射 |
-| `aw-sec-host` | Contracts、Core、SecCore 映射 | 原生进程所有权、资源边界及 Provider receipt |
+| `aw-host-process` | Contracts、Core | 共享启动 pin、有界进程所有权与取消 |
+| `aw-sec-host` | Contracts、Core、SecCore 映射、Host process | 原生准入、协议映射及 Provider receipt |
+| `aw-tokenless-host` | Contracts、Core、Host process | 原生投影映射及回执；另依赖 Tokenless 纯协议 |
 | `aw-hook-cli` | Contracts、Core、Adapters、Host | 显式启用的 hook 配置、实时 owner 校验及单事件组合 |
 
 Core 与 Contracts 不依赖具体 Host。原生协议映射不创建进程，也不实现 scanner。
-Host 与 hook 仅在 Linux 进程边界使用 `libc`；两者均不引入 async runtime 或另一套
+共享进程 runner 与 hook 仅在 Linux 进程边界使用 `libc`；两者均不引入 async runtime 或另一套
 Agent supervisor。统一检查入口约束这些依赖、源码大小及 Host/hook 集成目标非空。
 
 数据路径为：原生 payload → Adapter 捕获 → Core 准备/执行 → Host 进程 → 原生

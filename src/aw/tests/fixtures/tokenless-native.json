@@ -1,0 +1,201 @@
+{
+  "native_cli_version": "0.8.1",
+  "native_source_commit": "b8219ed9bca798bcf431b331192580bd8799a407",
+  "protocol_version": 2,
+  "cases": [
+    {
+      "name": "json_cleanup",
+      "request": {
+        "protocol_version": 2,
+        "operation": "post_tool",
+        "attribution": {
+          "agent_id": "fixture-agent",
+          "session_id": "fixture-session",
+          "tool_use_id": "fixture-call"
+        },
+        "input": {
+          "result_kind": "tool",
+          "tool_name": "Bash",
+          "content": "{\"count\":8,\"debug\":\"cache=miss upstream=registry-04 trace=9f2e11c0 backend_latency_ms=184 retries=0\",\"results\":[{\"homepage\":\"\",\"license\":null,\"name\":\"pkg-0\",\"version\":\"1.0.0\"},{\"homepage\":\"\",\"license\":null,\"name\":\"pkg-1\",\"version\":\"1.0.0\"},{\"homepage\":\"\",\"license\":null,\"name\":\"pkg-2\",\"version\":\"1.0.0\"},{\"homepage\":\"\",\"license\":null,\"name\":\"pkg-3\",\"version\":\"1.0.0\"},{\"homepage\":\"\",\"license\":null,\"name\":\"pkg-4\",\"version\":\"1.0.0\"},{\"homepage\":\"\",\"license\":null,\"name\":\"pkg-5\",\"version\":\"1.0.0\"},{\"homepage\":\"\",\"license\":null,\"name\":\"pkg-6\",\"version\":\"1.0.0\"},{\"homepage\":\"\",\"license\":null,\"name\":\"pkg-7\",\"version\":\"1.0.0\"}],\"status\":200,\"url\":\"https://registry.example.com/packages\"}",
+          "status": "success",
+          "content_origin": "command_output",
+          "output_optimization": "none",
+          "capabilities": {
+            "replace_output": true,
+            "recovery": {
+              "kind": "none"
+            },
+            "replace_with_text": false
+          }
+        }
+      },
+      "exit_code": 0,
+      "response": {
+        "protocol_version": 2,
+        "operation": "post_tool",
+        "attribution": {
+          "agent_id": "fixture-agent",
+          "session_id": "fixture-session",
+          "tool_use_id": "fixture-call"
+        },
+        "result": {
+          "output": "{\"count\":8,\"results\":[{\"name\":\"pkg-0\",\"version\":\"1.0.0\"},{\"name\":\"pkg-1\",\"version\":\"1.0.0\"},{\"name\":\"pkg-2\",\"version\":\"1.0.0\"},{\"name\":\"pkg-3\",\"version\":\"1.0.0\"},{\"name\":\"pkg-4\",\"version\":\"1.0.0\"},{\"name\":\"pkg-5\",\"version\":\"1.0.0\"},{\"name\":\"pkg-6\",\"version\":\"1.0.0\"},{\"name\":\"pkg-7\",\"version\":\"1.0.0\"}],\"status\":200,\"url\":\"https://registry.example.com/packages\"}",
+          "disposition": "applied",
+          "content_type": "json",
+          "applied_operations": [
+            "json_cleanup"
+          ],
+          "recoverability": "lossless",
+          "before_tokens": 171,
+          "after_tokens": 91,
+          "stash_keys": [],
+          "tokenizer_id": "heuristic-v1"
+        }
+      }
+    },
+    {
+      "name": "short_text",
+      "request": {
+        "protocol_version": 2,
+        "operation": "post_tool",
+        "attribution": {
+          "agent_id": "fixture-agent",
+          "session_id": "fixture-session",
+          "tool_use_id": "fixture-call"
+        },
+        "input": {
+          "result_kind": "tool",
+          "tool_name": "Bash",
+          "content": "done\n",
+          "status": "success",
+          "content_origin": "command_output",
+          "output_optimization": "none",
+          "capabilities": {
+            "replace_output": true,
+            "recovery": {
+              "kind": "none"
+            },
+            "replace_with_text": false
+          }
+        }
+      },
+      "exit_code": 0,
+      "response": {
+        "protocol_version": 2,
+        "operation": "post_tool",
+        "attribution": {
+          "agent_id": "fixture-agent",
+          "session_id": "fixture-session",
+          "tool_use_id": "fixture-call"
+        },
+        "result": {
+          "output": "done\n",
+          "disposition": "passthrough",
+          "content_type": "plain_text",
+          "applied_operations": [],
+          "recoverability": "lossless",
+          "before_tokens": 2,
+          "after_tokens": 2,
+          "stash_keys": [],
+          "tokenizer_id": "heuristic-v1"
+        }
+      }
+    },
+    {
+      "name": "unicode",
+      "request": {
+        "protocol_version": 2,
+        "operation": "post_tool",
+        "attribution": {
+          "agent_id": "fixture-agent",
+          "session_id": "fixture-session",
+          "tool_use_id": "fixture-call"
+        },
+        "input": {
+          "result_kind": "tool",
+          "tool_name": "Bash",
+          "content": "完成\n🙂\n",
+          "status": "success",
+          "content_origin": "command_output",
+          "output_optimization": "none",
+          "capabilities": {
+            "replace_output": true,
+            "recovery": {
+              "kind": "none"
+            },
+            "replace_with_text": false
+          }
+        }
+      },
+      "exit_code": 0,
+      "response": {
+        "protocol_version": 2,
+        "operation": "post_tool",
+        "attribution": {
+          "agent_id": "fixture-agent",
+          "session_id": "fixture-session",
+          "tool_use_id": "fixture-call"
+        },
+        "result": {
+          "output": "完成\n🙂\n",
+          "disposition": "passthrough",
+          "content_type": "plain_text",
+          "applied_operations": [],
+          "recoverability": "lossless",
+          "before_tokens": 3,
+          "after_tokens": 3,
+          "stash_keys": [],
+          "tokenizer_id": "heuristic-v1"
+        }
+      }
+    },
+    {
+      "name": "no_savings",
+      "request": {
+        "protocol_version": 2,
+        "operation": "post_tool",
+        "attribution": {
+          "agent_id": "fixture-agent",
+          "session_id": "fixture-session",
+          "tool_use_id": "fixture-call"
+        },
+        "input": {
+          "result_kind": "tool",
+          "tool_name": "Bash",
+          "content": "[{\"id\":0,\"message\":\"record-0-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"},{\"id\":1,\"message\":\"record-1-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"},{\"id\":2,\"message\":\"record-2-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"},{\"id\":3,\"message\":\"record-3-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}]",
+          "status": "success",
+          "content_origin": "command_output",
+          "output_optimization": "none",
+          "capabilities": {
+            "replace_output": true,
+            "recovery": {
+              "kind": "none"
+            },
+            "replace_with_text": false
+          }
+        }
+      },
+      "exit_code": 0,
+      "response": {
+        "protocol_version": 2,
+        "operation": "post_tool",
+        "attribution": {
+          "agent_id": "fixture-agent",
+          "session_id": "fixture-session",
+          "tool_use_id": "fixture-call"
+        },
+        "result": {
+          "output": "[{\"id\":0,\"message\":\"record-0-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"},{\"id\":1,\"message\":\"record-1-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"},{\"id\":2,\"message\":\"record-2-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"},{\"id\":3,\"message\":\"record-3-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}]",
+          "disposition": "no_savings",
+          "content_type": "json",
+          "applied_operations": [],
+          "recoverability": "lossless",
+          "before_tokens": 112,
+          "after_tokens": 112,
+          "stash_keys": [],
+          "tokenizer_id": "heuristic-v1"
+        }
+      }
+    }
+  ]
+}

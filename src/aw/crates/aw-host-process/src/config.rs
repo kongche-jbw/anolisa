@@ -2,7 +2,6 @@
 
 use crate::Error;
 use aw_contracts::canonical;
-use aw_sec_core::{MAX_OUTPUT_BYTES, PROTOCOL_PROFILE};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -12,8 +11,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// Native CLI version whose PII protocol was verified for this Host revision.
-pub const NATIVE_CLI_VERSION: &str = "0.12.0";
+/// Maximum configured byte ceiling for each native protocol stream.
+pub const MAX_STREAM_BYTES: usize = 4 * 1024 * 1024;
 const MAX_PIN_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Independent hard limits; invocation budgets can only tighten them.
@@ -78,8 +77,11 @@ pub struct Config {
 }
 
 impl Config {
-    /// Checks launch shape before reading pins or starting the native version probe.
-    pub(crate) fn validate(&self) -> Result<(), Error> {
+    /// Checks launch shape before reading pins or starting a native version probe.
+    ///
+    /// # Errors
+    /// Rejects unsupported platforms, malformed paths, limits, arguments or pins.
+    pub fn validate(&self) -> Result<(), Error> {
         if !cfg!(target_os = "linux")
             || !absolute_utf8(&self.program)
             || !absolute_utf8(&self.cwd)
@@ -94,7 +96,7 @@ impl Config {
         if !(1..=300_000).contains(&limits.timeout_ms)
             || [limits.input_bytes, limits.output_bytes, limits.stderr_bytes]
                 .iter()
-                .any(|n| !(1..=MAX_OUTPUT_BYTES).contains(n))
+                .any(|n| !(1..=MAX_STREAM_BYTES).contains(n))
         {
             return Err(Error::Configuration(
                 "limits exceed the bounded native profile",
@@ -127,32 +129,45 @@ impl Config {
     }
 
     /// Rechecks selected bytes and explicit absences without exposing their content.
-    pub(crate) fn check_pins(&self) -> Result<(), &'static str> {
+    ///
+    /// # Errors
+    /// Rejects changed, unavailable or oversized selected files and broken absences.
+    pub fn check_pins(&self) -> Result<(), Error> {
         if digest_file(&self.program)? != self.program_sha256 {
-            return Err("program_changed");
+            return Err(Error::Configuration("program_changed"));
         }
         for pin in &self.pins {
             match &pin.state {
                 PinState::Sha256(expected) if digest_file(&pin.path)? != *expected => {
-                    return Err("pinned_file_changed")
+                    return Err(Error::Configuration("pinned_file_changed"))
                 }
                 PinState::Sha256(_) => {}
                 PinState::Absent => match fs::symlink_metadata(&pin.path) {
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    _ => return Err("pinned_absence_changed"),
+                    _ => return Err(Error::Configuration("pinned_absence_changed")),
                 },
             }
         }
         Ok(())
     }
 
-    /// Binds the complete declared launch configuration and fixed native protocol.
-    pub(crate) fn manifest(&self) -> Result<Value, Error> {
+    /// Binds the launch configuration to a Host-selected native protocol profile.
+    ///
+    /// The Host supplies fixed, reviewed profile values, never native tool arguments.
+    ///
+    /// # Errors
+    /// Returns a configuration error if the declaration cannot be serialized.
+    pub fn manifest(
+        &self,
+        native_cli_version: &str,
+        protocol_profile: &str,
+        operation: &str,
+    ) -> Result<Value, Error> {
         let config = serde_json::to_value(self)
             .map_err(|_| Error::Configuration("configuration cannot be serialized"))?;
         Ok(
-            json!({"format":1,"config":config,"native_cli_version":NATIVE_CLI_VERSION,
-            "protocol_profile":PROTOCOL_PROFILE,"operation":"security.content.inspect/v2"}),
+            json!({"format":1,"config":config,"native_cli_version":native_cli_version,
+            "protocol_profile":protocol_profile,"operation":operation}),
         )
     }
 }
@@ -168,7 +183,7 @@ fn digest_shape(digest: &str) -> bool {
             .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
 }
 
-fn digest_file(path: &Path) -> Result<String, &'static str> {
+fn digest_file(path: &Path) -> Result<String, Error> {
     let mut options = OpenOptions::new();
     options.read(true);
     #[cfg(target_os = "linux")]
@@ -177,17 +192,21 @@ fn digest_file(path: &Path) -> Result<String, &'static str> {
         // A path replaced by a FIFO must not block the pin check before metadata.
         options.custom_flags(libc::O_NONBLOCK);
     }
-    let file = options.open(path).map_err(|_| "pinned_file_unavailable")?;
-    let metadata = file.metadata().map_err(|_| "pinned_file_unavailable")?;
+    let file = options
+        .open(path)
+        .map_err(|_| Error::Configuration("pinned_file_unavailable"))?;
+    let metadata = file
+        .metadata()
+        .map_err(|_| Error::Configuration("pinned_file_unavailable"))?;
     if !metadata.is_file() || metadata.len() > MAX_PIN_BYTES {
-        return Err("invalid_pinned_file");
+        return Err(Error::Configuration("invalid_pinned_file"));
     }
     let mut bytes = Vec::new();
     file.take(MAX_PIN_BYTES + 1)
         .read_to_end(&mut bytes)
-        .map_err(|_| "pinned_file_unavailable")?;
+        .map_err(|_| Error::Configuration("pinned_file_unavailable"))?;
     if bytes.len() as u64 > MAX_PIN_BYTES {
-        return Err("invalid_pinned_file");
+        return Err(Error::Configuration("invalid_pinned_file"));
     }
     Ok(canonical::digest(&bytes))
 }

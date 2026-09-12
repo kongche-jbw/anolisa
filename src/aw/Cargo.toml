@@ -6,6 +6,8 @@ members = [
     "crates/aw-sec-core",
     "crates/aw-sec-host",
     "crates/aw-hook-cli",
+    "crates/aw-host-process",
+    "crates/aw-tokenless-host",
 ]
 resolver = "2"
 
@@ -15,6 +17,8 @@ aw-core = { path = "crates/aw-core" }
 aw-adapters = { path = "crates/aw-adapters" }
 aw-sec-core = { path = "crates/aw-sec-core" }
 aw-sec-host = { path = "crates/aw-sec-host" }
+aw-host-process = { path = "crates/aw-host-process" }
+tokenless-protocol = { path = "../tokenless/crates/tokenless-protocol" }
 libc = "0.2"
 jsonschema = { version = "0.53", default-features = false }
 serde = { version = "1", features = ["derive"] }

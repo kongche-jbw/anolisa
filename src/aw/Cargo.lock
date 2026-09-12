@@ -82,6 +82,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "aw-host-process"
+version = "0.1.0"
+dependencies = [
+ "aw-contracts",
+ "aw-core",
+ "libc",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "aw-sec-core"
 version = "0.1.0"
 dependencies = [
@@ -97,11 +109,23 @@ version = "0.1.0"
 dependencies = [
  "aw-contracts",
  "aw-core",
+ "aw-host-process",
  "aw-sec-core",
- "libc",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "aw-tokenless-host"
+version = "0.1.0"
+dependencies = [
+ "aw-contracts",
+ "aw-core",
+ "aw-host-process",
  "serde",
  "serde_json",
  "thiserror",
+ "tokenless-protocol",
 ]
 
 [[package]]
@@ -734,6 +758,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.5",
+]
+
+[[package]]
+name = "tokenless-protocol"
+version = "0.8.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]

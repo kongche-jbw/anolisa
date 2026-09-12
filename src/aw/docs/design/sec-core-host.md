@@ -16,11 +16,13 @@ advertises `security.content.inspect/v2`, `authority: advise` and
 | `aw-core` | Contracts | Pinned preparation, serial execution and acknowledged journal records |
 | `aw-adapters` | Contracts, Core | Native text capture, identity consistency and inspection-plan bridging |
 | `aw-sec-core` | Contracts | Pure mapping between content inspection and native PII JSON |
-| `aw-sec-host` | Contracts, Core, SecCore mapping | Native process ownership, resource bounds and Provider receipts |
+| `aw-host-process` | Contracts, Core | Shared launch pins, bounded process ownership and cancellation |
+| `aw-sec-host` | Contracts, Core, SecCore mapping, Host process | Native admission, protocol mapping and Provider receipts |
+| `aw-tokenless-host` | Contracts, Core, Host process | Native projection mapping and receipts; pure Tokenless protocol dependency |
 | `aw-hook-cli` | Contracts, Core, Adapters, Host | Opt-in hook settings, live owner checks and one-event composition |
 
 Core and Contracts have no dependency on the concrete Host. Native protocol
-mapping creates no process and implements no scanner. The Host and hook use
+mapping creates no process and implements no scanner. The shared process runner and hook use
 `libc` only for their Linux process boundaries; neither introduces an async
 runtime or another Agent supervisor. The shared gate checks these dependencies,
 source limits and nonempty Host/hook integration targets.

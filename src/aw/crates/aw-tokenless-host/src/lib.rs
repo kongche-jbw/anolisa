@@ -1,15 +1,18 @@
-//! Runs the existing SecCore native content scanner through a bounded Host port.
+//! Runs the existing Tokenless native post-tool compressor through a bounded Host port.
 //! Program/configuration pinning is local provenance, not sandbox attestation.
 
 use aw_host_process as process;
 pub use aw_host_process::{Config, FilePin, Limits, PinState};
 
-/// Native CLI version whose PII protocol was verified for this Host revision.
-pub const NATIVE_CLI_VERSION: &str = "0.12.0";
+/// Native CLI version whose post-tool protocol was verified for this Host revision.
+pub const NATIVE_CLI_VERSION: &str = "0.8.1";
+/// Mapping identity: native task semantics do not imply byte-exact AW recovery.
+pub const PROTOCOL_PROFILE: &str = "aw-projection-v2/tokenless-v2-no-recovery/v1";
 
 use aw_contracts::{canonical, Registry};
 use aw_core::ports::{Cancellation, HostError, NeverCancel, ProviderHost, ProviderResult};
-use aw_sec_core::PiiRequest;
+mod protocol;
+use protocol::ProjectionRequest;
 use serde_json::{json, Value};
 use std::{
     sync::Arc,
@@ -20,25 +23,30 @@ use std::{
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// Configuration cannot establish a bounded local execution.
-    #[error("invalid SecCore Host configuration: {0}")]
+    #[error("invalid Tokenless Host configuration: {0}")]
     Configuration(&'static str),
     /// The bounded native version probe failed.
-    #[error("SecCore version probe failed: {0}")]
+    #[error("Tokenless version probe failed: {0}")]
     Native(&'static str),
     /// The descriptor does not satisfy the existing AW contracts.
-    #[error("SecCore Host contract failed: {0}")]
+    #[error("Tokenless Host contract failed: {0}")]
     Contract(#[from] aw_contracts::Error),
 }
 
-/// One explicitly registered Provider using the native SecCore PII CLI protocol.
-pub struct SecHost {
+/// One explicitly registered Provider using the native Tokenless post-tool CLI protocol.
+///
+/// Callers must establish successful tool completion before admission: AW's
+/// artifact schema carries origin but no process exit status. This Host accepts
+/// only explicitly identified command output and never executes its command.
+/// Prepared candidates do not establish adoption or byte-exact recovery.
+pub struct TokenlessHost {
     config: Config,
     descriptor: Value,
     registry: Registry,
     cancellation: Arc<dyn Cancellation + Send + Sync>,
 }
 
-impl SecHost {
+impl TokenlessHost {
     /// Pins a launch configuration and validates its capability descriptor.
     ///
     /// # Errors
@@ -63,20 +71,31 @@ impl SecHost {
         config
             .validate()
             .map_err(|error| Error::Configuration(error.code()))?;
+        for (key, value) in [
+            ("TOKENLESS_STATS_ENABLED", "0"),
+            ("TOKENLESS_SLS_ENABLED", "0"),
+            ("TOKENLESS_COMPRESSION_ENABLED", "1"),
+        ] {
+            if config.environment.get(key).map(String::as_str) != Some(value) {
+                return Err(Error::Configuration(
+                    "explicit native controls are required",
+                ));
+            }
+        }
         let manifest = config
             .manifest(
                 NATIVE_CLI_VERSION,
-                aw_sec_core::PROTOCOL_PROFILE,
-                "security.content.inspect/v2",
+                PROTOCOL_PROFILE,
+                "context.projection.prepare/v2",
             )
             .map_err(|error| Error::Configuration(error.code()))?;
         let registry = Registry::new()?;
         let descriptor = json!({"provider_id":config.provider_id,"provider_version":config.provider_version,
-            "manifest_digest":canonical::document_digest(&manifest)?,"driver":"sec-core/native-stdio/v1",
+            "manifest_digest":canonical::document_digest(&manifest)?,"driver":"tokenless/native-stdio/v2",
             "lifecycle":"process/per-call/v1","guarantee":"declared","capabilities":[{
-                "capability":"security.content.inspect/v2","authority":"advise",
-                "input_schema":registry.reference("security-content-inspect-input-v2")?,
-                "output_schema":registry.reference("security-content-inspect-output-v2")?,"boundaries":["post_tool"]}]});
+                "capability":"context.projection.prepare/v2","authority":"advise",
+                "input_schema":registry.reference("context-projection-prepare-input-v2")?,
+                "output_schema":registry.reference("context-projection-prepare-output-v2")?,"boundaries":["post_tool"]}]});
         registry.validate("provider-descriptor-v1", &descriptor)?;
         config
             .check_pins()
@@ -96,7 +115,7 @@ impl SecHost {
             return Err(Error::Native("provider_cancelled"));
         }
         if version.exit_code != 0
-            || version.stdout != format!("agent-sec-cli {NATIVE_CLI_VERSION}\n").as_bytes()
+            || version.stdout != format!("tokenless {NATIVE_CLI_VERSION}\n").as_bytes()
         {
             return Err(Error::Configuration("unsupported native CLI version"));
         }
@@ -108,9 +127,9 @@ impl SecHost {
         })
     }
 
-    fn inspect(&self, invocation: &Value, started: u64) -> Result<Value, &'static str> {
+    fn inspect(&self, invocation: &Value, started: u64) -> Result<Option<Value>, &'static str> {
         let input = &invocation["input"];
-        let request = PiiRequest::new(&self.registry, input).map_err(|_| "invalid_input")?;
+        let request = ProjectionRequest::new(&self.registry, input, &invocation["scope"])?;
         if invocation["input_digest"]
             != canonical::document_digest(input).map_err(|_| "invalid_input")?
         {
@@ -160,30 +179,24 @@ impl SecHost {
         )
         .map_err(|error| error.code())?;
         self.config.check_pins().map_err(|error| error.code())?;
-        let output =
-            request
-                .project(wire.exit_code, &wire.stdout)
-                .map_err(|error| match error {
-                    aw_sec_core::Error::NativeFailure => "native_failed",
-                    aw_sec_core::Error::OutputLimit => "native_output_limit",
-                    aw_sec_core::Error::IncompleteCoverage => "incomplete_coverage",
-                    _ => "invalid_native_response",
-                })?;
-        let bytes = canonical::bytes(&output)
-            .map_err(|_| "invalid_response")?
-            .len();
-        if bytes as u64
-            > invocation["budget"]["output_bytes"]
-                .as_u64()
-                .ok_or("invalid_budget")?
-        {
-            return Err("output_budget_exceeded");
+        let output = request.project(wire.exit_code, &wire.stdout, &self.registry)?;
+        if let Some(output) = &output {
+            let bytes = canonical::bytes(output)
+                .map_err(|_| "invalid_response")?
+                .len();
+            if bytes as u64
+                > invocation["budget"]["output_bytes"]
+                    .as_u64()
+                    .ok_or("invalid_budget")?
+            {
+                return Err("output_budget_exceeded");
+            }
         }
         Ok(output)
     }
 }
 
-impl ProviderHost for SecHost {
+impl ProviderHost for TokenlessHost {
     fn descriptor(&self, provider_id: &str) -> Option<&Value> {
         (self.descriptor["provider_id"] == provider_id).then_some(&self.descriptor)
     }
@@ -240,11 +253,21 @@ impl ProviderHost for SecHost {
             receipt[key] = invocation[key].clone();
         }
         let output = match result {
-            Ok(output) => {
+            Ok(Some(output)) => {
+                receipt["meters"] = json!([
+                    {"meter_id":"context.source_bytes","unit":"bytes","measurement_kind":"observed",
+                        "method":"utf8-length/v1","value":invocation["input"]["artifact"]["content"].as_str().map(str::len)},
+                    {"meter_id":"context.candidate_bytes","unit":"bytes","measurement_kind":"observed",
+                        "method":"utf8-length/v1","value":output["candidate"]["content"].as_str().map(str::len)}
+                ]);
                 receipt["disposition"] = json!("produced");
                 receipt["output"] = json!({"schema":invocation["output_schema"],"digest":canonical::document_digest(&output).map_err(|_|host_error("invalid_output"))?,
                     "bytes":canonical::bytes(&output).map_err(|_|host_error("invalid_output"))?.len()});
                 Some(output)
+            }
+            Ok(None) => {
+                receipt["disposition"] = json!("bypassed");
+                None
             }
             Err(code) => {
                 receipt["error_code"] = json!(code);

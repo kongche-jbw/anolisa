@@ -8,6 +8,7 @@ import re
 import signal
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 AW = Path(__file__).resolve().parents[1]
@@ -105,8 +106,9 @@ def scope(event_name: str, event: dict, actual: str, repo: Path = REPO) -> bool:
             )
         )
     return any(
-        path.startswith("src/aw/") or path in {
+        path.startswith(("src/aw/", "src/tokenless/crates/tokenless-protocol/")) or path in {
             ".github/workflows/aw-ci.yml",
+            "src/tokenless/Cargo.toml",
             "docs/user-guide/en/user-entrypoint/aw.md",
             "docs/user-guide/zh/user-entrypoint/aw.md",
         } for path in changed
@@ -146,6 +148,9 @@ def check_inventory() -> None:
         ("aw-sec-core", "pii"),
         ("aw-sec-host", "host"),
         ("aw-hook-cli", "hook"),
+        ("aw-host-process", "process"),
+        ("aw-tokenless-host", "projection"),
+        ("aw-tokenless-host", "core"),
     ):
         command = ["cargo", "test", "--locked", "-p", package, "--test", target, "--", "--list"]
         tests = inventory(run(command, AW, capture=True))
@@ -153,6 +158,34 @@ def check_inventory() -> None:
         if not ignored <= tests or not tests - ignored:
             raise ValueError(f"{target}: no runnable tests or inconsistent ignored inventory")
         print(f"{target}: {len(tests - ignored)} runnable tests", flush=True)
+
+
+def protocol_dependencies(root: Path) -> None:
+    """Keep the external native wire crate independent of Tokenless execution."""
+    native = root.parent / "tokenless"
+    protocol = tomllib.loads((native / "crates/tokenless-protocol/Cargo.toml").read_text())
+    workspace = tomllib.loads((native / "Cargo.toml").read_text())["workspace"]["dependencies"]
+    if protocol["package"]["name"] != "tokenless-protocol":
+        raise ValueError("native protocol package identity changed")
+    for section in (protocol, *protocol.get("target", {}).values()):
+        for kind in ("dependencies", "dev-dependencies", "build-dependencies"):
+            for name, declaration in section.get(kind, {}).items():
+                if name not in {"serde", "serde_json", "thiserror"}:
+                    raise ValueError(f"tokenless-protocol: unreviewed dependency {name}")
+                resolved = (
+                    workspace[name]
+                    if isinstance(declaration, dict) and declaration.get("workspace") is True
+                    else declaration
+                )
+                if isinstance(resolved, str):
+                    continue
+                if (
+                    not isinstance(resolved, dict)
+                    or not isinstance(resolved.get("version"), str)
+                    or any(key in resolved for key in ("path", "git"))
+                    or resolved.get("package", name) != name
+                ):
+                    raise ValueError(f"tokenless-protocol: {name} must use its locked registry package")
 
 
 def structure(metadata: dict, root: Path) -> None:
@@ -163,13 +196,21 @@ def structure(metadata: dict, root: Path) -> None:
         "aw-adapters": {"aw-contracts", "aw-core", "serde_json", "thiserror"},
         "aw-sec-core": {"aw-contracts", "serde", "serde_json", "thiserror"},
         "aw-sec-host": {
-            "aw-contracts", "aw-core", "aw-sec-core", "serde", "serde_json", "thiserror", "libc",
+            "aw-contracts", "aw-core", "aw-sec-core", "aw-host-process", "serde_json", "thiserror",
         },
         "aw-hook-cli": {
             "aw-contracts", "aw-core", "aw-adapters", "aw-sec-host",
             "serde", "serde_json", "thiserror", "libc",
         },
     }
+    allowed["aw-host-process"] = {
+        "aw-contracts", "aw-core", "serde", "serde_json", "thiserror", "libc",
+    }
+    allowed["aw-tokenless-host"] = {
+        "aw-contracts", "aw-core", "aw-host-process", "tokenless-protocol",
+        "serde", "serde_json", "thiserror",
+    }
+    protocol_dependencies(root)
     members = {
         p["name"]: p for p in metadata["packages"] if p["id"] in metadata["workspace_members"]
     }
@@ -201,6 +242,11 @@ def structure(metadata: dict, root: Path) -> None:
                     raise ValueError(
                         f"{name}: {dependency['name']} must use the reviewed workspace path"
                     )
+            elif dependency["name"] == "tokenless-protocol":
+                path = dependency.get("path")
+                expected = root.parent / "tokenless/crates/tokenless-protocol"
+                if not path or dependency.get("source") is not None or Path(path).resolve() != expected.resolve():
+                    raise ValueError("aw-tokenless-host must use the reviewed tokenless-protocol path")
             elif dependency.get("path") is not None or dependency.get("source", "").startswith(
                 "git+"
             ):
@@ -274,6 +320,7 @@ def check() -> None:
     check_inventory()
     run(["cargo", "test", "--workspace", "--locked"], AW)
     run([sys.executable, "tests/check_canonical.py"], AW, timeout=30)
+    run([sys.executable, "tests/tokenless_oracle.py", "--self-test"], AW, timeout=30)
     run(["cargo", "doc", "--workspace", "--no-deps", "--locked"], AW)
     if candidate() != actual:
         raise ValueError("checkout changed during validation")
