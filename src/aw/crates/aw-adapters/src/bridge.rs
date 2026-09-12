@@ -101,6 +101,7 @@ impl Adapter {
             let schema = match step["capability"].as_str() {
                 Some("security.content.inspect/v2") => "security-content-inspect-input-v2",
                 Some("security.code.inspect/v2") => "security-code-inspect-input-v2",
+                Some("context.projection.prepare/v2") => "context-projection-prepare-input-v2",
                 _ => return Err(Error::UnsupportedCapability),
             };
             let input = json!({

@@ -122,8 +122,11 @@ class GateTests(unittest.TestCase):
             "    mode = 'empty' if 'aw-sec-core' in sys.argv and 'pii' in sys.argv else 'valid'\n"
             "if mode == 'sec-host-empty-host':\n"
             "    mode = 'empty' if 'aw-sec-host' in sys.argv and 'host' in sys.argv else 'valid'\n"
-            "if mode == 'hook-cli-empty-hook':\n"
-            "    mode = 'empty' if 'aw-hook-cli' in sys.argv and 'hook' in sys.argv else 'valid'\n"
+            "if mode.startswith('hook-cli-empty-'):\n"
+            "    target = mode.removeprefix('hook-cli-empty-')\n"
+            "    mode = 'empty' if 'aw-hook-cli' in sys.argv and target in sys.argv else 'valid'\n"
+            "if mode == 'journal-read-empty':\n"
+            "    mode = 'empty' if 'aw-core' in sys.argv and 'journal_read' in sys.argv else 'valid'\n"
             "if mode == 'process-empty-process':\n"
             "    mode = 'empty' if 'aw-host-process' in sys.argv and 'process' in sys.argv else 'valid'\n"
             "if mode.startswith('tokenless-empty-'):\n"
@@ -147,7 +150,8 @@ class GateTests(unittest.TestCase):
             "adapter-empty-bridge",
             "sec-core-empty-pii",
             "sec-host-empty-host",
-            "hook-cli-empty-hook",
+            "hook-cli-empty-hook", "hook-cli-empty-projection", "hook-cli-empty-adoption",
+            "journal-read-empty",
             "process-empty-process", "tokenless-empty-projection", "tokenless-empty-core",
             "contract-empty-canonical", "contract-empty-schemas",
             "contract-empty-contracts", "contract-empty-orchestration",
@@ -204,7 +208,7 @@ class GateTests(unittest.TestCase):
         packages = []
         for name, directory, dependencies in (
             ("aw-contracts", self.root, ["serde_json"]),
-            ("aw-core", core, ["aw-contracts", "serde_json", "thiserror"]),
+            ("aw-core", core, ["aw-contracts", "serde_json", "thiserror", "libc"]),
             (
                 "aw-adapters",
                 self.root / "crates/aw-adapters",
@@ -227,7 +231,7 @@ class GateTests(unittest.TestCase):
                 "aw-hook-cli",
                 self.root / "crates/aw-hook-cli",
                 [
-                    "aw-contracts", "aw-core", "aw-adapters", "aw-sec-host",
+                    "aw-contracts", "aw-core", "aw-adapters", "aw-sec-host", "aw-tokenless-host",
                     "serde", "serde_json", "thiserror", "libc",
                 ],
             ),

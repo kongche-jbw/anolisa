@@ -58,8 +58,14 @@ Journal 记录计划元数据、ID、摘要、回执和决策，不保存原始�
 和 OS 证据，并让 `Registry::validate_dispatch` 与动作原子衔接。结果采用需要
 独立的原生回读及 `Registry::validate_plan_adoption` 校验。
 
-在仓库根目录运行 `python3 src/aw/scripts/check.py`。入口检查两个 crate，要求
+在仓库根目录运行 `python3 src/aw/scripts/check.py`。入口检查整个 AW workspace，要求
 执行和 Journal 测试有非 ignored 用例，并强制已评审的依赖边界与 Rust 源文件
 大小限制。Core 测试使用合成 Host、受控时钟和隔离的临时 Journal，覆盖错误回执、
 失败、截止时间、取消、重复事件、重启、并发 claim、有界 writer 生命周期和损坏或截断的存储。
 这些测试不认证掉电行为、生产 Provider 接入或原生 Agent 采用。
+
+## 只读存储访问
+
+`open_read_only` 仅打开已有、当前用户所有的私有目录，不 mkdir 或 fsync，拒绝写入 claim。
+读取不跟随末端符号链接，只接受普通文件，每个事件的 Journal 文件上限 128 MiB，拒绝不完整记录。
+父路径仍是调用方信任边界；摘要不能对抗同时改写 Journal 和外部 ACK 的同用户进程。

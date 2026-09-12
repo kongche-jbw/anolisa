@@ -113,6 +113,7 @@ fn validate_profile(host: Host, value: &Value, registry: &Registry) -> Result<()
             phase(host, event).map_err(|_| Error::InvalidProfile("unsupported native event"))?;
         require(events.insert(event), "duplicate native event")?;
         let descriptor = &entry["descriptor"];
+        let replaces = matches!(host, Host::Qoder) && phase == "post_tool";
         registry.validate_boundary(descriptor)?;
         require(
             ids.insert(descriptor["boundary_id"].as_str()),
@@ -121,7 +122,7 @@ fn validate_profile(host: Host, value: &Value, registry: &Registry) -> Result<()
         require(
             descriptor["adapter_id"] == format!("aw.native.{}", host.as_str())
                 && descriptor["adapter_version"] == "0.1.0"
-                && descriptor["revision"] == 1
+                && descriptor["revision"] == if replaces { 2 } else { 1 }
                 && descriptor["boundary_id"] == format!("{}.{}", host.as_str(), phase)
                 && descriptor["boundary"] == phase,
             "boundary identity differs from the pinned native mapping",
@@ -130,14 +131,18 @@ fn validate_profile(host: Host, value: &Value, registry: &Registry) -> Result<()
         require(
             descriptor["can_deny_dispatch"] == false
                 && descriptor["has_final_input_guard"] == false
-                && descriptor["proof_boundaries"] == serde_json::json!([])
+                && descriptor["proof_boundaries"]
+                    == if replaces {
+                        serde_json::json!(["local_history"])
+                    } else {
+                        serde_json::json!([])
+                    }
                 && descriptor["ledger_policy"] == "best_effort"
                 && descriptor["composition"]["input_finality"] == "uncontrolled"
                 && descriptor["composition"]["gate"] == "none"
                 && descriptor["composition"]["result_finality"] == "subject_to_later_change",
             "native profiles cannot claim final enforcement or adoption",
         )?;
-        let replaces = matches!(host, Host::Qoder) && phase == "post_tool";
         let mode = if phase == "post_tool" && !replaces {
             "observe_only"
         } else {
@@ -147,7 +152,12 @@ fn validate_profile(host: Host, value: &Value, registry: &Registry) -> Result<()
             descriptor["can_replace_text"] == replaces
                 && descriptor["invocation_mode"] == mode
                 && descriptor["media_types"] == serde_json::json!(["text/plain"])
-                && descriptor["reversibility"] == serde_json::json!([]),
+                && descriptor["reversibility"]
+                    == if replaces {
+                        serde_json::json!(["unrecoverable"])
+                    } else {
+                        serde_json::json!([])
+                    },
             "boundary powers differ from the supported native adapter",
         )?;
     }

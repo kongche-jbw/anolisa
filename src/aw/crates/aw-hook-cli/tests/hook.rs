@@ -1,11 +1,12 @@
 //! Real hook/Core/Host/Journal composition using an explicit native protocol peer.
 
+mod common;
+use common::{payload, settings, Directory};
+
 use aw_adapters::Host;
 use aw_contracts::canonical;
 use aw_core::journal::FileJournal;
-use aw_hook_cli::{
-    inspect, parse_payload, process_identity, read_settings, Settings, MAX_INPUT_BYTES,
-};
+use aw_hook_cli::{inspect, parse_payload, read_settings, Settings, MAX_INPUT_BYTES};
 use serde_json::{json, Value};
 use std::{
     fs,
@@ -13,70 +14,8 @@ use std::{
     os::unix::fs::PermissionsExt,
     path::PathBuf,
     process::{Child, Command, Stdio},
-    sync::atomic::{AtomicUsize, Ordering},
     time::{Duration, Instant},
 };
-
-struct Directory(PathBuf);
-impl Directory {
-    fn new() -> Self {
-        static NEXT: AtomicUsize = AtomicUsize::new(0);
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target")
-            .join(format!(
-                "hook-test-{}-{}",
-                std::process::id(),
-                NEXT.fetch_add(1, Ordering::Relaxed)
-            ));
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::create_dir(&path).unwrap();
-        Self(path)
-    }
-}
-impl Drop for Directory {
-    fn drop(&mut self) {
-        fs::remove_dir_all(&self.0).unwrap();
-    }
-}
-
-fn settings(directory: &Directory, fail: bool) -> Value {
-    let f: Value =
-        serde_json::from_slice(include_bytes!("../../../tests/fixtures/contracts.json")).unwrap();
-    let pid = std::process::id();
-    let (_, start) = process_identity(pid).unwrap();
-    let mut runtime = f["runtime-binding-v1"].clone();
-    runtime["process_ref"] = json!(format!("pid:{pid}@{start}"));
-    runtime["observation_source"] = json!("owned_child");
-    let script = format!(
-        r#"import sys,json,pathlib
-if sys.argv[-1]=='--version':
- print('agent-sec-cli 0.12.0');sys.exit(0)
-assert sys.argv[1:]==['scan-pii','--stdin','--format','json','--source','tool_output']
-content=sys.stdin.buffer.read()
-p=pathlib.Path('received');p.write_bytes(p.read_bytes()+content if p.exists() else content)
-if {fail}:
- sys.stderr.write('private scanner failure');sys.exit(5)
-print(json.dumps({{'ok':True,'verdict':'pass','elapsed_ms':0,'findings':[], 'summary':{{'total':0,'by_type':{{}},'by_category':{{}},'by_severity':{{}},'source':'tool_output','bytes_scanned':len(content),'truncated':False,'custom_rules':{{'status':'absent','rule_count':0,'runtime_error_count':0,'budget_exhausted':False,'truncated':False}}}}}}))
-"#,
-        fail = if fail { "True" } else { "False" }
-    );
-    json!({"runtime":runtime,"scope":f["capability-plan-v1"]["scope"],"agent_pid":pid,"agent_start_ticks":start,
-        "qoder_single_turn_id":"turn-1","journal":directory.0.join("journal"),"include_low_confidence":false,
-        "provider":{"provider_id":"sec-test","provider_version":"0.12.0","program":"/usr/bin/python3",
-            "program_sha256":canonical::digest(&fs::read("/usr/bin/python3").unwrap()),"cwd":directory.0,
-            "args":["-c",script],"environment":{},"pins":[],
-            "limits":{"timeout_ms":5000,"input_bytes":1048576,"output_bytes":131072,"stderr_bytes":16384}}})
-}
-
-fn payload(host: Host) -> Value {
-    let mut p = json!({"hook_event_name":"PostToolUse","session_id":"session-1","tool_use_id":"tool-1",
-        "tool_name":"Bash","tool_input":{"command":"printf example"},"tool_response":"备注🙂 exact\n\t",
-        "保留字段":{"number":1.25}});
-    if host == Host::Codex {
-        p["turn_id"] = json!("turn-1");
-    }
-    p
-}
 
 #[test]
 fn native_payload_parser_preserves_non_aw_values_and_rejects_ambiguity() {

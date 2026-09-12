@@ -17,6 +17,24 @@ use std::{
 /// # Errors
 /// Rejects non-absolute, oversized, symlinked or non-private files and invalid settings.
 pub fn read_settings(path: &Path) -> Result<Settings, Error> {
+    serde_json::from_value(
+        canonical::parse(&read_private(path, MAX_INPUT_BYTES)?).map_err(|_| Error::Input)?,
+    )
+    .map_err(|_| Error::Input)
+}
+
+/// Reads explicitly enabled projection settings from a private launcher file.
+///
+/// # Errors
+/// Rejects the same file and size failures as [`read_settings`] and invalid fields.
+pub fn read_projection_settings(path: &Path) -> Result<crate::ProjectionSettings, Error> {
+    serde_json::from_value(
+        canonical::parse(&read_private(path, MAX_INPUT_BYTES)?).map_err(|_| Error::Input)?,
+    )
+    .map_err(|_| Error::Input)
+}
+
+pub(crate) fn read_private(path: &Path, limit: usize) -> Result<Vec<u8>, Error> {
     if !path.is_absolute() || !cfg!(target_os = "linux") {
         return Err(Error::Input);
     }
@@ -43,14 +61,13 @@ pub fn read_settings(path: &Path) -> Result<Settings, Error> {
         }
     }
     let mut bytes = Vec::new();
-    file.take((MAX_INPUT_BYTES + 1) as u64)
+    file.take((limit + 1) as u64)
         .read_to_end(&mut bytes)
         .map_err(|_| Error::Input)?;
-    if bytes.len() > MAX_INPUT_BYTES {
+    if bytes.len() > limit {
         return Err(Error::Input);
     }
-    serde_json::from_value(canonical::parse(&bytes).map_err(|_| Error::Input)?)
-        .map_err(|_| Error::Input)
+    Ok(bytes)
 }
 
 /// Reads native stdin through EOF, with a five-second deadline and byte ceiling.

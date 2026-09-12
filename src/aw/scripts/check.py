@@ -142,12 +142,15 @@ def check_inventory() -> None:
         ("aw-contracts", "orchestration"),
         ("aw-core", "execution"),
         ("aw-core", "journal"),
+        ("aw-core", "journal_read"),
         ("aw-adapters", "profiles"),
         ("aw-adapters", "native"),
         ("aw-adapters", "bridge"),
         ("aw-sec-core", "pii"),
         ("aw-sec-host", "host"),
         ("aw-hook-cli", "hook"),
+        ("aw-hook-cli", "projection"),
+        ("aw-hook-cli", "adoption"),
         ("aw-host-process", "process"),
         ("aw-tokenless-host", "projection"),
         ("aw-tokenless-host", "core"),
@@ -192,14 +195,14 @@ def structure(metadata: dict, root: Path) -> None:
     """Keep the reviewed crate boundaries and Rust source sizes explicit."""
     allowed = {
         "aw-contracts": {"jsonschema", "serde", "serde_json", "sha2", "thiserror"},
-        "aw-core": {"aw-contracts", "serde_json", "thiserror"},
+        "aw-core": {"aw-contracts", "serde_json", "thiserror", "libc"},
         "aw-adapters": {"aw-contracts", "aw-core", "serde_json", "thiserror"},
         "aw-sec-core": {"aw-contracts", "serde", "serde_json", "thiserror"},
         "aw-sec-host": {
             "aw-contracts", "aw-core", "aw-sec-core", "aw-host-process", "serde_json", "thiserror",
         },
         "aw-hook-cli": {
-            "aw-contracts", "aw-core", "aw-adapters", "aw-sec-host",
+            "aw-contracts", "aw-core", "aw-adapters", "aw-sec-host", "aw-tokenless-host",
             "serde", "serde_json", "thiserror", "libc",
         },
     }

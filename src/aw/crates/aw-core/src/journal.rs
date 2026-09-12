@@ -16,6 +16,9 @@ use serde_json::{json, Value};
 use crate::ports::{Journal, JournalError};
 
 const SOURCE_ID: &str = "aw-core-file-journal-v1";
+// Execution journals contain bounded metadata, not provider streams. This cap
+// leaves room for multi-provider plans while bounding aggregate read allocation.
+const MAX_JOURNAL_BYTES: u64 = 128 * 1024 * 1024;
 
 struct Claim {
     file: File,
@@ -35,6 +38,7 @@ struct Claim {
 pub struct FileJournal {
     directory: PathBuf,
     claims: HashMap<String, Claim>,
+    read_only: bool,
 }
 
 impl FileJournal {
@@ -66,21 +70,90 @@ impl FileJournal {
         Ok(Self {
             directory,
             claims: HashMap::new(),
+            read_only: false,
         })
+    }
+
+    /// Opens existing private storage without creating or syncing any entries.
+    ///
+    /// The final directory must belong to the effective user, deny group/other
+    /// access and not be a symlink. Its parent path is trusted by the caller;
+    /// this is not protection against another process with the same identity.
+    /// The returned object rejects write reservations.
+    ///
+    /// # Errors
+    /// Rejects non-Linux systems, absent or unsafe directories and I/O failures.
+    pub fn open_read_only(path: impl AsRef<Path>) -> Result<Self, JournalError> {
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+
+            let path = path.as_ref();
+            let directory = if path.is_absolute() {
+                path.to_owned()
+            } else {
+                std::env::current_dir()?.join(path)
+            };
+            let directory: PathBuf = directory.components().collect();
+            let file = OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_DIRECTORY)
+                .open(&directory)?;
+            let metadata = file.metadata()?;
+            // Match the supported Linux owner's identity without adding unsafe
+            // process APIs to Core. The native hook uses the same procfs check.
+            let owner = fs::metadata("/proc/self")?.uid();
+            if !metadata.is_dir() || metadata.uid() != owner || metadata.mode() & 0o077 != 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "journal directory must be private and owned by the effective user",
+                )
+                .into());
+            }
+            Ok(Self {
+                directory,
+                claims: HashMap::new(),
+                read_only: true,
+            })
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = path;
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "file journal storage is supported only on Linux",
+            )
+            .into())
+        }
     }
 
     /// Reads validated private envelopes, including the initial plan reservation.
     ///
     /// # Errors
     /// Rejects malformed keys, missing files, empty or partial records, invalid
-    /// canonical metadata, sequence gaps and broken digests. A valid prefix cannot
+    /// canonical metadata, sequence gaps, broken digests, non-regular or symlink
+    /// files, and journals exceeding 128 MiB. A valid prefix cannot
     /// prove that no complete tail records were removed; use [`Self::read_verified`]
     /// when an independently retained final evidence object is available.
     pub fn read(&self, event_key: &str) -> Result<Vec<Value>, JournalError> {
         validate_key(event_key)?;
-        let mut reader = BufReader::new(File::open(self.path(event_key))?);
+        let mut options = OpenOptions::new();
+        options.read(true);
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            // Nonblocking open rejects FIFOs below without waiting for a writer.
+            options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+        }
+        let file = options.open(self.path(event_key))?;
+        let metadata = file.metadata()?;
+        if !metadata.is_file() || metadata.len() > MAX_JOURNAL_BYTES {
+            return Err(JournalError::InvalidRecord);
+        }
+        let mut reader = BufReader::new(file);
         let mut records = Vec::new();
         let mut previous = Value::Null;
+        let mut total_bytes = 0_u64;
         loop {
             // Bound each line before parsing instead of allocating an unbounded file.
             let mut line = Vec::new();
@@ -90,6 +163,11 @@ impl FileJournal {
                 .read_until(b'\n', &mut line)?;
             if count == 0 {
                 break;
+            }
+            total_bytes += count as u64;
+            // Recheck bytes consumed: a writer may grow the file after metadata.
+            if total_bytes > MAX_JOURNAL_BYTES {
+                return Err(JournalError::InvalidRecord);
             }
             if line.pop() != Some(b'\n') || line.len() > canonical::MAX_DOCUMENT_BYTES {
                 return Err(JournalError::InvalidRecord);
@@ -138,6 +216,13 @@ impl FileJournal {
 
 impl Journal for FileJournal {
     fn claim(&mut self, event_key: &str, plan: &Value) -> Result<Value, JournalError> {
+        if self.read_only {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "journal was opened read-only",
+            )
+            .into());
+        }
         validate_key(event_key)?;
         if !plan.is_object() {
             return Err(JournalError::InvalidRecord);

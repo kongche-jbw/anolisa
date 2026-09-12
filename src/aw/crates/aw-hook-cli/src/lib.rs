@@ -1,10 +1,17 @@
-//! Opt-in native hook composition; security inspection is observational only.
+//! Opt-in native hooks and recorded adoption; security inspection remains observational.
 
+mod adoption;
+mod history;
 mod input;
 mod owner;
+mod projection;
+mod records;
+pub use projection::{project, project_with_cancellation, ProjectionResult, ProjectionSettings};
 
-pub use input::{parse_payload, read_settings, read_stdin};
+pub use adoption::{observe, query};
+pub use input::{parse_payload, read_projection_settings, read_settings, read_stdin};
 pub use owner::process_identity;
+pub use records::mark_returned;
 
 use aw_adapters::{AdaptedExecution, Adapter, CaptureRequest, Host, NativeContext, StepOptions};
 use aw_contracts::{canonical, Registry};
@@ -57,10 +64,10 @@ pub enum Error {
     #[error("hook owner identity mismatch")]
     Identity,
     /// The native provider could not be admitted.
-    #[error("native inspection provider unavailable")]
+    #[error("native provider unavailable")]
     Provider,
     /// Core preparation, execution or journal verification failed.
-    #[error("hook inspection could not be recorded")]
+    #[error("hook execution evidence unavailable")]
     Execution,
     /// A trusted wall clock could not be read.
     #[error("hook clock unavailable")]

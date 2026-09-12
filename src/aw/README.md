@@ -58,7 +58,7 @@ file limit (600-line warning); the existing contract validator remains capped at
 
 `aw-adapters` captures supported tool text for six pinned native profiles and
 cross-checks observable IDs against caller-authenticated runtime context. It
-bridges post-tool content/code inspection through the same Core and preserves
+bridges post-tool content/code inspection and admitted projection through the same Core and preserves
 the original payload. Profiles are validated once per Adapter instance.
 
 See [Native adapters](docs/design/native-adapters.md) for supported slots and
@@ -75,9 +75,9 @@ The six mappings are covered by synthetic tests, not six live Agent integrations
 
 `aw-sec-host` invokes the admitted SecCore CLI with bounded stdin/stdout/stderr,
 version and selected-file pins, cancellation and owned-process-group cleanup.
-`aw-hook-cli` composes Qoder/Codex `PostToolUse` capture, Core, this Host and the
-existing Journal. It preserves the tool result and emits observation messages;
-it does not grant security approval or prove native adoption.
+The `qoder` and `codex` commands compose `PostToolUse` capture, Core, this Host
+and the existing Journal. They preserve the tool result and emit observation messages;
+they do not grant security approval or prove native adoption.
 
 Build the experimental Linux entrypoint from the repository root:
 
@@ -100,6 +100,22 @@ projection preserves the source when the plan selects that policy. Candidates
 require explicit acceptance of `unrecoverable`; generation does not prove
 adoption or model savings. See [Tokenless Host](docs/design/tokenless-host.md)
 for the profile, configuration and explicit native acceptance checks.
+
+## Qoder projection and adoption queries
+
+`aw-hook-cli qoder-project` composes required SecCore inspection and optional
+Tokenless projection, then returns a durably recorded candidate through Qoder's
+replacement slot. Private settings explicitly select source/candidate retention,
+an exact history path and the `qoder-cli-1.1.47/jsonl-v1` history profile.
+`aw-adoption-cli observe` records one independent history observation; `query`
+only revalidates retained evidence. Generation, stdout delivery and recorded
+history adoption remain separate. Missing evidence gives no savings figure;
+verified byte differences are not model Token counts or billing savings.
+
+See the [configuration and commands](../../docs/user-guide/en/user-entrypoint/aw.md#qoder-projection-and-history-observation)
+and [adoption design](docs/design/qoder-adoption.md). This opt-in path is covered
+by protocol peers and synthetic history fixtures; real Qoder hook acceptance
+and its private history format require explicit version-specific validation.
 
 ## Source reference
 

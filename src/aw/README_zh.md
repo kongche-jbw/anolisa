@@ -46,7 +46,7 @@ Linux ARM64、相同的运行时版本及固定 Rust 工具链。
 
 ## 原生 adapter 嵌入
 
-`aw-adapters` 为六种固定原生 profile 捕获受支持的工具文本，并将可观测 ID 与调用方认证的 runtime 上下文核对。它通过同一个 Core 执行 post-tool 内容/代码检查，保留原始 payload。每个 Adapter 实例只在初始化时验证 profile。
+`aw-adapters` 为六种固定原生 profile 捕获受支持的工具文本，并将可观测 ID 与调用方认证的 runtime 上下文核对。它通过同一个 Core 执行 post-tool 内容/代码检查及已准入投影，保留原始 payload。每个 Adapter 实例只在初始化时验证 profile。
 
 受支持字段和责任划分见[原生 adapters](docs/design/native-adapters_zh.md)。此库不安装 hooks、不交付替换结果，也不授予最终 dispatch 权限。支持 pre-tool 捕获；pre-tool 执行需要单独验证的 final guard，当前 profile 会拒绝。六种映射有合成测试覆盖，不代表六个真实 Agent 已完成接入。
 
@@ -57,7 +57,7 @@ Linux ARM64、相同的运行时版本及固定 Rust 工具链。
 ## 原生 Host 与 hook CLI
 
 `aw-sec-host` 调用已准入的 SecCore CLI，提供 stdin/stdout/stderr 限额、版本与指定文件固定、
-取消以及自有进程组回收。`aw-hook-cli` 串起 Qoder/Codex `PostToolUse` 捕获、Core、Host
+取消以及自有进程组回收。`qoder`、`codex` 命令串起 `PostToolUse` 捕获、Core、Host
 和已有 Journal，保留工具结果并返回观察提示；不授予安全批准，也不证明原生采用。
 
 在仓库根目录构建实验性 Linux 入口：
@@ -77,6 +77,18 @@ src/aw/target/debug/aw-hook-cli --help
 共享有界的 `aw-host-process`，仅引入原生纯协议 crate。计划选择 preserve 策略时，
 失败或无收益保留原文。候选要求显式接受 `unrecoverable`；生成不证明采用或模型收益。
 profile、配置及显式原生验收见 [Tokenless Host](docs/design/tokenless-host_zh.md)。
+
+## Qoder 投影与采用查询
+
+`aw-hook-cli qoder-project` 组合必需的 SecCore 检查与可选 Tokenless 投影，持久记录
+候选后通过 Qoder 替换位置返回。私有配置须显式选择原文/候选保留、准确历史路径及
+`qoder-cli-1.1.47/jsonl-v1` 历史 profile。`aw-adoption-cli observe` 记录一次独立历史
+观察；`query` 只重验保留证据。候选生成、stdout 交付与已记录历史采用分别呈现。
+缺证据不显示收益数；已验证字节差不代表模型 Token 数或计费节省。
+
+详见[配置与命令](../../docs/user-guide/zh/user-entrypoint/aw.md#qoder-投影与历史观察)
+及[采用设计](docs/design/qoder-adoption_zh.md)。显式启用路径由协议 peer 和合成历史向量覆盖；
+真实 Qoder hook 采用及其私有历史格式仍需按版本单独验收。
 
 ## 源码参考
 

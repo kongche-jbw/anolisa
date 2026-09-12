@@ -59,6 +59,10 @@ Format-1 envelopes contain sequence, previous digest, record and digest. This is
 private storage framing, not another AW wire schema. Reads reject partial records
 and broken chains. A complete prefix cannot expose removed tail records;
 `read_verified` compares the tip with an acknowledgement retained independently.
+`open_read_only` opens an existing caller-owned private directory without mkdir
+or fsync and rejects write claims. Reads open regular files without following
+the final symlink, bound each event journal file to 128 MiB and reject partial records.
+The parent path remains a caller trust boundary.
 Hashes do not protect against an attacker who can rewrite both copies. Other
 operating systems require another `Journal` implementation.
 
@@ -74,8 +78,8 @@ an actual tool action the native owner must obtain fresh intent/OS evidence and
 apply `Registry::validate_dispatch` atomically with its action. Result adoption
 requires independent native readback and `Registry::validate_plan_adoption`.
 
-Run `python3 src/aw/scripts/check.py` from the repository root. It checks both
-crates, requires non-ignored execution/journal tests, and enforces reviewed
+Run `python3 src/aw/scripts/check.py` from the repository root. It checks the AW
+workspace, requires non-ignored execution/journal tests, and enforces reviewed
 crate dependencies and Rust source size limits. Core tests use synthetic Hosts,
 controlled clocks and isolated temporary journals. They cover malformed
 acknowledgements, failures, deadlines, cancellation, duplicate events, restarts,

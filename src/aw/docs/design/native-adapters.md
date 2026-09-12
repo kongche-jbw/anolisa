@@ -5,7 +5,7 @@
 `aw-adapters` 0.1.0 captures native tool text, binds it to a trusted runtime
 context and executes existing capability plans through `aw-core`. It is an
 embedding library. Loading a profile does not install or activate a plugin.
-The public Schema resources and Core implementation remain unchanged.
+It uses the existing Schema resources and shared Core orchestration.
 
 ## Six host surfaces
 
@@ -53,8 +53,9 @@ compatibility for the listed slots, not a complete framework support matrix.
    outcome using its existing policy, approval and response conventions.
 
 The bridge implements `security.content.inspect/v2` and
-`security.code.inspect/v2`. It does not implement provider discovery, native
-security rules, command dispatch, text projection, recovery or adoption.
+`security.code.inspect/v2`, plus `context.projection.prepare/v2` at boundaries
+that admit replacement and requested reversibility. It does not implement
+provider discovery, native security rules, command dispatch, recovery or adoption.
 A Core `proceed` outcome is not an emitted native tool permit.
 
 Only the listed text slots are supported. COSH preserves `returnDisplay` and
@@ -71,10 +72,11 @@ converts an extraction error into an allow response.
 
 Native hook blocking is insufficient evidence of a non-bypassable final input
 guard. All six profiles therefore declare no final guard, no dispatch denial
-authority, no adoption proof boundaries and best-effort ledger requirements.
-Qoder's post-tool surface records its known text replacement ability, but this
-inspection bridge does not perform replacement. The other post-tool surfaces
-are observation-only in this implementation.
+authority and best-effort ledger requirements. Qoder post-tool revision 2
+admits `unrecoverable` projection and the `local_history` proof boundary; the
+[opt-in hook composition](qoder-adoption.md) owns delivery and actual history
+readback. The other post-tool surfaces remain observation-only, with no proof
+boundary. A descriptor is admission policy, never proof of a particular adoption.
 
 Pre-tool capture is available. **Pre-tool plan execution is rejected** by the
 existing contract because these profiles cannot establish the mandatory final

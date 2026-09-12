@@ -1,9 +1,10 @@
-# AW 工具结果检查
+# AW 工具结果检查与投影
 
 [English](../../en/user-entrypoint/aw.md)
 
 AW 让显式配置的 Qoder 或 Codex hook 通过 SecCore 检查工具输出，并保留可核验的执行记录。
-原始工具结果保持不变。检查用于观察：提示不代表执行批准，也不证明 Agent 展示或采纳了提示。
+`qoder`/`codex` 检查命令保持原始工具结果不变；额外显式 Qoder 投影模式可返回候选，
+并独立记录 local_history 采用。检查用于观察：提示不代表执行批准，也不证明 Agent 展示或采纳了提示。
 
 这是实验性的 Linux 开发者入口。AW 尚未注册 `anolisa install` 或发行 RPM。
 在仓库根目录构建已有源码：
@@ -16,7 +17,7 @@ src/aw/target/debug/aw-hook-cli --help
 ## 调用方式
 
 ```text
-aw-hook-cli <qoder|codex> /absolute/SETTINGS.json
+aw-hook-cli <qoder|codex|qoder-project> /absolute/SETTINGS.json
 ```
 
 Agent 通过 stdin 传入一个原生 `PostToolUse` JSON 对象，然后关闭管道。
@@ -73,7 +74,7 @@ CLI 不安装 hooks、不创建 Agent 会话，也不替代现有 SecCore 安全
 每个固定文件必须是至多 64 MiB 的普通文件。每次调用前后均复核指定文件。
 这不等于完整解释器依赖认证，也不能防止执行期间的变更。主动更新版本或配置后需要重新准入。
 
-## 结果、失败与退出
+## 检查结果、失败与退出
 
 | 结果 | stdout / 退出码 |
 | --- | --- |
@@ -120,3 +121,78 @@ Codex 默认 `--codex-sandbox read-only`。宿主无法启动沙箱时，可显�
 脚本输出进程/端口归属与结果，核对原生审计、精确 hook 文本和 Journal，并删除临时目录。
 它保留真实 `HOME`，但将用户规则查找指向临时的缺失文件，将审计和 telemetry 指向 fixture 目录。
 这验证真实扫描链路，不覆盖操作者当前的用户规则集。
+
+## Qoder 投影与历史观察
+
+`qoder-project` 仅支持 launcher 绑定的单轮 Qoder、同步 `PostToolUse` hook，以及成功的
+结构化 `Bash` 结果。检查模式继续支持裸字符串；投影模式不准入。声明的历史文件必须已存在、
+属于 hook 用户，父路径由操作者管理。原生 `cwd` 须等于 `hook.provider.cwd`；若提供
+`transcript_path`，须与 `history_path` 完全一致。
+
+投影配置是独立对象，下列字段全部必填；原有检查配置不变，嵌套于 `hook`。
+
+| 字段 | 含义 |
+| --- | --- |
+| `hook` | 上文各表中的完整检查配置 |
+| `tokenless` | 与 `provider` 相同的原生启动配置；独立 ID、版本 `0.8.1`，实际探测返回 `tokenless 0.8.1` 的 Tokenless 可执行文件 |
+| `record_directory` | 已有可信父目录下的绝对私有目录（`0700`）；原文/候选记录权限 `0600` |
+| `history_path` | 准确绝对 Qoder JSONL 路径，普通文件、当前用户所有、末端非符号链接，最多 16 MiB |
+| `history_profile` | 固定 `qoder-cli-1.1.47/jsonl-v1`，不自动探测版本 |
+| `retention` | 固定 `source_and_candidate`，显式接受私有明文保留 |
+| `max_observation_delay_ms` | 从投影 receipt 完成至实际观察的 1–300000 ms 窗口 |
+| `accepted_reversibility` | 固定 `["unrecoverable"]`；原生 lossless 分类不等于 AW 恢复能力 |
+| `allow_text_reencoding` | 显式布尔值，允许 Tokenless 文本重编码 |
+
+`tokenless.environment` 必须显式设置 `TOKENLESS_STATS_ENABLED=0`、
+`TOKENLESS_SLS_ENABLED=0`、`TOKENLESS_COMPRESSION_ENABLED=1`，不启用 recovery stash。
+其他准入、限额和 pin 要求见 [Tokenless Host profile](../../../../src/aw/docs/design/tokenless-host_zh.md)。
+外层配置文件遵循相同私有文件要求及 1 MiB 上限。每份 context/observation 另受
+4 MiB canonical 文档上限约束，无法持久保留的 context 不交付。外部 hook 超时应覆盖两个版本探测、
+两次串行调用、输入读取、回收与持久写入。
+
+必需 SecCore 检查先于可选 Tokenless 投影。检查失败阻止投影调用；敏感发现仍是观察，不作 deny。
+Provider 失败或无有效候选时不返回替换。已验证候选返回格式为
+`{"hookSpecificOutput":{"hookEventName":"PostToolUse","updatedToolOutput":"candidate"}}`。
+stdout 前持久化 context；无缓冲写入全部完成后写独立 marker，不留用户态待 flush 数据。
+stdout 使用五秒非阻塞期限并响应取消，宿主停读也不会无限等待。持久化、交付或 marker 失败返回非零。
+marker 只记录本地传输完成；原生解析、退出处理和后续 hooks 仍可能影响结果。
+原生替换位置及组合规则见 [Qoder 官方 hook 参考](https://docs.qoder.com/cli/hooks)。
+
+context 位于 `record_directory/<event_key>.json`；适用时产生同目录
+`<event_key>.returned.json`、`<event_key>.observation.json`。
+库返回的 `ProjectionResult.record_path` 标识 context 路径。上面的 package 构建同时生成两个 CLI：
+
+```text
+aw-hook-cli qoder-project /absolute/PROJECTION_SETTINGS.json
+aw-adoption-cli observe /absolute/records/CONTEXT.json
+aw-adoption-cli query /absolute/records/CONTEXT.json
+```
+
+Qoder 追加对应结果后、配置窗口到期前执行 `observe`。它仅读取声明文件，验证捕获时的 inode 和
+前缀，并按 session、tool ID、cwd 和 input 匹配唯一有序调用/结果；结果文本必须在捕获后追加。
+要求完整 JSONL 行，每行不超过原生输入的 1 MiB 上限。缺历史/结果或迟到时保持 unverified，
+不显示收益数；损坏、重复、前缀变化或错绑定明确报错。不自动轮询。成功观察不可变；重复或中断
+claim 是错误，不自动重放 Provider。
+
+`query` 读取保留的 context、原始执行 Journal、可选交付 marker 及独立确认的 observation，
+不创建文件、不运行 Provider、不重新打开 live history。输出仅含元数据：
+
+| 字段 | 含义 |
+| --- | --- |
+| `execution_decision` | 完整 Core 结果，包括 preserve 或 cancelled |
+| `prepared` | 已生成候选 envelope，不表示交付 |
+| `returned` | 已有有效 stdout 完成 marker |
+| `observation_status` | `unverified`、`adopted`、`preserved` 或 `overridden` |
+| `proof_boundary`、`observation_kind` | 观察提交后为 `local_history` / `recorded_snapshot` |
+| `saved_bytes` | 该快照的精确可归属字节差；已验证保留/覆盖为零，无证明为 null |
+| `observation` | 已验证采用合同和证据引用，或 null |
+
+只有完整 proceed 计划和匹配候选才判定 adopted。原文为 preserved；不同文本为后续变换，归属收益
+为零。仅无候选不证明原文保留。缺 stdout marker 不否定独立历史事实，两种事实分开呈现。
+字节差不是模型 Token 数、请求交付或计费节省；`query` 不重验后续历史变化。
+
+所有记录与 Journal 的父路径都应处于 Agent 不可写位置。观察行及调用输入可能包含敏感明文，
+查询输出和 Journal 仅含元数据。本机制不隔离能同时改写记录和证据的同用户进程。
+按审计周期一起保留 context、observation、marker 和 Journal；不自动清理。禁用所属 hook 可停止新投影；
+删除 context/observation 会失去查询证据；删除 Journal 才会同时丢失持久事件去重占用。启用实验性 profile 前须验证真实 Qoder 版本与 hook 安装；
+私有 JSONL 格式不是官方稳定 API，常规门禁使用合成历史，不运行已登录 Agent。

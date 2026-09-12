@@ -2,7 +2,7 @@
 
 [English](native-adapters.md)
 
-`aw-adapters` 0.1.0 提取原生工具文本，将其绑定到可信运行上下文，再通过 `aw-core` 执行已有能力计划。它是供原生集成调用的库；加载边界描述不会安装或启用插件。本次保留所有公开 Schema 和 Core 实现。
+`aw-adapters` 0.1.0 提取原生工具文本，将其绑定到可信运行上下文，再通过 `aw-core` 执行已有能力计划。它是供原生集成调用的库；加载边界描述不会安装或启用插件。复用已有公开 Schema 与共享 Core 编排。
 
 ## 六类宿主边界
 
@@ -28,13 +28,13 @@ Hermes 和 OpenClaw 使用由集成代码根据回调参数构造的**本地** `
 3. 策略层提供已解析的计划，以及各步骤的约束、预算和截止时间。`Adapter::prepare` 核对事件、输入和边界绑定，构造已有能力输入，再调用 `Core::prepare`。
 4. `Adapter::execute` 通过传入的 Provider Host、Journal、Clock 和 Cancellation 接口调用 `Core::execute`，一起返回 Core 记录和原始数据。原生集成按自身策略、审批及响应约定处理结果。
 
-当前桥接实现 `security.content.inspect/v2` 和 `security.code.inspect/v2`。Provider 发现、安全规则、命令派发、文本投影、恢复和采用均不在实现范围内。Core 返回 `proceed`，也不等于已经向原生宿主发出工具许可。
+当前桥接实现 `security.content.inspect/v2`、`security.code.inspect/v2`，以及边界允许替换并接受所需可逆性时的 `context.projection.prepare/v2`。Provider 发现、安全规则、命令派发、恢复和采用均不在此库实现范围内。Core 返回 `proceed`，也不等于已经向原生宿主发出工具许可。
 
 当前只支持表中指定的文本位置。COSH 保留 `returnDisplay`，只提取 `llmContent`；Qoder 已完成、退出码为零且 stderr 为空的 Bash 对象只提取 stdout，保留其他元数据；中断、图像及失败结果拒绝，包括相互矛盾的 `error` 或 `isError` 标记。其他对象结果、数组、多模态内容块和二进制结果会明确报错。原生失败信号，如 `is_error`、interrupted/denied 状态或支持的 SDK error 字段，也会报错。调用方需要保留原生失败处理方式；本库不会把提取错误转成允许执行。
 
 ## 为什么边界描述保持保守
 
-原生 hook 能返回阻断，不足以证明它控制了不可绕过的最终输入检查。因此，六份描述都没有声明 final guard、工具派发拒绝权限或采用证明边界，Ledger 要求为 best-effort。Qoder 后置边界记录已有接口的文本替换能力，但当前检查桥接没有执行替换。其余后置边界在本版实现中只提供观测。
+原生 hook 能返回阻断，不足以证明它控制了不可绕过的最终输入检查。因此，六份描述都没有声明 final guard 或工具派发拒绝权限，Ledger 要求为 best-effort。Qoder 后置 revision 2 准入 `unrecoverable` 投影及 `local_history` 证明边界；[显式 hook 组合](qoder-adoption_zh.md) 负责交付与历史读取。其余后置边界仍只观测且无证明边界。描述声明是准入策略，不是某次采用的证据。
 
 前置事件可以提取；**前置计划执行会被现有合同拒绝**，因为这些描述无法建立必需的最终命令检查。启用该路径需要验证原生执行控制，再单独评审新的描述修订。仅把能力标志改成 true 来通过准入，会夸大边界能力。
 

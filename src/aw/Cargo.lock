@@ -63,6 +63,7 @@ name = "aw-core"
 version = "0.1.0"
 dependencies = [
  "aw-contracts",
+ "libc",
  "serde_json",
  "thiserror",
 ]
@@ -75,6 +76,7 @@ dependencies = [
  "aw-contracts",
  "aw-core",
  "aw-sec-host",
+ "aw-tokenless-host",
  "libc",
  "serde",
  "serde_json",
