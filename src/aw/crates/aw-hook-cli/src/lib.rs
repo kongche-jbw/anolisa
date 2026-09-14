@@ -4,6 +4,7 @@ mod adoption;
 mod history;
 mod input;
 mod owner;
+pub mod preflight;
 mod projection;
 mod records;
 pub use projection::{project, project_with_cancellation, ProjectionResult, ProjectionSettings};

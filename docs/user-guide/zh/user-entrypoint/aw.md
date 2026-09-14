@@ -196,3 +196,52 @@ claim 是错误，不自动重放 Provider。
 按审计周期一起保留 context、observation、marker 和 Journal；不自动清理。禁用所属 hook 可停止新投影；
 删除 context/observation 会失去查询证据；删除 Journal 才会同时丢失持久事件去重占用。启用实验性 profile 前须验证真实 Qoder 版本与 hook 安装；
 私有 JSONL 格式不是官方稳定 API，常规门禁使用合成历史，不运行已登录 Agent。
+
+## 依赖预检
+
+在准备会话hook配置前，检查所选原生安装。上述源码构建同时生成 `aw-preflight-cli`：
+
+```bash
+src/aw/target/debug/aw-preflight-cli /absolute/PREFLIGHT.json
+```
+
+沿用相同私有文件要求与1 MiB上限。配置必须选择以下一种形式：
+
+| `mode` | 必填字段 | 探测的原生版本 |
+| --- | --- | --- |
+| `inspect` | `security` | SecCore CLI 0.12.0 |
+| `project` | `security`、`tokenless` | SecCore CLI 0.12.0，再探测Tokenless CLI 0.8.1 |
+
+两个字段都使用前文的原生 `provider` 配置。Tokenless还必须设置投影参考中的三项原生控制。
+Provider ID不能相同。未知字段报错；`inspect` 拒绝附带 `tokenless`，不静默忽略。
+绝对程序路径、前缀参数和独立预期摘要由安装owner提供。保留Python虚拟环境的程序路径，
+解析其软链接可能改变包metadata和导入环境。预检不搜索PATH、不自动安装、不切换备用版本。
+
+只运行原生 `--version` 探针，每次使用声明的超时/流量限制和已有Host取消/回收机制。
+退出0输出JSON：`status: dependencies_ready`、所选 `mode`、组件及原生版本列表、
+`agent_started: false`、`runtime_ready: false`。退出1在stderr说明失败组件、预期原生版本
+和有界诊断，不输出成功就绪JSON；不回显捕获的原生输出或环境值。预检成功不代表扫描内容、
+创建Journal、安装hook、证明采用、最终阻断或Agent兼容。执行时仍重新验收，后续文件变化可
+使快照失效。启动方仍需独立核验shell helper、Agent、身份和插件共存，才能创建会话。
+
+### 可选的固定Herdr bundle
+
+Herdr为可选展示组件，不是检查预检的前置依赖。获取未修改的Linux v0.9.0二进制及Apache-2.0
+许可证时，选择父目录已存在的目标：
+
+```bash
+python3 -B src/aw/integrations/herdr/fetch.py /absolute/herdr-v0.9.0
+```
+
+内置[pin](../../../../src/aw/integrations/herdr/upstream.json)选择Linux aarch64/x86_64制品及
+固定commit的许可证。每项下载最多128 MiB，CLI整体默认120秒（`--timeout` 大于0且不超过
+600秒）。两项均通过校验后，使用Linux `renameat2(RENAME_NOREPLACE)` 发布完整目录。
+命令输出二进制路径，不启动它或Agent。
+
+完整、匹配且可执行的已有bundle离线复用，不改变内容或权限；摘要不匹配、不完整、软链接或
+目标竞争均报错，不替换或修复用户文件。Linux缺少所需rename操作时明确失败。普通异常、
+SIGTERM、SIGINT及超时会清理私有staging；SIGKILL或断电可能留下staging。发布后发生中断
+或输出失败可能保留完整有效bundle，重跑同一命令可核验复用。安装不等于启用。
+不再需要时仅删除显式选择的bundle；fetch不注册全局状态或hooks。
+
+就绪JSON复用已有五秒有界、可取消的stdout交付；不消费输出的管道不会让预检无限等待。

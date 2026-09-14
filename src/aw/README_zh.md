@@ -100,3 +100,11 @@ profile、配置及显式原生验收见 [Tokenless Host](docs/design/tokenless-
 Registry 包含 21 个 Schema 资源。`crates/aw-contracts/schemas/` 中的 8 份 v1 文件仅作参考，未注册到当前库。调用方需要匹配 Schema ID 和摘要，当前没有自动版本转换。
 
 收到数据后，先用 `canonical::parse` 严格解析字节，再检查结构。结构检查通过不代表记录之间的关系正确，也不授予执行权限。计划级检查的用法见公共 API 文档，证据认证和实际动作仍由调用方负责。
+
+## 依赖预检
+
+`aw-preflight-cli` 在启动方创建Agent之前检查显式选择的原生依赖。检查模式需要SecCore，
+投影模式才增加Tokenless；复用执行Host的版本探针、pin、限额及清理。成功只表示依赖预检通过。
+另有独立、显式选择的Herdr获取命令，固定Linux二进制与许可证均通过校验后才发布新bundle，
+不替换已有目标。见[命令与配置](../../docs/user-guide/zh/user-entrypoint/aw.md#依赖预检)
+和[归属设计](docs/design/startup-preflight_zh.md)。

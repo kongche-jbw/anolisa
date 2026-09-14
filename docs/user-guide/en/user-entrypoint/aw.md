@@ -251,3 +251,70 @@ projections. Deleting context or observation files removes query evidence;
 deleting Journal files also removes their durable duplicate-event reservations. Validate the real Qoder version and hook installation before enabling
 this experimental profile: its private JSONL format is not an official stable
 API, and the regular gate uses synthetic histories rather than a logged-in Agent.
+
+## Dependency preflight
+
+Check the selected native installations before preparing session-specific hook
+settings. The source build above also produces `aw-preflight-cli`:
+
+```bash
+src/aw/target/debug/aw-preflight-cli /absolute/PREFLIGHT.json
+```
+
+The same private-file rules and 1 MiB limit apply. Choose exactly one shape:
+
+| `mode` | Required fields | Probed native versions |
+| --- | --- | --- |
+| `inspect` | `security` | SecCore CLI 0.12.0 |
+| `project` | `security`, `tokenless` | SecCore CLI 0.12.0, then Tokenless CLI 0.8.1 |
+
+Both fields contain the existing native `provider` configuration described above.
+The Tokenless configuration additionally requires the three native controls from
+the projection reference. Provider IDs must differ. Unknown fields are errors;
+`inspect` rejects a supplied `tokenless` field rather than silently ignoring it.
+Use installation-owner supplied absolute executable paths, prefix arguments and
+independent expected digests. Preserve Python virtual-environment executable
+paths; resolving their symlinks can change package metadata and imports. No PATH
+search, automatic installation or alternate-version fallback occurs.
+
+Only native `--version` probes run. Each uses its declared timeout/stream bounds
+and existing Host cancellation/cleanup. Exit 0 emits JSON with
+`status: dependencies_ready`, the selected `mode` and component/native-version
+pairs, `agent_started: false` and `runtime_ready: false`. Exit 1 reports the
+failing component, expected native version and bounded diagnostic on stderr;
+no successful readiness JSON is emitted. Captured native output and environment
+values are not echoed. A successful preflight does not scan content, create a
+Journal, install hooks or establish adoption, final enforcement or Agent
+compatibility. Execution rechecks admission; later file changes can invalidate
+this snapshot. The launcher must separately validate its shell helper, Agent,
+identity and plugin coexistence before starting a session.
+
+### Optional pinned Herdr bundle
+
+Herdr is optional and is not needed for inspection preflight. To fetch its
+unmodified Linux v0.9.0 binary and Apache-2.0 license, choose a destination whose
+parent directory already exists:
+
+```bash
+python3 -B src/aw/integrations/herdr/fetch.py /absolute/herdr-v0.9.0
+```
+
+The bundled [pin](../../../../src/aw/integrations/herdr/upstream.json) selects
+Linux aarch64/x86_64 artifacts and a commit-addressed license. Each download is
+limited to 128 MiB; the CLI's overall deadline defaults to 120 seconds
+(`--timeout`, greater than 0 and at most 600 seconds). Both files are verified
+before Linux `renameat2(RENAME_NOREPLACE)` publishes the complete directory.
+The command prints the binary path, without starting it or an Agent.
+
+An existing complete, matching, executable bundle is reused offline without
+changing contents or modes. A mismatch, incomplete bundle, symlink or destination
+collision fails without replacing or repairing user files. Linux without the
+required rename operation fails explicitly. Ordinary errors, SIGTERM, SIGINT
+and timeout reclaim private staging; SIGKILL or power loss can leave staging.
+An interruption or output error after publication can leave the complete valid
+bundle; rerun the same command to verify/reuse it. Installation is not activation.
+Remove only the explicitly chosen bundle when it is no longer needed; the fetch
+does not register global state or hooks.
+
+Readiness JSON uses the existing five-second, cancellation-aware stdout delivery;
+a nonconsuming output pipe cannot keep preflight waiting indefinitely.

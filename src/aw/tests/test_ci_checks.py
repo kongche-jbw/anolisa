@@ -150,7 +150,7 @@ class GateTests(unittest.TestCase):
             "adapter-empty-bridge",
             "sec-core-empty-pii",
             "sec-host-empty-host",
-            "hook-cli-empty-hook", "hook-cli-empty-projection", "hook-cli-empty-adoption",
+            "hook-cli-empty-hook", "hook-cli-empty-preflight", "hook-cli-empty-projection", "hook-cli-empty-adoption",
             "journal-read-empty",
             "process-empty-process", "tokenless-empty-projection", "tokenless-empty-core",
             "contract-empty-canonical", "contract-empty-schemas",

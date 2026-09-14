@@ -127,3 +127,13 @@ and its private history format require explicit version-specific validation.
 The Registry includes 21 schema resources. The eight v1 resources in `crates/aw-contracts/schemas/` are reference copies and are not registered. Callers must use matching schema IDs and digests; no automatic version conversion is provided.
 
 Parse incoming bytes with `canonical::parse` before schema validation. Shape checks alone do not validate record relationships or grant authorization. Follow the public API documentation for plan-level checks; callers remain responsible for authenticating evidence and enforcing actions.
+
+## Dependency preflight
+
+`aw-preflight-cli` checks explicitly selected native dependencies before a launcher
+creates an Agent. Inspection requires SecCore; projection also requires Tokenless.
+It reuses the execution Hosts' version probes, pins, limits and cleanup. Success
+reports dependency readiness only. An independent opt-in Herdr fetch verifies a
+fixed Linux binary and its license before publishing a new bundle without
+replacing an existing destination. See the [commands and configuration](../../docs/user-guide/en/user-entrypoint/aw.md#dependency-preflight)
+and [ownership design](docs/design/startup-preflight.md).

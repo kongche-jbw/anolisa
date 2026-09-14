@@ -149,6 +149,7 @@ def check_inventory() -> None:
         ("aw-sec-core", "pii"),
         ("aw-sec-host", "host"),
         ("aw-hook-cli", "hook"),
+        ("aw-hook-cli", "preflight"),
         ("aw-hook-cli", "projection"),
         ("aw-hook-cli", "adoption"),
         ("aw-host-process", "process"),
@@ -274,7 +275,7 @@ def structure(metadata: dict, root: Path) -> None:
                     print(f"AW layout: {relative}: {lines} lines (ceiling {limit})", flush=True)
 
 
-def selftest() -> None:
+def selftest(directory: str = "tests", pattern: str = "test_ci_checks.py") -> None:
     """Run the gate's behavior tests, rejecting missing or empty discovery."""
     run(
         [
@@ -284,7 +285,7 @@ def selftest() -> None:
             """
 import sys
 import unittest
-suite = unittest.defaultTestLoader.discover('tests', pattern='test_ci_checks.py')
+suite = unittest.defaultTestLoader.discover(sys.argv[1], pattern=sys.argv[2])
 if suite.countTestCases() == 0:
     raise SystemExit('AW gate self-tests are missing or empty')
 result = unittest.TextTestRunner(verbosity=2).run(suite)
@@ -292,6 +293,7 @@ if result.testsRun == len(result.skipped):
     raise SystemExit('AW gate self-tests were all skipped')
 sys.exit(not result.wasSuccessful())
 """,
+            directory, pattern,
         ],
         AW,
         timeout=120,
@@ -302,6 +304,7 @@ def check() -> None:
     """Run the existing contract checks and the gate's own behavior tests."""
     actual = candidate()
     selftest()
+    selftest("integrations/herdr/tests", "test_fetch.py")
     run(["cargo", "fmt", "--all", "--", "--check"], AW)
     run(
         [sys.executable, "-B", "crates/aw-sec-core/tests/regenerate_pii.py", "--self-test"],
