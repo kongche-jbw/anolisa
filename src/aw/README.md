@@ -147,3 +147,9 @@ Explicit native pins, protocol probing and clean-config admission precede launch
 active hooks/plugins are preserved by refusing unverified combinations. This
 Linux profile is one prompt, without PTY or multi-pane support. See the
 [configuration and retention reference](../../docs/user-guide/en/user-entrypoint/aw.md#one-prompt-qoder-session).
+
+For a bounded sequence, `integrations/qoder/conversation.py` resumes only sessions
+created earlier in that invocation and supports an explicit fresh-session reset.
+Each prompt has a new process incarnation and immutable turn evidence; failure
+or cancellation stops the sequence. This is sequential print-mode continuation,
+not interactive PTY or pane management. See the [conversation reference](../../docs/user-guide/en/user-entrypoint/aw.md#bounded-qoder-conversations).

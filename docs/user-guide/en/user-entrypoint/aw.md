@@ -396,3 +396,66 @@ history stays under its selected configuration root. Remove these specific sessi
 artifacts only after their retention purpose ends; uninstalling this launcher does
 not require changing user hooks. [Design and test boundaries](../../../../src/aw/docs/design/qoder-session.md)
 explain ownership and supported evidence.
+
+## Bounded Qoder conversations
+
+Use the same admitted native installations for a sequence of up to eight prompts:
+
+```bash
+python3 -B src/aw/integrations/qoder/conversation.py /absolute/CONVERSATION.json
+```
+
+The input is an absolute, caller-owned 0600 JSON file, limited to 1 MiB. Its fields are:
+
+| Field | Required value |
+| --- | --- |
+| `format` | Integer `1` |
+| `launch` | The one-prompt launcher settings above, with `prompt` omitted; `session_directory` is a new conversation root |
+| `turns` | An ordered array of one to eight objects, each with `prompt` and optional boolean `reset` |
+
+For example, the `turns` array can be:
+
+```json
+[
+  {"prompt": "Read the project summary."},
+  {"prompt": "Explain the previous summary."},
+  {"prompt": "Start a separate conversation.", "reset": true}
+]
+```
+
+All prompts and configuration are validated before creating the root. The same
+explicit permission mode, native configuration, pins, Providers and projection
+opt-ins apply to every turn. Existing roots are rejected; repeated invocation
+never overwrites evidence or resumes an interrupted runner.
+
+The first prompt starts a new native UUID. Subsequent prompts use Qoder's
+`--resume` with that exact UUID; `reset: true` starts another fresh UUID. No
+arbitrary external session, most-recent-session selection or fork is accepted.
+Before a resume, the owned session must have a nonempty regular native history
+of complete JSON objects, at most 16 MiB. This checks availability and framing;
+it does not attest resumed model context or replace AW's independent history
+reader and identity checks.
+
+Each turn launches a new Agent process through the existing cosh-shell helper,
+with a distinct turn ID and increasing runtime generation. A single owner keeps
+cancellation active across the sequence. The next turn starts only after the
+previous Agent tree has been reclaimed and its observation operations completed.
+Nonzero exits, preparation/observation errors, timeout or cancellation stop the
+sequence; there are no retries. `timeout_seconds` remains a per-turn Agent budget,
+plus the existing bounded startup, cleanup and observation operations per turn.
+
+The new 0700 root retains `conversation.json` (including prompts), a metadata-only
+`summary.json`, and private `turn-0001`, `turn-0002`, … directories using the
+one-prompt layout. The summary's `completed` means the requested processes and
+observation operations completed successfully; it does not mean every output was
+projected or adopted. Read each turn's `result.json` and existing `query` evidence
+for those facts. Stopped runs retain attempted-turn evidence and diagnostics;
+reset does not delete earlier records or move their counts into a new session.
+Root diagnostics remain even when first-turn preparation fails.
+
+These are sequential print-mode invocations, not a persistent interactive Agent,
+PTY, in-process `/clear`, pane manager or Herdr UI. Independent invocations own
+separate roots and sessions. Cleanup never reconstructs authority from stored
+PIDs; native histories follow Qoder's own retention, and AW records remain until
+the operator removes the exact owned root after its audit period.
+See the [conversation ownership design](../../../../src/aw/docs/design/qoder-session.md#bounded-conversation-continuation).

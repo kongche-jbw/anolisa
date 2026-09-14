@@ -301,3 +301,53 @@ SIGKILL、主机故障或内核阻塞不能保证有序清理。
 启动前失败删除本次新目录；一旦尝试启动，私有配置、Journal、记录和result/failure元数据保留，
 用于诊断及显式保留策略。Qoder历史仍在所选原生配置根。保留期结束后只删除该次会话制品，
 无需修改用户hooks。[设计与测试边界](../../../../src/aw/docs/design/qoder-session_zh.md)说明资源归属。
+
+## 有界 Qoder 连续对话
+
+复用同一组已准入的原生安装，顺序执行最多八个prompt：
+
+```bash
+python3 -B src/aw/integrations/qoder/conversation.py /absolute/CONVERSATION.json
+```
+
+输入须为绝对路径、调用方所有的0600 JSON文件，上限1MiB。字段如下：
+
+| 字段 | 必填值 |
+| --- | --- |
+| `format` | 整数 `1` |
+| `launch` | 上述单prompt启动配置，删除 `prompt`；`session_directory` 指向新的conversation根目录 |
+| `turns` | 按顺序排列的1～8个对象，每个包含 `prompt` 和可选布尔值 `reset` |
+
+例如 `turns` 数组可以是：
+
+```json
+[
+  {"prompt": "Read the project summary."},
+  {"prompt": "Explain the previous summary."},
+  {"prompt": "Start a separate conversation.", "reset": true}
+]
+```
+
+创建根目录前先验证全部prompt和配置。每轮使用相同的显式permission mode、原生配置、pin、
+Provider和投影opt-in。已有根目录会被拒绝；重复调用不会覆盖证据或恢复中断的runner。
+
+第一轮使用新的原生UUID，后续轮通过Qoder `--resume` 续接该精确UUID；`reset: true` 则创建
+另一个新UUID。不接受任意外部会话、“最近会话”选择或fork。续接前要求本次会话有非空、普通
+文件形式的完整JSON对象历史，上限16MiB。这只检查历史可读取及格式完整，不证明模型上下文
+已经恢复，也不替代AW独立history reader与身份核验。
+
+每轮都经原有cosh-shell helper启动新的Agent进程，使用不同turn ID和递增runtime generation。
+整个序列共享一个进程owner及取消状态；只有上一轮Agent进程树已回收、观察操作完成，才启动
+下一轮。非零退出、准备/观察错误、超时或取消都会停止序列，不自动重试。`timeout_seconds`
+仍是每轮Agent预算，另加每轮已有的有界启动、清理和观察操作。
+
+新根目录为0700，保留含prompt的 `conversation.json`、仅元数据的 `summary.json`，以及沿用
+单prompt私有布局的 `turn-0001`、`turn-0002` 等目录。summary的 `completed` 表示所请求进程
+及观察操作成功结束，不表示所有输出都投影或采用；具体事实看逐轮 `result.json` 和既有query
+证据。停止时保留已尝试轮次的证据及诊断；reset不删除旧记录，也不把旧统计移入新会话。
+即使第一轮准备失败，根目录的诊断仍保留。
+
+这是顺序print-mode调用，不是常驻交互Agent、PTY、进程内 `/clear`、pane管理或Herdr UI。
+独立调用拥有不同根目录与会话；清理不从持久PID恢复终止权限。原生历史按Qoder自身策略保留，
+AW记录由操作方在审计保留期结束后删除精确归属目录。
+见[连续对话归属设计](../../../../src/aw/docs/design/qoder-session_zh.md#有界连续对话)。

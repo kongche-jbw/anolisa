@@ -426,7 +426,12 @@ class GateTests(unittest.TestCase):
         deadline = time.monotonic() + 2
         while time.monotonic() < deadline:
             status = Path(f"/proc/{pid}/stat")
-            if not status.exists() or status.read_text().split()[2] == "Z":
+            try:
+                state = status.read_text().split()[2]
+            except (FileNotFoundError, ProcessLookupError):
+                # Reaping may remove procfs after open or before the read.
+                break
+            if state == "Z":
                 break
             time.sleep(0.02)
         else:

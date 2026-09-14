@@ -43,10 +43,20 @@ if mode in ("timeout", "early_exit"):
         raise SystemExit(7)
     time.sleep(30)
     raise SystemExit(0)
-session = argument("--session-id")
+resumed = "--resume" in args
+assert not (resumed and "--session-id" in args)
+session = argument("--resume" if resumed else "--session-id")
 native = Path(argument("--config-dir"))
 history = native / "projects" / str(work).replace("/", "-").replace("_", "-") / f"{session}.jsonl"
 history.parent.mkdir(parents=True, exist_ok=True)
+if resumed:
+    assert history.is_file()
+else:
+    assert not history.exists()
+previous = history.read_text() if history.exists() else ""
+tool_id = f"tool-{len(previous.splitlines()) + 1}"
+with (work / "launches.jsonl").open("a") as stream:
+    stream.write(json.dumps({"session_id": session, "resume": resumed, "pid": os.getpid()}) + "\n")
 golden = json.loads((work / "golden.json").read_text())
 text = golden["request"]["input"]["content"]
 tool = {"command": "printf synthetic", "description": "synthetic peer"}
@@ -55,13 +65,14 @@ row = {
     "sessionId": session,
     "cwd": str(work),
     "isSidechain": False,
-    "message": {"content": [{"type": "tool_use", "id": "tool-1", "name": "Bash", "input": tool}]},
+    "message": {"content": [{"type": "tool_use", "id": tool_id, "name": "Bash", "input": tool}]},
 }
-history.write_text(json.dumps(row) + "\n")
+with history.open("a") as stream:
+    stream.write(json.dumps(row) + "\n")
 payload = {
     "hook_event_name": "PostToolUse",
     "session_id": session,
-    "tool_use_id": "tool-1",
+    "tool_use_id": tool_id,
     "tool_name": "Bash",
     "tool_input": tool,
     "cwd": str(work),
@@ -81,6 +92,11 @@ if mode == "wrong_session":
     payload["session_id"] = "other-session"
 settings = json.loads(Path(argument("--settings")).read_text())
 hook = settings["hooks"]["PostToolUse"][0]["hooks"][0]["command"]
+previous_hook = work / "previous-hook.txt"
+if mode == "stale_turn":
+    hook = previous_hook.read_text()
+else:
+    previous_hook.write_text(hook)
 output = subprocess.run(
     shlex.split(hook), input=json.dumps(payload), text=True, capture_output=True, timeout=20
 )
@@ -96,9 +112,7 @@ row = {
     "sessionId": session,
     "cwd": str(work),
     "isSidechain": False,
-    "message": {
-        "content": [{"type": "tool_result", "tool_use_id": "tool-1", "content": projected}]
-    },
+    "message": {"content": [{"type": "tool_result", "tool_use_id": tool_id, "content": projected}]},
 }
 with history.open("a") as stream:
     stream.write(json.dumps(row) + "\n")

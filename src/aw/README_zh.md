@@ -115,3 +115,7 @@ Registry 包含 21 个 Schema 资源。`crates/aw-contracts/schemas/` 中的 8 �
 复用现有hook与独立采用查询。启动前核对显式pin、真实协议探针和干净配置，未经验证的
 活跃hooks/plugins组合明确拒绝。本Linux profile仅一次prompt，无PTY/多pane支持。
 [配置与保留说明](../../docs/user-guide/zh/user-entrypoint/aw.md#qoder-单prompt会话)。
+
+需要有界连续对话时，`integrations/qoder/conversation.py` 只续接本次调用此前创建的会话，
+支持显式reset开启新会话。每个prompt有新进程代次与不可变轮次证据，失败或取消即停止。
+这是顺序print-mode续接，不提供交互PTY/pane管理。见[连续对话配置](../../docs/user-guide/zh/user-entrypoint/aw.md#有界-qoder-连续对话)。

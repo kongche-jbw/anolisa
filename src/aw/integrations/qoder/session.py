@@ -2,6 +2,7 @@
 """Explicit one-prompt Qoder session through cosh-shell and existing AW CLIs."""
 
 import argparse
+from contextlib import nullcontext
 import hashlib
 import json
 import os
@@ -158,17 +159,24 @@ def coexistence(config, processes):
         raise ValueError("existing Qoder plugins require a reviewed coexistence profile")
 
 
+def history_path(config, session):
+    """Locate the fixed native profile's transcript for an owned session."""
+    project = config["workspace"].replace("/", "-").replace("_", "-")
+    return Path(config["config_directory"]) / "projects" / project / f"{session}.jsonl"
+
+
 def bootstrap(root):
     config = read(root / "launch.json", private=True)
     validate(config)
-    session = read(root / "identity.json", private=True)["session_id"]
+    identity = read(root / "identity.json", private=True)
+    session = identity["session_id"]
     pid = os.getpid()
     start = int(Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19])
     runtime = {
-        "runtime_id": session,
-        "generation": 1,
+        "runtime_id": identity["runtime_id"],
+        "generation": identity["runtime_generation"],
         "binding_revision": 1,
-        "environment_id": session,
+        "environment_id": identity["environment_id"],
         "process_ref": f"pid:{pid}@{start}",
         "observation_source": "owned_child",
         "owner_id": "aw-qoder-launcher",
@@ -177,21 +185,21 @@ def bootstrap(root):
         "session_id": session,
     }
     scope = {
-        "environment_id": session,
+        "environment_id": identity["environment_id"],
         "execution_context_id": session,
         "actor_id": "qoder",
-        "runtime_id": session,
-        "runtime_generation": 1,
+        "runtime_id": identity["runtime_id"],
+        "runtime_generation": identity["runtime_generation"],
         "binding_revision": 1,
         "session_id": session,
-        "turn_id": session,
+        "turn_id": identity["turn_id"],
     }
     hook = {
         "runtime": runtime,
         "scope": scope,
         "agent_pid": pid,
         "agent_start_ticks": start,
-        "qoder_single_turn_id": session,
+        "qoder_single_turn_id": identity["turn_id"],
         "journal": str(root / "journal"),
         "provider": config["preflight"]["security"],
         "include_low_confidence": False,
@@ -199,13 +207,11 @@ def bootstrap(root):
     mode = "qoder"
     settings = hook
     if config["preflight"]["mode"] == "project":
-        project = config["workspace"].replace("/", "-").replace("_", "-")
-        history = Path(config["config_directory"]) / "projects" / project / f"{session}.jsonl"
         settings = {
             "hook": hook,
             "tokenless": config["preflight"]["tokenless"],
             "record_directory": str(root / "records"),
-            "history_path": str(history),
+            "history_path": str(history_path(config, session)),
             "history_profile": PROFILE,
             "max_observation_delay_ms": 300000,
             **config["projection"],
@@ -247,7 +253,7 @@ def bootstrap(root):
         config["workspace"],
         "--settings",
         str(root / "qoder.json"),
-        "--session-id",
+        "--resume" if identity["resume"] else "--session-id",
         session,
         "--permission-mode",
         config["permission_mode"],
@@ -263,14 +269,26 @@ def bootstrap(root):
     os.execv(qoder, argv)
 
 
-def launch(config):
+def launch(config, *, identity=None, processes=None):
     validate(config)
+    if identity is None:
+        session = str(uuid.uuid4())
+        identity = {
+            "session_id": session,
+            "turn_id": session,
+            "runtime_id": session,
+            "environment_id": session,
+            "runtime_generation": 1,
+            "resume": False,
+        }
     root, work = Path(config["session_directory"]), Path(config["workspace"])
     # Exclusive creation gives cleanup ownership without touching existing state.
     root.mkdir(mode=0o700)
     started = False
     try:
-        with Processes() as processes:
+        # A bounded conversation shares cancellation across turns, while each
+        # turn still waits for complete child cleanup before the next launch.
+        with nullcontext(processes) if processes is not None else Processes() as processes:
             binaries = config["binaries"]
             for name, expected in (("qoder", "1.1.47"), ("cosh_shell", "cosh-shell 0.15.0")):
                 if (
@@ -300,7 +318,7 @@ def launch(config):
             ):
                 raise ValueError("native security protocol admission required")
             write(root / "launch.json", config)
-            write(root / "identity.json", {"session_id": str(uuid.uuid4())})
+            write(root / "identity.json", identity)
             write(root / "readiness.json", readiness)
             # Recheck coexistence after potentially slow Provider preparation.
             coexistence(config, processes)

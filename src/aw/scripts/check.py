@@ -275,7 +275,9 @@ def structure(metadata: dict, root: Path) -> None:
                     print(f"AW layout: {relative}: {lines} lines (ceiling {limit})", flush=True)
 
 
-def selftest(directory: str = "tests", pattern: str = "test_ci_checks.py") -> None:
+def selftest(
+    directory: str = "tests", pattern: str = "test_ci_checks.py", *, timeout: int = 120
+) -> None:
     """Run the gate's behavior tests, rejecting missing or empty discovery."""
     run(
         [
@@ -296,7 +298,7 @@ sys.exit(not result.wasSuccessful())
             directory, pattern,
         ],
         AW,
-        timeout=120,
+        timeout=timeout,
     )
 
 
@@ -328,6 +330,7 @@ def check() -> None:
     run(["cargo", "build", "--locked", "-p", "aw-hook-cli", "--bins"], AW)
     selftest("integrations/qoder/tests", "test_process.py")
     selftest("integrations/qoder/tests", "test_session.py")
+    selftest("integrations/qoder/tests", "test_conversation.py", timeout=240)
     run([sys.executable, "tests/check_canonical.py"], AW, timeout=30)
     run([sys.executable, "tests/tokenless_oracle.py", "--self-test"], AW, timeout=30)
     run(["cargo", "doc", "--workspace", "--no-deps", "--locked"], AW)

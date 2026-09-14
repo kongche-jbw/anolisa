@@ -49,5 +49,30 @@ SIGKILL不能保证完整清理，不静默宣布成功。
 禁用hooks、设置来源覆盖、初始化失败、超时取消、根提前退出、跨组后代、无关进程及输出洪泛。
 
 真实Qoder/cosh-shell/SecCore/Tokenless须按具体版本和最终源码另行验收。历史观察仅证明
-local_history，模型请求采用与计费另计。本单元不实现交互PTY、多轮/reset、多pane、Herdr UI、
-Codex启动或COSH自有dispatcher。
+local_history，模型请求采用与计费另计。独立session.py入口仍只支持单prompt，conversation.py
+增加下述有界序列；两个入口均不提供交互PTY、多pane、Herdr UI、Codex启动或COSH自有dispatcher。
+
+## 有界连续对话
+
+`conversation.py` 在原有单prompt操作外增加顺序的原生resume/reset，最多八轮共用一个
+`Processes` scope。原launch借用该owner，不再建立supervisor，也不在轮间清除取消状态。
+无需修改Core、Host、Adapter或Rust依赖。
+
+conversation UUID提供runtime/environment身份，每次新Agent启动递增generation，每个prompt
+有新turn UUID。成功的 `--resume` 沿用原生session UUID，显式reset更换UUID。bootstrap仍在
+exec前记录自身PID/start ticks，在独立轮次目录写入不可变hook配置。即使原生session相同，
+旧轮次hook也无法通过新进程的祖先校验；扩展配置generation与进程代次保持不同概念。
+
+只续接本次调用此前建立的原生会话。续接前检查非空、有界、普通JSONL历史，不复制固定
+工具/结果history语法。续接只传 `--resume`，不同时传 `--session-id`；固定CLI除fork外会拒绝
+两者组合。历史可读取不证明语义上下文恢复，须另做原生验收。reset表示新进程、新原生会话，
+不是操纵常驻Agent内部的 `/clear`。
+
+单轮在子树清理、观察操作完成后才返回。错误/非零退出停止序列，轮间取消也不能启动后续Agent。
+最终元数据索引只记录尝试轮次、相对证据目录与进程状态；完成状态与逐事件采用分别解释。
+reset后旧记录保留原身份；没有可变current-pane文件或旧observer向新轮次发布结果，因此本单元
+不增加回调fencing状态机。
+
+真实AW二进制配合peers覆盖续接/reset身份、独立采用、旧hook拒绝、失败/取消和独立根目录。
+真实Qoder的续接历史及上下文须另验。持续交互owner、同时多pane及Herdr投影仍属后续接线；
+shell专用PTY API和Gateway ACP pipe supervisor不能直接当通用原生Agent终端API使用。
