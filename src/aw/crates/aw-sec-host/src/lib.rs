@@ -3,6 +3,8 @@
 
 use aw_host_process as process;
 pub use aw_host_process::{Config, FilePin, Limits, PinState};
+/// Native scan interface admitted independently of implementation language.
+pub use aw_sec_core::PROTOCOL_PROFILE;
 
 /// Native CLI version whose PII protocol was verified for this Host revision.
 pub const NATIVE_CLI_VERSION: &str = "0.12.0";
@@ -25,6 +27,9 @@ pub enum Error {
     /// The bounded native version probe failed.
     #[error("SecCore version probe failed: {0}")]
     Native(&'static str),
+    /// The synthetic scan could not establish native protocol compatibility.
+    #[error("SecCore protocol probe failed: {0}")]
+    Protocol(&'static str),
     /// The descriptor does not satisfy the existing AW contracts.
     #[error("SecCore Host contract failed: {0}")]
     Contract(#[from] aw_contracts::Error),
@@ -108,6 +113,77 @@ impl SecHost {
         })
     }
 
+    /// Verifies the native scan protocol using fixed public synthetic content.
+    ///
+    /// Uses the execution configuration unchanged, including custom rules and
+    /// native audit behavior. Any complete valid verdict is admissible; success
+    /// proves only this bounded exchange, not protection of a future Agent.
+    /// Constructors and normal hooks do not call this startup-only probe.
+    ///
+    /// # Errors
+    /// Rejects missing commands, incomplete or invalid responses, changed pins,
+    /// exhausted budgets and cancellation without disclosing native output.
+    pub fn probe_protocol(&self) -> Result<(), Error> {
+        const TEXT: &str = "AW startup protocol probe.";
+        let started = now_ms().map_err(|_| Error::Protocol("clock_unavailable"))?;
+        let input = json!({"artifact":{"id":"aw-startup-protocol-probe",
+            "digest":canonical::digest(TEXT.as_bytes()),"content":TEXT,
+            "media_type":"text/plain","origin":"command_output"},
+            "boundary":"post_tool","constraints":{"include_low_confidence":false}});
+        let request = PiiRequest::new(&self.registry, &input)
+            .map_err(|_| Error::Protocol("invalid_probe_input"))?;
+        self.scan(&request, started, self.config.limits.timeout_ms)
+            .map_err(Error::Protocol)?;
+        let completed = now_ms().map_err(|_| Error::Protocol("clock_unavailable"))?;
+        if self.cancellation.is_cancelled() {
+            return Err(Error::Protocol("provider_cancelled"));
+        }
+        if completed < started {
+            return Err(Error::Protocol("clock_regressed"));
+        }
+        if completed - started > self.config.limits.timeout_ms {
+            return Err(Error::Protocol("provider_time_budget_exceeded"));
+        }
+        Ok(())
+    }
+
+    fn scan(
+        &self,
+        request: &PiiRequest<'_>,
+        started: u64,
+        timeout_ms: u64,
+    ) -> Result<Value, &'static str> {
+        if request.stdin().len() > self.config.limits.input_bytes {
+            return Err("input_budget_exceeded");
+        }
+        self.config.check_pins().map_err(|error| error.code())?;
+        // Parsing, executable hashing and request encoding consume the same
+        // invocation budget. Never launch with a stale pre-preparation timeout.
+        let launch_at = now_ms().map_err(|_| "clock_unavailable")?;
+        let timeout_ms = started
+            .saturating_add(timeout_ms)
+            .checked_sub(launch_at)
+            .filter(|n| *n > 0)
+            .ok_or("deadline_exceeded")?;
+        let wire = process::run(
+            &self.config,
+            &request.args(),
+            request.stdin(),
+            timeout_ms,
+            self.cancellation.as_ref(),
+        )
+        .map_err(|error| error.code())?;
+        self.config.check_pins().map_err(|error| error.code())?;
+        request
+            .project(wire.exit_code, &wire.stdout)
+            .map_err(|error| match error {
+                aw_sec_core::Error::NativeFailure => "native_failed",
+                aw_sec_core::Error::OutputLimit => "native_output_limit",
+                aw_sec_core::Error::IncompleteCoverage => "incomplete_coverage",
+                _ => "invalid_native_response",
+            })
+    }
+
     fn inspect(&self, invocation: &Value, started: u64) -> Result<Value, &'static str> {
         let input = &invocation["input"];
         let request = PiiRequest::new(&self.registry, input).map_err(|_| "invalid_input")?;
@@ -139,36 +215,7 @@ impl SecHost {
         if timeout_ms == 0 {
             return Err("deadline_exceeded");
         }
-        if request.stdin().len() > self.config.limits.input_bytes {
-            return Err("input_budget_exceeded");
-        }
-        self.config.check_pins().map_err(|error| error.code())?;
-        // Parsing, executable hashing and request encoding consume the same
-        // invocation budget. Never launch with a stale pre-preparation timeout.
-        let launch_at = now_ms().map_err(|_| "clock_unavailable")?;
-        let timeout_ms = started
-            .saturating_add(timeout_ms)
-            .checked_sub(launch_at)
-            .filter(|n| *n > 0)
-            .ok_or("deadline_exceeded")?;
-        let wire = process::run(
-            &self.config,
-            &request.args(),
-            request.stdin(),
-            timeout_ms,
-            self.cancellation.as_ref(),
-        )
-        .map_err(|error| error.code())?;
-        self.config.check_pins().map_err(|error| error.code())?;
-        let output =
-            request
-                .project(wire.exit_code, &wire.stdout)
-                .map_err(|error| match error {
-                    aw_sec_core::Error::NativeFailure => "native_failed",
-                    aw_sec_core::Error::OutputLimit => "native_output_limit",
-                    aw_sec_core::Error::IncompleteCoverage => "incomplete_coverage",
-                    _ => "invalid_native_response",
-                })?;
+        let output = self.scan(&request, started, timeout_ms)?;
         let bytes = canonical::bytes(&output)
             .map_err(|_| "invalid_response")?
             .len();

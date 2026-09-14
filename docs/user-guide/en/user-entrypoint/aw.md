@@ -277,17 +277,27 @@ independent expected digests. Preserve Python virtual-environment executable
 paths; resolving their symlinks can change package metadata and imports. No PATH
 search, automatic installation or alternate-version fallback occurs.
 
-Only native `--version` probes run. Each uses its declared timeout/stream bounds
-and existing Host cancellation/cleanup. Exit 0 emits JSON with
-`status: dependencies_ready`, the selected `mode` and component/native-version
-pairs, `agent_started: false` and `runtime_ready: false`. Exit 1 reports the
-failing component, expected native version and bounded diagnostic on stderr;
-no successful readiness JSON is emitted. Captured native output and environment
-values are not echoed. A successful preflight does not scan content, create a
-Journal, install hooks or establish adoption, final enforcement or Agent
-compatibility. Execution rechecks admission; later file changes can invalidate
-this snapshot. The launcher must separately validate its shell helper, Agent,
-identity and plugin coexistence before starting a session.
+Preflight checks native versions, then explicitly calls SecCore `scan-pii` on the
+fixed public text `AW startup protocol probe.` through the existing bounded Host.
+The native rules, middleware and audit remain enabled: **this probe can write a
+native audit event**. Any complete, semantically valid verdict is accepted,
+including sensitive; missing commands, incomplete coverage and malformed results
+fail. Ordinary hook construction does not add another synthetic scan per event.
+
+Exit 0 emits `status: dependencies_ready`, the selected mode and component/version
+pairs, `agent_started: false` and `runtime_ready: false`. SecCore metadata also
+contains `protocol_profile: agent-sec.scan-pii/v1`, `protocol_probe: passed`,
+`probe_scope: synthetic_content`, and `native_audit_possible: true`. Exit 1 reports
+a static component diagnostic without echoing native content/environment.
+
+SecCore product V1/V2, native protocol revisions, AW contract revisions and product
+versions are independent. A version string alone is insufficient: the Rust V2
+CLI can share a release number without exposing this PII command. This bounded
+probe checks the selected installation's callable surface; it is not complete
+scanner compatibility certification, a daemon health check or enforcement.
+Approved artifact/configuration pins and native conformance evidence remain
+required. No Journal, Agent or adoption claim is created. Execution rechecks its
+pins; later changes can invalidate this snapshot.
 
 ### Optional pinned Herdr bundle
 
@@ -318,3 +328,71 @@ does not register global state or hooks.
 
 Readiness JSON uses the existing five-second, cancellation-aware stdout delivery;
 a nonconsuming output pipe cannot keep preflight waiting indefinitely.
+
+## One-prompt Qoder session
+
+The explicit Linux launcher connects Qoder **1.1.47**, the **cosh-shell 0.15.0
+helper**, and the existing AW binaries. It requires Python 3.11+ for orchestration;
+the Provider executable remains independently selected. Run from this checkout:
+
+```bash
+python3 -B src/aw/integrations/qoder/session.py /absolute/LAUNCH.json
+```
+
+`LAUNCH.json` must be caller-owned, mode 0600, a regular file, and use unique JSON
+keys. Supply the following fields; unknown fields are rejected:
+
+| Field | Value |
+| --- | --- |
+| `format` | `1` |
+| `workspace` | Existing canonical absolute path using ASCII letters, digits, `/`, `_`, `-`; this bounds the verified native history-path encoding |
+| `config_directory` | Existing native Qoder configuration root; login and credentials stay there |
+| `session_directory` | New absolute directory under an existing parent; an existing destination is never replaced |
+| `binaries` | Exactly `qoder`, `cosh_shell`, `aw_hook`, `aw_preflight`, `aw_adoption`; each has absolute `path` and independently approved executable `sha256` |
+| `preflight` | The inspect/project configuration above; `security.cwd` must equal `workspace` |
+| `prompt` | One nonempty prompt, at most 32 KiB of UTF-8 |
+| `timeout_seconds` | Integer 1–240 for the Agent phase; bounded startup probes and cleanup have separate limits |
+| `permission_mode` | Explicit native `default`, `dont_ask`, or `bypass_permissions`; AW does not grant final dispatch authority |
+| `model` | Optional native model name/ID |
+| `projection` | Required only for project: `retention: source_and_candidate`, `accepted_reversibility: [unrecoverable]`, and explicit boolean `allow_text_reencoding` |
+
+The launcher checks versions/pins, existing native settings/plugins and the
+synthetic security protocol before starting cosh-shell. Existing hooks, enabled
+plugins, `disableAllHooks`, invalid settings syntax and a nondefault
+`QODER_CONFIG_DIR_NAME` are rejected. Disabled plugin entries are preserved.
+It does not turn off existing security integrations, change settings sources,
+copy credentials, or install global hooks. Additional settings live in the new
+private session directory. This initial profile supports a clean configuration;
+coexistence with active plugins requires a separately verified profile.
+
+cosh-shell starts one bootstrap child. That child records its own PID/start ticks
+and execs Qoder, keeping its identity. Qoder uses one `-p` invocation with Bash as
+the selected built-in tool. This is not an interactive PTY, multi-turn/reset or
+multi-pane launcher. It uses the existing `qoder`/`qoder-project` hook directly.
+No history file is fabricated before a hook; projection requires Qoder's actual
+history prefix. A completed Agent with no recorded projection has no adoption
+proof.
+
+After Agent exit, the launcher performs a bounded single observation per recorded
+context and writes `result.json`. Each observation is the existing `observe`
+result, including independent retained history evidence. Use `aw-adoption-cli
+query /absolute/SESSION/records/EVENT_KEY.json` later to revalidate that snapshot.
+`adopted` proves the captured local-history result, not model consumption or
+billing savings. Missing evidence remains unverified; observations are not retried
+indefinitely. At most 128 contexts are admitted for automatic observation.
+
+The dedicated launcher owns its cosh-shell child tree, including adopted Provider
+children in separate process groups. SIGINT/SIGTERM/timeout and early root exit
+enter bounded cleanup; the group leader remains unreaped until its last group
+signal. Cleanup allows one second for termination and three seconds for kill/reap,
+then reports failure if exit cannot be established. Utility stdout/stderr each
+have a 64 KiB live limit. No stop authority is reconstructed from saved PIDs.
+SIGKILL, machine failure and kernel-stuck processes cannot promise orderly cleanup.
+
+Before Agent launch, failed setup removes its own new session directory. Once
+launch is attempted, settings, Journal, records and result/failure metadata remain
+private for diagnosis and the explicitly selected retention policy. Native Qoder
+history stays under its selected configuration root. Remove these specific session
+artifacts only after their retention purpose ends; uninstalling this launcher does
+not require changing user hooks. [Design and test boundaries](../../../../src/aw/docs/design/qoder-session.md)
+explain ownership and supported evidence.

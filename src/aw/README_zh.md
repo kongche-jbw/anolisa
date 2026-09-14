@@ -108,3 +108,10 @@ Registry 包含 21 个 Schema 资源。`crates/aw-contracts/schemas/` 中的 8 �
 另有独立、显式选择的Herdr获取命令，固定Linux二进制与许可证均通过校验后才发布新bundle，
 不替换已有目标。见[命令与配置](../../docs/user-guide/zh/user-entrypoint/aw.md#依赖预检)
 和[归属设计](docs/design/startup-preflight_zh.md)。
+
+## Qoder 单prompt启动
+
+`integrations/qoder/session.py` 经cosh-shell0.15.0 helper启动有界Qoder1.1.47会话，
+复用现有hook与独立采用查询。启动前核对显式pin、真实协议探针和干净配置，未经验证的
+活跃hooks/plugins组合明确拒绝。本Linux profile仅一次prompt，无PTY/多pane支持。
+[配置与保留说明](../../docs/user-guide/zh/user-entrypoint/aw.md#qoder-单prompt会话)。

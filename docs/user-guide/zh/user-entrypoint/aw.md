@@ -217,12 +217,20 @@ Provider ID不能相同。未知字段报错；`inspect` 拒绝附带 `tokenless
 绝对程序路径、前缀参数和独立预期摘要由安装owner提供。保留Python虚拟环境的程序路径，
 解析其软链接可能改变包metadata和导入环境。预检不搜索PATH、不自动安装、不切换备用版本。
 
-只运行原生 `--version` 探针，每次使用声明的超时/流量限制和已有Host取消/回收机制。
-退出0输出JSON：`status: dependencies_ready`、所选 `mode`、组件及原生版本列表、
-`agent_started: false`、`runtime_ready: false`。退出1在stderr说明失败组件、预期原生版本
-和有界诊断，不输出成功就绪JSON；不回显捕获的原生输出或环境值。预检成功不代表扫描内容、
-创建Journal、安装hook、证明采用、最终阻断或Agent兼容。执行时仍重新验收，后续文件变化可
-使快照失效。启动方仍需独立核验shell helper、Agent、身份和插件共存，才能创建会话。
+预检先核对原生版本，再通过既有有界Host对固定公开文本 `AW startup protocol probe.`
+实际调用SecCore scan-pii。原生规则、middleware和审计保持启用，**可能产生一条原生审计事件**。
+任意完整且语义有效的结果均可通过，包括sensitive；缺命令、覆盖不完整、格式错误均失败。
+普通hook构造不会为每个工具事件额外执行这次合成扫描。
+
+退出0输出 `status: dependencies_ready`、mode、组件/版本及 `agent_started: false`、
+`runtime_ready: false`。SecCore另带 `protocol_profile: agent-sec.scan-pii/v1`、
+`protocol_probe: passed`、`probe_scope: synthetic_content`、`native_audit_possible: true`。
+失败只输出静态组件诊断，不回显原生内容或环境。
+
+SecCore产品V1/V2、原生协议、AW合同及制品版本分别管理。版本字符串不足以证明兼容：
+Rust V2可能同版本但尚无PII命令。本次探针验证所选安装的实际调用面，不等于完整扫描器兼容
+认证、daemon健康或最终阻断；仍需可信制品/配置pin和原生合同验收证据。不创建Journal、Agent
+或采用事实。执行时重新检查，后续文件变化可使此快照失效。
 
 ### 可选的固定Herdr bundle
 
@@ -245,3 +253,51 @@ SIGTERM、SIGINT及超时会清理私有staging；SIGKILL或断电可能留下st
 不再需要时仅删除显式选择的bundle；fetch不注册全局状态或hooks。
 
 就绪JSON复用已有五秒有界、可取消的stdout交付；不消费输出的管道不会让预检无限等待。
+
+## Qoder 单prompt会话
+
+显式Linux启动器连接 **Qoder 1.1.47**、**cosh-shell 0.15.0 helper**及既有AW二进制。
+编排使用Python3.11+，Provider可执行入口独立选择。在本源码目录运行：
+
+```bash
+python3 -B src/aw/integrations/qoder/session.py /absolute/LAUNCH.json
+```
+
+配置要求当前用户持有、0600普通文件、唯一JSON键；未知字段拒绝：
+
+| 字段 | 内容 |
+| --- | --- |
+| `format` | `1` |
+| `workspace` | 已有规范化绝对路径，仅ASCII字母/数字、`/`、`_`、`-`；限定已验证的原生历史路径编码 |
+| `config_directory` | 已有Qoder原生配置根，认证仍由原生管理 |
+| `session_directory` | 已有父目录下的新绝对路径；不覆盖已有目录 |
+| `binaries` | 恰好包含qoder、cosh_shell、aw_hook、aw_preflight、aw_adoption；每项为绝对path及独立可信sha256 |
+| `preflight` | 上述inspect/project配置；security.cwd必须等于workspace |
+| `prompt` | 一次非空prompt，UTF-8最多32KiB |
+| `timeout_seconds` | Agent阶段1–240秒整数；启动探针和清理另有有限预算 |
+| `permission_mode` | 显式default、dont_ask或bypass_permissions；AW不授予最终执行权限 |
+| `model` | 可选原生model名称/ID |
+| `projection` | 仅project必填：retention=source_and_candidate、accepted_reversibility=[unrecoverable]及显式布尔allow_text_reencoding |
+
+启动前核对版本/pin、原生配置/插件和合成安全协议调用。已有hooks、启用插件、disableAllHooks、
+无法解析的配置、非默认QODER_CONFIG_DIR_NAME会明确拒绝；已禁用插件条目保持原样。
+不关闭安全插件、不切换settings sources、不复制认证、不写全局hooks。附加配置只写入本次私有
+目录；首个profile支持干净配置，活跃插件共存需要独立验收。
+
+cosh-shell启动一个bootstrap子进程，子进程记录自身PID/start ticks后exec Qoder，保持身份。
+Qoder只执行一次 `-p`，选择Bash内置工具，直接使用现有qoder/qoder-project入口。
+本阶段不支持交互PTY、多轮/reset或多pane，不提前伪造历史文件；投影必须读取Qoder真实前缀。
+Agent完成但没有投影记录时，没有采用证明。
+
+退出后每个上下文只执行一次有限observe，最多128项，写入result.json。之后可以通过
+`aw-adoption-cli query /absolute/SESSION/records/EVENT_KEY.json`重新核验已有快照。
+adopted仅证明该次local_history记录，不证明模型消费或计费收益；缺证据保持unverified。
+
+专用启动器持有本次cosh-shell子树，包括被接管的独立进程组Provider后代。取消、超时或根进程
+提前退出都会清理；leader保留至最后一次组信号之后才回收，不从历史PID恢复停止权。
+TERM宽限1秒、kill/reap最多3秒，无法确认退出则报错；启动工具stdout/stderr各有64KiB实时上限。
+SIGKILL、主机故障或内核阻塞不能保证有序清理。
+
+启动前失败删除本次新目录；一旦尝试启动，私有配置、Journal、记录和result/failure元数据保留，
+用于诊断及显式保留策略。Qoder历史仍在所选原生配置根。保留期结束后只删除该次会话制品，
+无需修改用户hooks。[设计与测试边界](../../../../src/aw/docs/design/qoder-session_zh.md)说明资源归属。

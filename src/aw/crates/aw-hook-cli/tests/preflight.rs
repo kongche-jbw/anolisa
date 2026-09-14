@@ -13,7 +13,12 @@ use common::Directory;
 
 fn config(dir: &Directory, name: &str, version: &str) -> Value {
     let code = format!(
-        "import sys,pathlib\nassert sys.argv[1:]==['--version']\nassert not sys.stdin.read()\npathlib.Path({name:?}).write_text('probed')\nprint({version:?})\n"
+        "import sys,pathlib,json\nif sys.argv[1:]==['--version']:\n assert not sys.stdin.read()\n pathlib.Path({name:?}).write_text('probed')\n print({version:?})\n sys.exit(0)\nassert {name:?}=='security'\nassert sys.argv[1:]==['scan-pii','--stdin','--format','json','--source','tool_output']\ntext=sys.stdin.read()\npathlib.Path('synthetic-scan').write_text(text)\nresponse=json.loads({response:?})\nresponse['summary']['bytes_scanned']=len(text.encode())\nprint(json.dumps(response))\n",
+        response=json!({"ok":true,"verdict":"pass","findings":[],"elapsed_ms":0,
+            "summary":{"total":0,"by_type":{},"by_category":{},"by_severity":{},
+            "source":"tool_output","bytes_scanned":0,"truncated":false,
+            "custom_rules":{"status":"absent","rule_count":0,"runtime_error_count":0,
+            "budget_exhausted":false,"truncated":false}}}).to_string()
     );
     json!({"provider_id":name,"provider_version":"operator-release",
         "program":"/usr/bin/python3",
@@ -42,7 +47,7 @@ fn run(value: Value) -> Result<Value, preflight::Error> {
 }
 
 #[test]
-fn selected_dependencies_are_probed_without_scan_or_session_state() {
+fn selected_dependencies_are_probed_with_synthetic_scan_but_without_session_state() {
     for project in [false, true] {
         let dir = Directory::new();
         let result = run(settings(&dir, project)).unwrap();
@@ -57,7 +62,17 @@ fn selected_dependencies_are_probed_without_scan_or_session_state() {
         assert_eq!(dir.0.join("tokenless").exists(), project);
         assert_eq!(
             fs::read_dir(&dir.0).unwrap().count(),
-            if project { 2 } else { 1 }
+            if project { 3 } else { 2 }
+        );
+        assert_eq!(result["providers"][0]["protocol_probe"], "passed");
+        assert_eq!(
+            result["providers"][0]["protocol_profile"],
+            "agent-sec.scan-pii/v1"
+        );
+        assert_eq!(result["providers"][0]["native_audit_possible"], true);
+        assert_eq!(
+            fs::read_to_string(dir.0.join("synthetic-scan")).unwrap(),
+            "AW startup protocol probe."
         );
     }
 }
@@ -241,4 +256,27 @@ finally:
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(dir.0.join("security").exists());
+}
+
+#[test]
+fn same_version_without_scan_protocol_never_reports_readiness_or_probes_tokenless() {
+    let dir = Directory::new();
+    let path = dir.0.join("settings.json");
+    let mut value = settings(&dir, true);
+    value["security"]["args"] = json!([
+        "-c",
+        "import sys;print('agent-sec-cli 0.12.0') if sys.argv[1:]==['--version'] else sys.exit(2)"
+    ]);
+    fs::write(&path, value.to_string()).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_aw-preflight-cli"))
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8(output.stderr)
+        .unwrap()
+        .contains("protocol probe failed: native_failed"));
+    assert!(!dir.0.join("tokenless").exists());
 }

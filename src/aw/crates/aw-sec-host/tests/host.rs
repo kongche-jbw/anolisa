@@ -369,3 +369,109 @@ fn nonreading_stdin_is_bounded_by_the_same_invocation_deadline() {
     assert!(fixture.path.join("no_read.started").exists());
     assert!(!fixture.called());
 }
+
+#[test]
+fn explicit_protocol_probe_accepts_complete_verdicts_and_rejects_incompatible_peers() {
+    for (mode, expected) in [
+        ("clean", None),
+        ("sensitive", None),
+        ("missing_command", Some("native_failed")),
+        ("malformed", Some("invalid_native_response")),
+        ("incomplete", Some("incomplete_coverage")),
+    ] {
+        let fixture = Fixture::new(mode);
+        let host = SecHost::new(fixture.config.clone()).unwrap();
+        assert!(!fixture.called(), "construction must not scan");
+        let result = host.probe_protocol();
+        if let Some(expected) = expected {
+            let error = result.unwrap_err().to_string();
+            assert!(error.contains(expected), "{mode}: {error}");
+            assert!(!error.contains("private"));
+        } else {
+            result.unwrap();
+            let called: Value =
+                serde_json::from_slice(&fs::read(fixture.path.join("called.json")).unwrap())
+                    .unwrap();
+            assert_eq!(called["stdin"], "AW startup protocol probe.");
+            assert_eq!(
+                called["args"],
+                json!([
+                    "scan-pii",
+                    "--stdin",
+                    "--format",
+                    "json",
+                    "--source",
+                    "tool_output"
+                ])
+            );
+            assert_eq!(called["environment"]["EXPLICIT"], "exact-value");
+        }
+    }
+}
+
+#[test]
+fn protocol_probe_checks_rules_before_and_after_exchange_and_rejects_small_budgets() {
+    for kind in ["before", "during", "input", "output"] {
+        let mut fixture = Fixture::new(if kind == "during" { "mutate" } else { "clean" });
+        let rules = fixture.path.join("rules.yaml");
+        fs::write(&rules, "original").unwrap();
+        fixture.config.pins.push(FilePin {
+            path: rules.clone(),
+            state: PinState::Sha256(canonical::digest(b"original")),
+        });
+        if kind == "input" {
+            fixture.config.limits.input_bytes = 1;
+        }
+        if kind == "output" {
+            // The version fits, but a protocol response cannot fit this budget.
+            fixture.config.limits.output_bytes = 64;
+        }
+        let host = SecHost::new(fixture.config.clone()).unwrap();
+        if kind == "before" {
+            fs::write(&rules, "changed").unwrap();
+        }
+        let error = host.probe_protocol().unwrap_err().to_string();
+        let expected = match kind {
+            "input" => "input_budget_exceeded",
+            "output" => "provider_output_limit",
+            _ => "pinned_file_changed",
+        };
+        assert!(error.contains(expected), "{kind}: {error}");
+        assert_eq!(fixture.called(), matches!(kind, "during" | "output"));
+    }
+}
+
+struct ScanStarted(PathBuf);
+impl aw_core::ports::Cancellation for ScanStarted {
+    fn is_cancelled(&self) -> bool {
+        self.0.exists()
+    }
+}
+
+#[test]
+fn protocol_probe_timeout_and_cancellation_reap_the_native_process() {
+    for cancel in [false, true] {
+        let mut fixture = Fixture::new("sleep");
+        fixture.config.limits.timeout_ms = 500;
+        let cancellation: std::sync::Arc<dyn aw_core::ports::Cancellation + Send + Sync> = if cancel
+        {
+            std::sync::Arc::new(ScanStarted(fixture.path.join("scan.pid")))
+        } else {
+            std::sync::Arc::new(aw_core::ports::NeverCancel)
+        };
+        let host = SecHost::new_cancellable(fixture.config.clone(), cancellation).unwrap();
+        let started = std::time::Instant::now();
+        let error = host.probe_protocol().unwrap_err().to_string();
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        assert!(
+            error.contains(if cancel {
+                "provider_cancelled"
+            } else {
+                "provider_timeout"
+            }),
+            "{error}"
+        );
+        let pid = fs::read_to_string(fixture.path.join("scan.pid")).unwrap();
+        assert!(!std::path::Path::new(&format!("/proc/{pid}")).exists());
+    }
+}

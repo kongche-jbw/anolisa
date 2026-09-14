@@ -12,6 +12,10 @@ if sys.argv[1:] == ["--version"]:
     raise SystemExit(0)
 
 mode = os.environ.get("MODE", "clean")
+pathlib.Path("scan.pid").write_text(str(os.getpid()))
+if mode == "missing_command":
+    print("No such command: scan-pii", file=sys.stderr)
+    raise SystemExit(2)
 if mode == "no_read":
     pathlib.Path("no_read.started").touch()
     time.sleep(10)
@@ -49,8 +53,21 @@ if mode == "malformed":
     print("not JSON: private result")
     raise SystemExit(0)
 
-print(json.dumps({"ok": True, "verdict": "pass", "findings": [], "elapsed_ms": 0,
+response = {"ok": True, "verdict": "pass", "findings": [], "elapsed_ms": 0,
     "summary": {"total": 0, "by_type": {}, "by_category": {}, "by_severity": {},
         "source": "tool_output", "bytes_scanned": len(text.encode("utf-8")),
         "truncated": False, "custom_rules": {"status": "absent", "rule_count": 0,
-            "runtime_error_count": 0, "budget_exhausted": False, "truncated": False}}}))
+            "runtime_error_count": 0, "budget_exhausted": False, "truncated": False}}}
+
+if mode == "incomplete":
+    response["summary"]["custom_rules"]["runtime_error_count"] = 1
+if mode == "sensitive":
+    response["verdict"] = "deny"
+    response["findings"] = [{"type": "custom_probe", "category": "custom",
+        "severity": "deny", "confidence": 1.0, "evidence_redacted": "[redacted]",
+        "span": {"start": 0, "end": 2}, "metadata": {}}]
+    response["summary"].update(total=1, by_type={"custom_probe": 1},
+        by_category={"custom": 1}, by_severity={"deny": 1})
+    response["summary"]["custom_rules"].update(status="loaded", rule_count=1,
+        ruleset_sha256="a" * 64)
+print(json.dumps(response))

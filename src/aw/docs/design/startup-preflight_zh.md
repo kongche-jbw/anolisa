@@ -35,3 +35,12 @@ Agent incarnation、reset边界或pane身份。
 及staging清理。真实制品获取作为显式网络验收另记；测试通过不认证已登录Agent或全部架构。
 
 就绪JSON复用已有五秒有界、可取消的stdout交付；不消费输出的管道不会让预检无限等待。
+
+## 原生协议准入
+
+SecCore在版本/pin后显式扫描公开合成文本。SecHost::probe_protocol复用PiiRequest和真实有界
+调用，完整有效的任意verdict均通过，可能产生原生审计。普通hook构造仍只做原有版本准备，
+避免每个工具调用额外扫描。产品V1/V2不选择AW合同版本；同版本却缺scan-pii的制品会在
+Tokenless准备及Agent启动前失败。探针只证明实际调用面，完整语义兼容仍依赖可信制品和原生用例。
+
+[单会话启动器](qoder-session_zh.md)负责shell/Agent检查、exec身份绑定和单次Qoder prompt的有界归属。

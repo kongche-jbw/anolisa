@@ -50,3 +50,17 @@ passing tests does not certify an authenticated Agent or all architectures.
 
 Readiness JSON uses the existing five-second, cancellation-aware stdout delivery;
 a nonconsuming output pipe cannot keep preflight waiting indefinitely.
+
+## Native protocol admission
+
+SecCore is explicitly probed with public synthetic text after its version/pins.
+`SecHost::probe_protocol` reuses PiiRequest and the actual bounded scan exchange;
+any complete valid verdict passes. A native audit event may be produced. Hook
+constructors retain their existing version-only preparation, avoiding one extra
+synthetic scan per tool call. Product V1/V2 does not select an AW contract version.
+A same-version CLI missing scan-pii fails before Tokenless preparation or Agent
+launch. The probe is callable-surface evidence, not full semantic certification;
+approved artifacts and executable native compatibility cases remain necessary.
+
+The [single-session launcher](qoder-session.md) now supplies shell/Agent checks,
+exec-bound identity and bounded ownership for a single Qoder prompt.

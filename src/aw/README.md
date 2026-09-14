@@ -132,8 +132,18 @@ Parse incoming bytes with `canonical::parse` before schema validation. Shape che
 
 `aw-preflight-cli` checks explicitly selected native dependencies before a launcher
 creates an Agent. Inspection requires SecCore; projection also requires Tokenless.
-It reuses the execution Hosts' version probes, pins, limits and cleanup. Success
+It reuses the execution Hosts' version probes, pins, limits and cleanup, and
+explicitly probes the native PII protocol with public synthetic content. Success
 reports dependency readiness only. An independent opt-in Herdr fetch verifies a
 fixed Linux binary and its license before publishing a new bundle without
 replacing an existing destination. See the [commands and configuration](../../docs/user-guide/en/user-entrypoint/aw.md#dependency-preflight)
 and [ownership design](docs/design/startup-preflight.md).
+
+## One-prompt Qoder launcher
+
+`integrations/qoder/session.py` starts a bounded Qoder1.1.47 session through the
+cosh-shell0.15.0 helper, reusing existing hooks and independent adoption queries.
+Explicit native pins, protocol probing and clean-config admission precede launch;
+active hooks/plugins are preserved by refusing unverified combinations. This
+Linux profile is one prompt, without PTY or multi-pane support. See the
+[configuration and retention reference](../../docs/user-guide/en/user-entrypoint/aw.md#one-prompt-qoder-session).
