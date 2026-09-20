@@ -28,70 +28,9 @@ pub fn launch_with_cancellation(
     args: &[OsString],
     cancelled: &dyn Fn() -> bool,
 ) -> Result<(), Error> {
-    if cancelled() {
-        return Err(Error::Profile("native launch cancelled"));
-    }
-    let prepared: Prepared = storage::read(&root.join("prepared.json"))?;
-    storage::descendant(prepared.owner_pid, prepared.owner_ticks)?;
+    let prepared = admit(root, args, cancelled)?;
     let agent_pid = std::process::id();
-    let (shell_pid, agent_ticks) = crate::process_identity(agent_pid).map_err(evidence)?;
-    if crate::process_identity(shell_pid).map_err(evidence)?.0 != prepared.owner_pid
-        || !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal()
-        || !std::io::stderr().is_terminal()
-        // These calls only query this process's terminal and process group.
-        || unsafe { libc::tcgetpgrp(0) != libc::getpgrp() }
-    {
-        return Err(Error::Profile(
-            "only a direct foreground launch in the owning shell is supported",
-        ));
-    }
-    native_args(args)?;
-    let config = &prepared.config;
-    if std::env::current_dir()? != config.cwd()? {
-        return Err(Error::Profile(
-            "current directory differs from trusted configuration",
-        ));
-    }
-    if std::env::var("QODER_CONFIG_DIR_NAME").is_ok_and(|name| name != ".qoder") {
-        return Err(Error::Profile("unsupported project settings directory"));
-    }
-    super::config::check_agent(&config.qoder)?;
-    let probe_config = aw_host_process::Config {
-        provider_id: "qoder-version".into(),
-        provider_version: "1.1.47".into(),
-        program: config.qoder.program.clone(),
-        program_sha256: config.qoder.program_sha256.clone(),
-        cwd: config.cwd()?.to_path_buf(),
-        args: vec![],
-        environment: Default::default(),
-        pins: vec![],
-        limits: aw_host_process::Limits {
-            timeout_ms: 5000,
-            input_bytes: 1024,
-            output_bytes: 1024,
-            stderr_bytes: 1024,
-        },
-    };
-    probe_config.validate().map_err(evidence)?;
-    let probe = aw_host_process::run(
-        &probe_config,
-        &["--version"],
-        b"",
-        5000,
-        &super::hooks::CancellationCheck(cancelled),
-    )
-    .map_err(evidence)?;
-    if cancelled() {
-        return Err(Error::Profile("native launch cancelled"));
-    }
-    if probe.exit_code != 0 || probe.stdout != b"1.1.47\n" {
-        return Err(Error::Profile("Qoder 1.1.47 required"));
-    }
-    if std::fs::read_dir(root)?.take(133).count() >= 132 {
-        return Err(Error::Profile(
-            "shell launch capacity reached; open a new cosh session",
-        ));
-    }
+    let (_, agent_ticks) = crate::process_identity(agent_pid).map_err(evidence)?;
     let run = root.join(format!("run-{agent_pid}-{agent_ticks}"));
     storage::directory(&run)?;
     let result = (|| {
@@ -180,6 +119,89 @@ pub fn launch_with_cancellation(
         std::fs::remove_dir_all(&run)?;
     }
     result
+}
+
+/// Checks the trusted foreground launch before opening an optional terminal view.
+///
+/// This performs the same admission and bounded version probe as native launch,
+/// without publishing a runtime or transferring process ownership.
+///
+/// # Errors
+/// Rejects changed pins, invalid shell ancestry, unsupported arguments or cancellation.
+pub fn check_launch(
+    root: &Path,
+    args: &[OsString],
+    cancelled: &dyn Fn() -> bool,
+) -> Result<(), Error> {
+    admit(root, args, cancelled).map(|_| ())
+}
+
+fn admit(root: &Path, args: &[OsString], cancelled: &dyn Fn() -> bool) -> Result<Prepared, Error> {
+    if cancelled() {
+        return Err(Error::Profile("native launch cancelled"));
+    }
+    let prepared: Prepared = storage::read(&root.join("prepared.json"))?;
+    storage::descendant(prepared.owner_pid, prepared.owner_ticks)?;
+    let agent_pid = std::process::id();
+    let (shell_pid, _) = crate::process_identity(agent_pid).map_err(evidence)?;
+    if crate::process_identity(shell_pid).map_err(evidence)?.0 != prepared.owner_pid
+        || !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal()
+        || !std::io::stderr().is_terminal()
+        // These calls only query this process's terminal and process group.
+        || unsafe { libc::tcgetpgrp(0) != libc::getpgrp() }
+    {
+        return Err(Error::Profile(
+            "only a direct foreground launch in the owning shell is supported",
+        ));
+    }
+    native_args(args)?;
+    let config = &prepared.config;
+    if std::env::current_dir()? != config.cwd()? {
+        return Err(Error::Profile(
+            "current directory differs from trusted configuration",
+        ));
+    }
+    if std::env::var("QODER_CONFIG_DIR_NAME").is_ok_and(|name| name != ".qoder") {
+        return Err(Error::Profile("unsupported project settings directory"));
+    }
+    super::config::check_agent(&config.qoder)?;
+    let probe_config = aw_host_process::Config {
+        provider_id: "qoder-version".into(),
+        provider_version: "1.1.47".into(),
+        program: config.qoder.program.clone(),
+        program_sha256: config.qoder.program_sha256.clone(),
+        cwd: config.cwd()?.to_path_buf(),
+        args: vec![],
+        environment: Default::default(),
+        pins: vec![],
+        limits: aw_host_process::Limits {
+            timeout_ms: 5000,
+            input_bytes: 1024,
+            output_bytes: 1024,
+            stderr_bytes: 1024,
+        },
+    };
+    probe_config.validate().map_err(evidence)?;
+    let probe = aw_host_process::run(
+        &probe_config,
+        &["--version"],
+        b"",
+        5000,
+        &super::hooks::CancellationCheck(cancelled),
+    )
+    .map_err(evidence)?;
+    if cancelled() {
+        return Err(Error::Profile("native launch cancelled"));
+    }
+    if probe.exit_code != 0 || probe.stdout != b"1.1.47\n" {
+        return Err(Error::Profile("Qoder 1.1.47 required"));
+    }
+    if std::fs::read_dir(root)?.take(133).count() >= 132 {
+        return Err(Error::Profile(
+            "shell launch capacity reached; open a new cosh session",
+        ));
+    }
+    Ok(prepared)
 }
 
 fn native_args(args: &[OsString]) -> Result<(), Error> {

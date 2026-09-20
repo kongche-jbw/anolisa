@@ -5,6 +5,7 @@ use aw_hook_cli::{
     inspect_with_cancellation, mark_returned, parse_payload, project_with_cancellation,
     read_projection_settings, read_settings, read_stdin, unavailable_response,
 };
+mod configure;
 mod output;
 mod signals;
 use signals::{install_termination, Termination, CANCELLED};
@@ -12,8 +13,29 @@ use std::sync::{atomic::Ordering, Arc};
 
 fn main() {
     let arguments: Vec<_> = std::env::args().skip(1).collect();
+    if arguments
+        .first()
+        .is_some_and(|argument| argument == "configure")
+    {
+        if arguments[1..] == ["--help"] {
+            println!("{}", configure::HELP);
+            return;
+        }
+        let result = install_termination()
+            .map_err(|error| error.to_string())
+            .and_then(|()| configure::run(&arguments[1..], &Termination));
+        match result {
+            Ok(configuration) => print!("{configuration}"),
+            Err(error) => {
+                eprintln!("aw configure: {error}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
     if arguments == ["--help"] {
         println!("Usage: aw-hook-cli <qoder|codex|qoder-project> /absolute/SETTINGS.json\nqoder/codex observe content. qoder-project explicitly returns recorded candidates; delivery does not prove adoption.");
+        println!("{}", configure::HELP);
         return;
     }
     let result = (|| {

@@ -8,11 +8,15 @@ from pathlib import Path
 
 mode = os.environ["MODE"]
 if sys.argv[1:] == ["--version"]:
+    if mode == "shared_deadline":
+        time.sleep(.07)
     print("tokenless 0.8.0" if mode == "wrong_version" else "tokenless 0.8.1")
     raise SystemExit(0)
 assert sys.argv[1:] == ["compress"]
 request = json.load(sys.stdin)
-Path("called.json").write_text(json.dumps({"request": request, "environment": dict(os.environ)}))
+Path("called.json").write_text(json.dumps({"request": request, "environment": dict(os.environ), "pid": os.getpid()}))
+if mode == "shared_deadline":
+    time.sleep(.07)
 if mode == "golden":
     print(Path("response.json").read_text())
     raise SystemExit(0)

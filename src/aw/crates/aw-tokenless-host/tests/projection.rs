@@ -2,11 +2,11 @@
 
 mod common;
 use aw_contracts::{canonical, Registry};
-use aw_core::ports::ProviderHost;
-use aw_tokenless_host::TokenlessHost;
+use aw_core::ports::{NeverCancel, ProviderHost};
+use aw_tokenless_host::{post_tool::project, TokenlessHost};
 use common::{invocation, Fixture};
 use serde_json::{json, Value};
-use std::{fs, sync::atomic::Ordering};
+use std::{fs, sync::atomic::Ordering, time::Instant};
 
 const SOURCE: &str = "\u{1b}[32m done 中文 with extra padding \u{1b}[0m\n";
 
@@ -334,4 +334,116 @@ fn frozen_real_tokenless_responses_map_without_a_runtime_dependency() {
             .validate_result(&invocation, &result.receipt, result.output.as_ref())
             .unwrap();
     }
+}
+
+fn request() -> (Value, Value) {
+    let source = "\u{1b}[32m done with extra padding \u{1b}[0m\n";
+    (
+        json!({"boundary":"post_tool","artifact":{"id":"result-1",
+        "content":source,"digest":canonical::digest(source.as_bytes()),
+        "media_type":"text/plain","origin":"command_output","tool_name":"Bash"},
+        "constraints":{"allow_text_reencoding":false,"accepted_reversibility":["unrecoverable"]}}),
+        json!({"actor_id":"runtime-1","session_id":"session-1","tool_use_id":"tool-1"}),
+    )
+}
+
+#[test]
+fn native_post_tool_uses_real_attribution_without_a_turn() {
+    for mode in ["applied", "passthrough", "no_savings"] {
+        let fixture = Fixture::new(mode);
+        let (input, scope) = request();
+        let result = project(&fixture.config, &input, &scope, 2000, &NeverCancel).unwrap();
+        if mode == "applied" {
+            let output = result.unwrap();
+            assert_eq!(output["candidate"]["content"], "done\n");
+            assert_eq!(
+                output["candidate"]["source_digest"],
+                input["artifact"]["digest"]
+            );
+            assert_eq!(output["candidate"]["reversibility"], "unrecoverable");
+        } else {
+            assert!(result.is_none());
+        }
+        assert!(fixture.called());
+        let called: Value =
+            serde_json::from_slice(&fs::read(fixture.path.join("called.json")).unwrap()).unwrap();
+        assert_eq!(
+            called["request"]["attribution"],
+            json!({"agent_id":"runtime-1","session_id":"session-1","tool_use_id":"tool-1"})
+        );
+        assert_eq!(called["request"]["operation"], "post_tool");
+        assert!(!called["request"].to_string().contains("turn_id"));
+    }
+}
+
+#[test]
+fn invalid_source_recovery_or_identity_never_launch_compression() {
+    for case in 0..4 {
+        let fixture = Fixture::new("applied");
+        let (mut input, mut scope) = request();
+        match case {
+            0 => input["artifact"]["digest"] = json!("0".repeat(64)),
+            1 => input["constraints"]["accepted_reversibility"] = json!(["lossless"]),
+            2 => scope["session_id"] = Value::Null,
+            _ => input["artifact"]["origin"] = json!("file"),
+        }
+        assert!(project(&fixture.config, &input, &scope, 2000, &NeverCancel).is_err());
+        assert!(!fixture.called());
+    }
+}
+
+#[test]
+fn malformed_native_claims_and_changed_pins_are_errors() {
+    for mode in [
+        "wrong_version",
+        "duplicate",
+        "unknown",
+        "attribution",
+        "retrievable",
+        "stash",
+        "measurement",
+        "pin_drift",
+        "operation_toon",
+    ] {
+        let fixture = Fixture::new(mode);
+        let (input, scope) = request();
+        assert!(
+            project(&fixture.config, &input, &scope, 2000, &NeverCancel).is_err(),
+            "{mode}"
+        );
+    }
+}
+
+#[test]
+fn timeout_cancellation_and_expiry_withhold_candidates() {
+    struct CancelOnCall<'a> {
+        fixture: &'a Fixture,
+        enabled: bool,
+    }
+    impl aw_core::ports::Cancellation for CancelOnCall<'_> {
+        fn is_cancelled(&self) -> bool {
+            self.enabled && self.fixture.called()
+        }
+    }
+    for mode in ["timeout", "applied", "shared_deadline"] {
+        let fixture = Fixture::new(mode);
+        let (input, scope) = request();
+        let started = Instant::now();
+        let cancellation = CancelOnCall {
+            fixture: &fixture,
+            enabled: mode == "applied",
+        };
+        assert!(project(&fixture.config, &input, &scope, 100, &cancellation).is_err());
+        assert!(started.elapsed().as_secs() < 3);
+        if let Ok(bytes) = fs::read(fixture.path.join("called.json")) {
+            let called: Value = serde_json::from_slice(&bytes).unwrap();
+            assert!(!std::path::Path::new("/proc")
+                .join(called["pid"].as_u64().unwrap().to_string())
+                .exists());
+        }
+    }
+    let fixture = Fixture::new("applied");
+    let (input, scope) = request();
+    assert!(project(&fixture.config, &input, &scope, 0, &NeverCancel).is_err());
+    assert!(!fixture.called());
 }

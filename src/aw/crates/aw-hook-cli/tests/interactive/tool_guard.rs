@@ -65,10 +65,7 @@ fn dedicated_guard_entry_rejects_missing_configuration_and_wrong_events() {
     assert!(guard(&dir.0, native(&dir, "SessionStart", "s1", "t1"), &|| false).is_err());
     start(&dir);
     let response = guard(&dir.0, native(&dir, "PreToolUse", "s1", "t1"), &|| false).unwrap();
-    assert_eq!(
-        response["hookSpecificOutput"]["updatedInput"]["command"],
-        "echo private"
-    );
+    assert_eq!(response, json!({}));
     let path = dir.0.join("binding.json");
     let mut binding: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     binding["prepared"]["config"]
@@ -111,6 +108,25 @@ fn transformed_command_is_checked_and_original_fields_are_preserved() {
 }
 
 #[test]
+fn unchanged_candidates_are_scanned_without_overriding_native_approval() {
+    let identity = "import json,sys\ne=json.load(sys.stdin)\nprint(json.dumps({'format':1,'command':e['candidate']['tool_input']['command']}))";
+    for transform in [None, Some(identity)] {
+        let dir = fixture_guard(transform, SCANNER);
+        start(&dir);
+        let mut before = native(&dir, "PreToolUse", "s1", "unchanged");
+        before["tool_input"]["description"] = json!("preserve native metadata");
+        assert_eq!(callback(&dir.0, before).unwrap(), json!({}));
+        assert_eq!(
+            fs::read_to_string(dir.0.join("scanned")).unwrap(),
+            "echo private"
+        );
+        let view = query(&dir.0).unwrap();
+        assert_eq!(view["effects"]["checks"]["passed"], 1);
+        assert_eq!(view["effects"]["native_execution"], "unconfirmed");
+    }
+}
+
+#[test]
 fn a_violation_introduced_by_transform_is_denied() {
     let dir = fixture_guard(
         Some("print('{\"format\":1,\"command\":\"echo forbidden\"}')"),
@@ -122,6 +138,11 @@ fn a_violation_introduced_by_transform_is_denied() {
         fs::read_to_string(dir.0.join("scanned")).unwrap(),
         "echo forbidden"
     );
+    let view = query(&dir.0).unwrap();
+    assert_eq!(view["observation_gap"], false);
+    assert_eq!(view["effects"]["status"], "available");
+    assert_eq!(view["effects"]["checks"]["denied"], 1);
+    assert_eq!(view["effects"]["checks"]["failed"], 0);
 }
 
 #[test]
@@ -147,6 +168,16 @@ fn later_pin_failure_prevents_transform_side_effects() {
     start(&dir);
     deny(&callback(&dir.0, native(&dir, "PreToolUse", "s1", "t1")).unwrap());
     assert!(!dir.0.join("transformed").exists());
+    let view = query(&dir.0).unwrap();
+    assert_eq!(view["observation_gap"], true);
+    assert_eq!(view["effects"], json!({"status":"unavailable"}));
+    callback(&dir.0, native(&dir, "SessionStart", "s2", "unused")).unwrap();
+    let view = query(&dir.0).unwrap();
+    assert_eq!(view["effects"]["status"], "available");
+    assert_eq!(view["effects"]["checks"]["failed"], 0);
+    // A late callback from the retired session cannot taint the new attachment.
+    deny(&callback(&dir.0, native(&dir, "PreToolUse", "s1", "late")).unwrap());
+    assert_eq!(query(&dir.0).unwrap()["effects"]["status"], "available");
 }
 
 #[test]
@@ -165,10 +196,7 @@ fn version_and_scan_can_share_more_than_one_second() {
     let dir = fixture_guard_budget(None, &scanner, 2000);
     start(&dir);
     let response = callback(&dir.0, native(&dir, "PreToolUse", "s1", "t1")).unwrap();
-    assert_eq!(
-        response["hookSpecificOutput"]["updatedInput"]["command"],
-        "echo private"
-    );
+    assert_eq!(response, json!({}));
 }
 
 #[test]
@@ -250,10 +278,7 @@ fn concurrent_calls_keep_separate_decisions_and_queries_do_not_rescan() {
     let worker = thread::spawn(move || callback(&root, denied));
     let response = callback(&dir.0, allowed).unwrap();
     deny(&worker.join().unwrap().unwrap());
-    assert_eq!(
-        response["hookSpecificOutput"]["updatedInput"]["command"],
-        "echo private"
-    );
+    assert_eq!(response, json!({}));
     fs::remove_file(dir.0.join("scanned")).unwrap();
     query(&dir.0).unwrap();
     query(&dir.0).unwrap();

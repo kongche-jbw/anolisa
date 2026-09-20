@@ -165,6 +165,8 @@ pub struct ShellHostConfig {
     pub env_overrides: Vec<(String, String)>,
     /// Optional product-owned shim directory, installed after Bash startup files.
     pub(crate) aw_shim_directory: Option<PathBuf>,
+    /// Fixed internal entry dispatched once after the first shell-ready boundary.
+    pub(crate) aw_bootstrap_command: Option<String>,
     pub raw_action_watchdog: Duration,
     /// #2161: shared input-wait episode clock. The relay's interactive
     /// sentinel marks/clears it; the runtime controller reads it to drive
@@ -202,6 +204,7 @@ impl ShellHostConfig {
             slash_via_shell: slash_via_shell_default(),
             env_overrides: Vec::new(),
             aw_shim_directory: None,
+            aw_bootstrap_command: None,
             raw_action_watchdog: Duration::from_secs(120),
             input_wait_status: InputWaitStatus::default(),
             hint_language: crate::config::Language::default(),

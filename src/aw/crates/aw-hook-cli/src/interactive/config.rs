@@ -94,7 +94,10 @@ fn validate(config: &Config) -> Result<(), Error> {
                 check_handler(config, command)?;
             }
             if let Some(settings) = &config.tool_response {
-                check_handler(config, &settings.command)?;
+                check_handler(config, settings.provider()?)?;
+                if let Some(tokenless) = &settings.tokenless {
+                    aw_tokenless_host::post_tool::validate_config(tokenless).map_err(evidence)?;
+                }
                 if settings.accepted_reversibility != ["unrecoverable"] {
                     return Err(Error::Profile(
                         "tool response requires unrecoverable opt-in",

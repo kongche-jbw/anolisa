@@ -62,6 +62,9 @@ fn bash_supports_prompt_command_array() -> bool {
 #[cfg(feature = "aw")]
 #[path = "shell_host/aw.rs"]
 mod aw;
+#[cfg(feature = "aw")]
+#[path = "shell_host/aw_herdr.rs"]
+mod aw_herdr;
 #[path = "shell_host/foreground.rs"]
 mod foreground;
 #[path = "shell_host/governance.rs"]

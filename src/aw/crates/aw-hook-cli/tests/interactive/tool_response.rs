@@ -300,3 +300,155 @@ fn admission_requires_explicit_loss_acceptance_and_optional_safety() {
         assert!(!root.exists());
     }
 }
+
+fn native_tokenless(mode: &str) -> Directory {
+    let dir = lifecycle_config("", |config| {
+        let mut native = config["notifications"]["tool.after"][0].clone();
+        // Keep repeated debug-mode executable hashing within the production
+        // callback budget. This pinned script is only the synthetic test peer.
+        let script = Path::new(native["cwd"].as_str().unwrap()).join("native-tokenless");
+        let bytes = format!(
+            "#!/usr/bin/python3\n{}",
+            include_str!("../../../aw-tokenless-host/tests/native_fixture.py")
+        );
+        fs::write(&script, &bytes).unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+        native["program"] = json!(script);
+        native["program_sha256"] = json!(canonical::digest(bytes.as_bytes()));
+        native["args"] = json!([]);
+        native["environment"] = json!({"MODE":mode,"TOKENLESS_STATS_ENABLED":"0",
+            "TOKENLESS_SLS_ENABLED":"0","TOKENLESS_COMPRESSION_ENABLED":"1"});
+        native["limits"]["timeout_ms"] = json!(1000);
+        config["tool_response"] =
+            json!({"tokenless":native,"accepted_reversibility":["unrecoverable"]});
+        config["notifications"] = json!({});
+    });
+    callback(&dir.0, native(&dir, "SessionStart", "s1", "unused")).unwrap();
+    callback(&dir.0, native(&dir, "PreToolUse", "s1", "t1")).unwrap();
+    dir
+}
+
+#[test]
+fn native_tokenless_uses_existing_journal_and_never_claims_turn_or_adoption() {
+    for mode in ["applied", "passthrough", "no_savings"] {
+        let dir = native_tokenless(mode);
+        let result = callback(&dir.0, post(&dir)).unwrap();
+        if mode == "applied" {
+            assert_eq!(result["hookSpecificOutput"]["updatedToolOutput"], "done\n");
+        } else {
+            assert_eq!(result, json!({}));
+        }
+        let effects = query(&dir.0).unwrap()["effects"].clone();
+        assert_eq!(effects["status"], "available");
+        assert_eq!(
+            effects["projections"]["candidates"],
+            u64::from(mode == "applied")
+        );
+        assert_eq!(
+            effects["projections"]["preserved"],
+            u64::from(mode != "applied")
+        );
+        assert_eq!(effects["native_adoption"], "unconfirmed");
+        let called: Value =
+            serde_json::from_slice(&fs::read(dir.0.join("called.json")).unwrap()).unwrap();
+        let binding: Value =
+            serde_json::from_slice(&fs::read(dir.0.join("binding.json")).unwrap()).unwrap();
+        assert_eq!(
+            called["request"]["attribution"],
+            json!({"agent_id":binding["runtime_id"],"session_id":"s1","tool_use_id":"t1"})
+        );
+        let records = fs::read_dir(dir.0.join("tool-response-journal"))
+            .unwrap()
+            .map(|entry| fs::read_to_string(entry.unwrap().path()).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(records.contains("unconfirmed"));
+        assert!(records.contains("\"turn_id\":null"));
+        assert!(!records.contains("private original") && !records.contains("done\\n"));
+        fs::remove_file(dir.0.join("called.json")).unwrap();
+        assert!(callback(&dir.0, post(&dir))
+            .unwrap()
+            .get("systemMessage")
+            .is_some());
+        assert!(!dir.0.join("called.json").exists());
+        let journal = fs::read_dir(dir.0.join("tool-response-journal"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let original = fs::read(&journal).unwrap();
+        for corrupt in [&b"invalid\n"[..], &original[..original.len() - 2]] {
+            fs::write(&journal, corrupt).unwrap();
+            assert_eq!(
+                query(&dir.0).unwrap()["effects"],
+                json!({"status":"unavailable"})
+            );
+        }
+        fs::write(&journal, original).unwrap();
+        callback(&dir.0, native(&dir, "SessionStart", "s2", "unused")).unwrap();
+        let effects = query(&dir.0).unwrap()["effects"].clone();
+        assert_eq!(effects["status"], "available");
+        assert_eq!(effects["projections"]["candidates"], 0);
+        assert_eq!(effects["projections"]["preserved"], 0);
+    }
+}
+
+#[test]
+fn native_tokenless_failure_preserves_result_with_visible_gap() {
+    for mode in [
+        "wrong_version",
+        "duplicate",
+        "attribution",
+        "stash",
+        "timeout",
+    ] {
+        let dir = native_tokenless(mode);
+        let result = callback(&dir.0, post(&dir)).unwrap();
+        assert!(result.get("systemMessage").is_some(), "{mode}");
+        assert!(result.get("hookSpecificOutput").is_none());
+        assert_eq!(query(&dir.0).unwrap()["observation_gap"], true);
+        let called = dir.0.join("called.json");
+        if mode == "wrong_version" {
+            assert!(!called.exists());
+        } else {
+            let called: Value = serde_json::from_slice(&fs::read(called).unwrap()).unwrap();
+            let pid = called["pid"].as_u64().unwrap();
+            assert!(!Path::new("/proc").join(pid.to_string()).exists());
+        }
+    }
+}
+
+#[test]
+fn native_tokenless_rejects_mixed_providers_and_missing_native_controls() {
+    let dir = native_tokenless("applied");
+    let path = dir.0.join("config.json");
+    let original: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    for case in 0..4 {
+        let mut config = original.clone();
+        match case {
+            0 => config["tool_response"]["command"] = config["tool_response"]["tokenless"].clone(),
+            1 => {
+                config["tool_response"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("tokenless");
+            }
+            2 => {
+                config["tool_response"]["tokenless"]["environment"]["TOKENLESS_STATS_ENABLED"] =
+                    json!("1")
+            }
+            _ => config["tool_response"]["accepted_reversibility"] = json!(["lossless"]),
+        }
+        write(&path, &config);
+        let root = dir.0.join(format!("rejected-tokenless-{case}"));
+        assert!(prepare(
+            &path,
+            &canonical::digest(&fs::read(&path).unwrap()),
+            &root,
+            Path::new("/bin/echo")
+        )
+        .is_err());
+        assert!(!root.exists());
+    }
+}

@@ -8,6 +8,14 @@ Assisted 模式，保留隐式自然语言路由、Skills、审批卡片和可�
 在启动时选择 Native 集成。自动化或其他 Agent 集成仍可使用结构化 JSON 和
 JSONL 接口。
 
+可选 AW 构建支持输入 `qoder` 时按需打开固定 Herdr，结束后返回原 shell。
+该实验性 Linux/Bash 单 pane 入口使用 Rust 启动与进程归属接线，见
+[按需 Herdr](../../docs/user-guide/zh/user-entrypoint/aw.md#按需打开-herdr)。
+
+仓库内默认 Provider 策略接入真实 SecCore 检查和原生 Tokenless 压缩。一次性运行
+`aw-hook-cli configure`，把输出的 `[aw]` 段加入现有 cosh 用户配置；日常仍是 cosh → `qoder`。
+见[标准入口验收手册](../../docs/developer-guide/zh/aw/qoder-acceptance.md)。
+
 ## 为什么使用 cosh-ng
 
 | 传统终端 | cosh-ng |

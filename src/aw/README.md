@@ -193,5 +193,17 @@ bounded Hook coexistence; print can hide failed-check diagnostics and exit 0. Se
 
 Format 2 optionally accepts `tool_response` for main-agent Bash success text.
 An explicit unrecoverable opt-in and matching source digest are required;
-failures preserve the native result. Real interactive adoption remains pending.
+failures preserve the native result. Fixed Qoder 1.1.47 print/TUI probes verified
+replacement markers in subsequent answers. A later peer Hook can override the
+replacement; history verification and final/protected guarantees remain separate.
 See [tool result responses](../../docs/user-guide/en/user-entrypoint/aw.md#experimental-interactive-tool-result-responses).
+
+The same Rust cosh binary can own an on-demand, single-pane Herdr session around
+`qoder`, preserving the outer shell and native argv/exit status without launcher
+scripts. Select the official pinned binary explicitly; see
+[on-demand Herdr](../../docs/user-guide/en/user-entrypoint/aw.md#open-herdr-on-demand).
+
+A checked-in default Provider policy wires real SecCore checks and native Tokenless
+compression. Run `aw-hook-cli configure` once and add its `[aw]` section to the
+existing cosh user config; daily entry remains cosh → `qoder`. See the
+[standard-entry acceptance guide](../../docs/developer-guide/en/aw/qoder-acceptance.md).

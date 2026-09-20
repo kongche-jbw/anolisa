@@ -10,6 +10,15 @@ bash or zsh must own the session without Cosh hooks, observation, or insights.
 Structured JSON and JSONL interfaces remain available for automation and
 Agent integration.
 
+The optional AW build can open a pinned Herdr terminal when `qoder` is entered,
+then return to the original shell. This experimental Linux/Bash single-pane
+entry uses Rust startup and ownership; see [on-demand Herdr](../../docs/user-guide/en/user-entrypoint/aw.md#open-herdr-on-demand).
+
+A checked-in default Provider policy wires real SecCore checks and native Tokenless
+compression. Run `aw-hook-cli configure` once and add its `[aw]` section to the
+existing cosh user config; daily entry remains cosh → `qoder`. See the
+[standard-entry acceptance guide](../../docs/developer-guide/en/aw/qoder-acceptance.md).
+
 ## Why cosh-ng
 
 | In a conventional terminal | In cosh-ng |

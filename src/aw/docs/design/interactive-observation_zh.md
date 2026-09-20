@@ -75,7 +75,7 @@ observation_gap=true、session_start_observed=false，不合成 session.start。
 | session.start | SessionStart / N | 真实 compact/clear/resume 已观察；首次信任缺 startup |
 | input.submit | UserPromptSubmit / N + 独立响应 | 下文已验证上下文/拒绝及原生 print 案例；排队/补充待验，Turn 未知 |
 | tool.before | PreToolUse / N | 真实 Bash 参数已观察；native guard 证据见下文 |
-| tool.after | PostToolUse / PostToolUseFailure / N + 显式响应 | 主 Agent Bash 成功文本投影已实现并有合成测试；真实交互采用待验收 |
+| tool.after | PostToolUse / PostToolUseFailure / N + 显式响应 | 固定版 print/TUI 后续回答已采用 Bash 成功文本替换；已证实 peer 可覆盖，历史核验及其他结果形状待验收 |
 | permission.request | PermissionRequest / N | 真实一次性批准/拒绝已观察；AW 不返回审批决策 |
 | compact.before | PreCompact / N | 真实手动压缩已观察；自动压缩待验收 |
 | compact.after | PostCompact / N | 真实手动完成已观察；失败覆盖待验收 |
@@ -133,7 +133,8 @@ final/protected 权限。
 `security.check` 或 `security.before_action`。required 检查拒绝、失败、超时或取消不得放行；
 修改候选或新执行尝试重新检查。OS 违规与检查结果分别保留为证据，不替代这次主动调用。
 格式 2 的 notifications 仍不接受此安全路由；独立 tool_guard 配置已接有序变换与末尾 scan-code，
-不经过 notify-only。原生 allow 不输出，pass 只返回 updatedInput，保留原有审批。
+不经过 notify-only。原生 allow 不输出，pass 只有候选发生变化才返回 updatedInput，
+未变化则返回空响应，保留原有审批。
 检查错误、重复工具发生和取消返回 deny；required/final 仍未支持。
 
 变换与可选通知仍限单命令一秒。scanner 可显式配置最多 2000ms，供版本核对与 scan-code
@@ -276,5 +277,68 @@ Tokenless、候选留存或历史采用证据。
 Core 在命令执行前认领，共享原回调期限，校验输出并确认完成记录后才返回。owner 按
 session epoch/tool call 一次认领成功或失败，即使没有通知路由也不允许再次认领；不支持的
 终态结果不能随后改成成功回调来重试替换。迟到、取消或过期候选不交付。可选投影失败
-保留原始结果，不是强制脱敏屏障。真实 Qoder 采用和其他 Hook 的覆盖顺序仍待验收，
-final/protected 保持不支持。
+保留原始结果，不是强制脱敏屏障。
+
+固定 Qoder 1.1.47 已完成八个真实 print 案例：preserve、replace、两种 peer 声明顺序、
+畸形输出、超时、取消和 helper SIGKILL。peer 声明在 AW 后面时，后续回答采用 peer 标记；
+反向排列则采用 AW 标记。两种顺序中 AW 收到的均为原始 stdout，不能将其理解为各 Hook
+依次处理前一个候选的组合合同。可返回的失败保留原文并返回诊断；SIGKILL 只有 started，
+Qoder 仍根据原文回答并退出 0。
+
+print 探针使用测试构造的进程绑定。另一个自然 cosh→Qoder TUI 会话使用当前 Rust
+owner/launcher，两个输入依次验证 preserve 和 replace；Stop 回调确认对应的后续回答
+标记，包括未出现在 prompt/原文中的替换标记，并观察到 runtime.exited。
+未断言渲染后的回答区域，也未核验原生历史。Turn 保持未知，不因本次案例提升 query/Journal
+采用状态。错误 source digest 仍仅有合成覆盖；此前阶段未覆盖交互 Tokenless/sec-core
+provider 或按需 Herdr。后续章节说明新增实现及其独立验收范围；任意插件组合和
+final/protected 保证仍待验收。
+
+## 按需终端归属
+
+安装制品、注册/选择系统登录 shell、当前会话启用 AW/Herdr 是独立边界，参见
+[#3373](https://github.com/agentic-os-org/ANOLISA/issues/3373)。按需入口不要求修改
+`/etc/shells` 或账户登录 shell；登录进入 cosh 本身也不表示启用 AW 或打开 Herdr。
+外层登录 shell 的启动语义由 ShellHost 负责，Herdr 内层 pane 使用非登录 shell，
+不能通过继承外层标志再次执行登录 profile。接入其他 ShellHost 启动路径时，必须保留
+marker 与 AW shim 的同一启动链，并分别验收手动/登录进入、AW 开/关以及退出恢复。
+
+cosh runtime 的可选 Herdr 启动器保留外层 Bash，仅在前台输入 `qoder` 时打开本次私有、
+固定 v0.9.0 server/client；打开 UI 前调用与原生启动共用的准入检查。
+Herdr pane 直接运行当前 cosh 二进制，该进程建立自己的 AW scope 和原生 Bash；
+Bash 等待 helper exec 成 Qoder。pane 只承载原生终端，不选择另一个模型 adapter。
+
+0700 私有会话目录保存 argv 字节、launcher/server 身份和 pane 绑定。shell 就绪后，
+固定内部命令一次性认领启动，用户参数不进入 shell 文本。只有绑定的 pane owner 能发布
+完成结果，Herdr 重启 shell 不能覆盖 Agent 退出码。内层 AW/shell 临时文件归入该会话目录，
+便于异常收尾。pane 恢复原 XDG 环境，不改写用户 Hook 或原生配置；固定 cwd 准入保持不变。
+
+启动器为启动、RPC、会话时长和 owned child 清理设置边界。先请求 Herdr 关闭 workspace，
+再检查已登记后代身份，对剩余对象通过 pidfd 发信号。正常 Qoder 仍由原生 Bash 回收；
+这不是任意脱离进程的隔离，也不构成 final/protected。SIGHUP 取消启动器；内层 Bash 的
+一次性 INT trap 在 Agent 被 SIGINT 终止时保证返回外层 shell。shell 就绪失败时回收 Bash，
+不向启动脚本读者注入 Agent 命令。当前只支持单 pane 自动启动，多 pane 未认证。
+
+显式 ignored 的 shell_host 测试使用官方固定 Herdr 和合成 Qoder，核对 metadata、归属、
+参数、退出码和清理；登录回归额外验证 pane 不重放外层 profile。真实 Qoder 1.1.47
+已从此入口运行，后续回答的投影标记采用由 Stop 回调核实；不将该证据等同于
+终端渲染、排他脱敏或单次完整产品演示。组合产品视觉验收仍独立记录。
+Rust 运行入口不依赖外部 Python/shell 启动脚本；安装期获取和测试驱动仍单独管理。
+
+## 原生组件 profile 与效果证据
+
+`aw-hook-cli configure` 接纳仓库内默认策略，核对安装版本/pin 后生成私有格式 2 profile。
+用户 `[aw]` 引用通过 ShellHost 的环境覆盖到达 Bash/pane，不修改进程全局环境，
+也不在日常启动时更新信任摘要。Qoder 在 cosh 内层 PTY 中运行，Herdr 外层 pane 的进程检测
+不一定能把它识别为 Agent。bridge 核实 pane 归属，且 workspace 只有该 pane 时，才把相同
+只读 tokens 发布到 workspace；工作区行展示真实事实，不注入 Agent 身份/状态。pane metadata
+继续供已有消费者使用。生成的侧栏配置显式设置最大宽度和隐藏折叠模式；metadata 本身不证明
+真实画面可见。
+
+原生 Tokenless 后端独立于单 Turn 的 `qoder-project` 启动器。它只把经过认证的主 Agent
+成功 Bash 结果映射给已有投影 codec，保留未知 Turn 身份，复用回调预算、Core claim、
+journal 和 attachment 隔离，不补造 Turn 或历史采用回执。
+
+只读效果计数核对 journal 摘要链，按 runtime/session/epoch 过滤，区分检查、替换候选和
+原样保留。默认没有 observer 命令，因此存在回调但通知命令计数为零是合法状态。
+产品 metadata 的原生采用仍未确认；外部验收可另外绑定精确原生历史结果摘要。
+见[验收流程](../../../../docs/developer-guide/zh/aw/qoder-acceptance.md)。

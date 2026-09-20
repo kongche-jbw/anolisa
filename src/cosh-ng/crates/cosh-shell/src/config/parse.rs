@@ -58,6 +58,14 @@ pub(super) fn parse_toml_config(content: &str, config: &mut CoshConfig) {
     let value = match content.parse::<toml::Value>() {
         Ok(value) => value,
         Err(err) => {
+            if content.lines().map(str::trim).any(|line| {
+                line.starts_with("[aw")
+                    || line.starts_with("aw.")
+                    || line.starts_with("aw ")
+                    || line.starts_with("aw=")
+            }) {
+                config.aw = Err("invalid user AW configuration TOML".into());
+            }
             if content.contains("shell.readonly") || content.contains("readonly_disabled") {
                 config
                     .readonly
@@ -67,6 +75,7 @@ pub(super) fn parse_toml_config(content: &str, config: &mut CoshConfig) {
             return;
         }
     };
+    config.aw = super::aw::AwConfig::parse(value.get("aw"));
     if let Some(ui) = value.get("ui").and_then(toml::Value::as_table) {
         if let Some(language) = ui.get("language").and_then(toml::Value::as_str) {
             apply_language_value(config, language);

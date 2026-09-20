@@ -1,0 +1,56 @@
+{
+  "count": 8,
+  "debug": "cache=miss upstream=registry-04 trace=9f2e11c0 backend_latency_ms=184 retries=0",
+  "results": [
+    {
+      "homepage": "",
+      "license": null,
+      "name": "pkg-0",
+      "version": "1.0.0"
+    },
+    {
+      "homepage": "",
+      "license": null,
+      "name": "pkg-1",
+      "version": "1.0.0"
+    },
+    {
+      "homepage": "",
+      "license": null,
+      "name": "pkg-2",
+      "version": "1.0.0"
+    },
+    {
+      "homepage": "",
+      "license": null,
+      "name": "pkg-3",
+      "version": "1.0.0"
+    },
+    {
+      "homepage": "",
+      "license": null,
+      "name": "pkg-4",
+      "version": "1.0.0"
+    },
+    {
+      "homepage": "",
+      "license": null,
+      "name": "pkg-5",
+      "version": "1.0.0"
+    },
+    {
+      "homepage": "",
+      "license": null,
+      "name": "pkg-6",
+      "version": "1.0.0"
+    },
+    {
+      "homepage": "",
+      "license": null,
+      "name": "pkg-7",
+      "version": "1.0.0"
+    }
+  ],
+  "status": 200,
+  "url": "https://registry.example.com/packages"
+}

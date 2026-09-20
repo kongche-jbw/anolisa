@@ -71,17 +71,23 @@ pub(super) fn check(
     };
     let mut host = Host { settings };
     let candidate = aw_adapters::qoder_tool::candidate(&event.payload).map_err(evidence)?;
-    let result = Core::new()
-        .map_err(evidence)?
-        .check_tool(
-            event,
-            candidate,
-            &chain,
-            &mut host,
-            &mut FileJournal::new(root.join("tool-check-journal")).map_err(evidence)?,
-            cancellation,
-        )
-        .map_err(evidence)?;
+    let result = Core::new().map_err(evidence)?.check_tool(
+        event,
+        candidate.clone(),
+        &chain,
+        &mut host,
+        &mut FileJournal::new(root.join("tool-check-journal")).map_err(evidence)?,
+        cancellation,
+    );
+    let result = match result {
+        Ok(result) => result,
+        Err(error) => {
+            // Admission can fail before a journal claim exists. Do not present
+            // its absent record as a healthy zero-count effect snapshot.
+            super::effects::guard_unavailable(root, event)?;
+            return Err(evidence(error));
+        }
+    };
     let _lock = storage::lock(root)?;
     let state: State = storage::read(&root.join("state.json"))?;
     if cancellation.is_cancelled()
@@ -92,6 +98,9 @@ pub(super) fn check(
         return Ok(aw_adapters::qoder_tool::denied());
     }
     match result.candidate() {
+        // Returning updatedInput for identical arguments makes Qoder append a
+        // modification notice to the result. Leave native approval untouched.
+        Some(checked) if checked == &candidate => Ok(json!({})),
         Some(candidate) => aw_adapters::qoder_tool::checked(candidate).map_err(evidence),
         None => Ok(aw_adapters::qoder_tool::denied()),
     }

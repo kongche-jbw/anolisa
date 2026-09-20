@@ -291,13 +291,13 @@ fn herdr_publishes_only_verified_pane_observation_counters() {
     for name in ["binding.json", "state.json", "state.lock", "calls"] {
         fs::rename(dir.0.join(name), run.join(name)).unwrap();
     }
-    let socket = dir.0.join("herdr.sock");
+    let socket = fs::canonicalize(&dir.0).unwrap().join("herdr.sock");
     let listener = UnixListener::bind(&socket).unwrap();
     listener.set_nonblocking(true).unwrap();
     let (sender, receiver) = mpsc::channel();
     let server = thread::spawn(move || {
         let deadline = Instant::now() + Duration::from_secs(3);
-        for _ in 0..2 {
+        for _ in 0..4 {
             let mut connection = loop {
                 match listener.accept() {
                     Ok((connection, _)) => break connection,
@@ -316,10 +316,21 @@ fn herdr_publishes_only_verified_pane_observation_counters() {
                 .read_line(&mut line)
                 .unwrap();
             let request: Value = serde_json::from_str(&line).unwrap();
-            assert_eq!(request["params"]["pane_id"], "test-pane");
             let result = match request["method"].as_str().unwrap() {
-                "pane.process_info" => json!({"process_info":{"shell_pid":std::process::id()}}),
+                "pane.process_info" => {
+                    assert_eq!(request["params"]["pane_id"], "test-pane");
+                    json!({"process_info":{"shell_pid":std::process::id()}})
+                }
                 "pane.report_metadata" => {
+                    assert_eq!(request["params"]["pane_id"], "test-pane");
+                    sender.send(request["params"].clone()).unwrap();
+                    json!({})
+                }
+                "pane.list" => {
+                    json!({"panes":[{"pane_id":"test-pane","workspace_id":"workspace-one"}]})
+                }
+                "workspace.report_metadata" => {
+                    assert_eq!(request["params"]["workspace_id"], "workspace-one");
                     sender.send(request["params"].clone()).unwrap();
                     json!({})
                 }
@@ -340,6 +351,10 @@ fn herdr_publishes_only_verified_pane_observation_counters() {
         "1 observed / 0 failed / 0 pending"
     );
     assert_eq!(report["ttl_ms"], 3000);
+    let workspace = receiver.recv_timeout(Duration::from_secs(3)).unwrap();
+    assert_eq!(workspace["tokens"], report["tokens"]);
+    assert_eq!(workspace["seq"], report["seq"]);
+    assert_eq!(workspace["ttl_ms"], report["ttl_ms"]);
     drop(bridge);
     server.join().unwrap();
     assert_eq!(fs::read_to_string(dir.0.join("called")).unwrap(), "s1");

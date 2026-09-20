@@ -32,3 +32,35 @@ pub(super) fn rcfile(
     )?;
     Ok(Some(path))
 }
+
+/// Keep startup readers from consuming an Agent launch before the first prompt.
+pub(super) fn dispatch_bootstrap(
+    config: &ShellHostConfig,
+    ready: bool,
+    terminal: &mut std::fs::File,
+    child: &mut std::process::Child,
+) -> io::Result<()> {
+    let Some(command) = &config.aw_bootstrap_command else {
+        return Ok(());
+    };
+    let result = if ready {
+        terminal
+            .write_all(command.as_bytes())
+            .and_then(|()| terminal.flush())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "AW pane shell did not become ready",
+        ))
+    };
+    if result.is_err() {
+        // A spawned shell must be waited by this owner even when readiness fails.
+        let _ = super::io_loop::wait_pty_foreground_bounded(
+            terminal,
+            terminal,
+            child,
+            std::time::Duration::from_millis(50),
+        );
+    }
+    result
+}

@@ -330,6 +330,7 @@ pub(super) fn start(state: &mut State, session: &str, payload: &Value) -> Result
     state.session_id = Some(session.into());
     state.session_start_observed = true;
     state.attachment += 1;
+    state.effect_gap_attachment = None;
     state.attached = true;
     Ok(())
 }

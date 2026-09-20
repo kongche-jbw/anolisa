@@ -11,6 +11,7 @@ pub const PROTOCOL_PROFILE: &str = "aw-projection-v2/tokenless-v2-no-recovery/v1
 
 use aw_contracts::{canonical, Registry};
 use aw_core::ports::{Cancellation, HostError, NeverCancel, ProviderHost, ProviderResult};
+pub mod post_tool;
 mod protocol;
 use protocol::ProjectionRequest;
 use serde_json::{json, Value};
@@ -68,20 +69,7 @@ impl TokenlessHost {
         config: Config,
         cancellation: Arc<dyn Cancellation + Send + Sync>,
     ) -> Result<Self, Error> {
-        config
-            .validate()
-            .map_err(|error| Error::Configuration(error.code()))?;
-        for (key, value) in [
-            ("TOKENLESS_STATS_ENABLED", "0"),
-            ("TOKENLESS_SLS_ENABLED", "0"),
-            ("TOKENLESS_COMPRESSION_ENABLED", "1"),
-        ] {
-            if config.environment.get(key).map(String::as_str) != Some(value) {
-                return Err(Error::Configuration(
-                    "explicit native controls are required",
-                ));
-            }
-        }
+        post_tool::validate_config(&config)?;
         let manifest = config
             .manifest(
                 NATIVE_CLI_VERSION,

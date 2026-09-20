@@ -462,6 +462,55 @@ See the [conversation ownership design](../../../../src/aw/docs/design/qoder-ses
 
 ## Experimental natural Qoder entry
 
+### Native component configuration
+
+For real SecCore Bash checks and Tokenless tool-result compression, use the
+checked-in `src/aw/providers/qoder-native.json` policy and the compiled
+`aw-hook-cli configure` command. The [acceptance procedure](../../../developer-guide/en/aw/qoder-acceptance.md)
+contains the complete build, setup and terminal walkthrough. Configuration is a
+one-time admission of installed artifacts; ordinary startup needs no launcher or
+observer script.
+
+The command accepts required absolute paths `--qoder`, `--native-config`,
+`--sec-core`, `--tokenless`, `--herdr`, `--workspace`, `--output`; optional
+`--providers` selects the checked-in policy, and repeated `--sec-core-pin` adds
+reviewed installed files. Omitting `--providers` uses the embedded default policy.
+It verifies the supported versions and Herdr asset, creates a new 0600 profile,
+and prints the following user configuration (with actual paths and digests):
+
+```toml
+[aw]
+config = "/absolute/path/aw.json"
+config_sha256 = "<reviewed lowercase SHA-256>"
+herdr = "/absolute/path/herdr"
+herdr_sha256 = "<official asset SHA-256>"
+```
+
+Add it to `~/.copilot-shell/config.toml`, preserving existing model-provider
+settings. The two Herdr fields are optional as a pair. Without `[aw]` or explicit
+AW environment settings, the integration is disabled. Any of `COSH_AW_CONFIG`,
+`COSH_AW_CONFIG_SHA256`, `COSH_AW_HERDR` or `COSH_AW_HERDR_SHA256` selects the complete
+environment group; partial groups do not borrow file values.
+Malformed settings and an AW-disabled build report an error. Remove the section
+and the four overrides to disable integration in a new shell.
+
+The generated format-2 profile uses empty notification routes, a real SecCore
+`tool_guard`, and `tool_response.tokenless` instead of `tool_response.command`.
+Exactly one result backend is accepted. The native backend uses the existing
+source digest/epoch fence and conservative projection codec; it requires the
+explicit unrecoverable opt-in and defaults `allow_text_reencoding` to false.
+Version probing, pin checks and compression share the callback deadline. Failure
+preserves the original result. Its process environment disables Tokenless stats
+and SLS, explicitly enables compression, and avoids user configuration lookup.
+
+The sidebar distinguishes callbacks, handler notifications, checks and candidate
+results. Journal counters are scoped to the current attachment; corrupt or
+incomplete evidence is unavailable. Candidate counts never prove native adoption.
+OS coverage and final/protected guarantees remain unconfirmed. The older observer
+example below is a separate protocol example, not a dependency of this setup.
+
+### Historical observer protocol example
+
 This opt-in Linux/Bash profile keeps Qoder's native interactive loop and PTY.
 It is an experimental observation slice, not a strong security mode or a completed
 four-Agent POC. Build the product with the AW feature (Rust 1.97.1):
@@ -545,16 +594,69 @@ the rows from [interactive.toml](../../../../src/aw/integrations/herdr/interacti
 into the existing Herdr v0.9.0 configuration. Each pane validates its own cosh PID;
 the viewer cannot execute a handler or control an Agent. RPC failures expire the
 metadata after three seconds; the private query reports viewer availability.
-The worker refreshes for at most 24 hours. Closing Herdr's view does not stop the
-Agent. Real native coexistence and visible Herdr rendering remain separate from
-synthetic protocol/PTY tests.
+The worker refreshes for at most 24 hours. Hiding the sidebar or losing this
+optional metadata worker does not itself stop the Agent. Closing the managed
+Herdr instance described below ends its interaction. Native coexistence and
+visible rendering require separate evidence from synthetic protocol/PTY tests.
 
-Unset `COSH_AW_CONFIG` and `COSH_AW_CONFIG_SHA256` before opening another cosh
-session to disable the integration. Normal shell exit joins the optional viewer
+For this environment-only example, unset `COSH_AW_CONFIG` and
+`COSH_AW_CONFIG_SHA256` before opening another cosh session to disable integration.
+If a user `[aw]` section is also present, remove it to disable the file configuration. Normal shell exit joins the optional viewer
 and removes AW scratch records. SIGKILL can leave that shell's private scratch
 directory; native Qoder history follows its own retention policy. Existing
 07B/07C1 explicit launchers remain available. No default feature or security
 policy is changed. See [ownership and evidence](../../../../src/aw/docs/design/interactive-observation.md).
+
+### Open Herdr on demand
+
+The native-component `[aw]` configuration already enables this entry. As an
+alternative, set the complete environment group with a prepared, pinned Herdr
+v0.9.0 binary:
+
+```bash
+export COSH_AW_CONFIG=/absolute/path/to/aw.json
+export COSH_AW_CONFIG_SHA256='<reviewed configuration digest>'
+export COSH_AW_HERDR=/absolute/path/to/herdr
+export COSH_AW_HERDR_SHA256='<official digest for the selected architecture>'
+```
+
+The digest must match the [pinned asset manifest](../../../../src/aw/integrations/herdr/upstream.json).
+Daily startup neither downloads/builds Herdr nor invokes external Python/shell
+launcher scripts; Bash and cosh's internal shell integration remain in use.
+Ordinary commands stay in cosh. Typing `qoder` opens the native Herdr terminal and
+AW observation sidebar. Ending the Agent returns to the same outer Bash with its
+cwd and variables intact and the Agent exit status preserved. No separate Herdr
+entry or changes to the user's Herdr configuration are required.
+
+This configuration enables the entry for the current session; it does not change
+`/etc/shells` or an account's login shell. Selecting cosh as the login shell still
+requires explicit AW/Herdr configuration and a `qoder` command to open the terminal.
+
+This entry currently supports Linux/Bash, one pane and the configured fixed cwd;
+launching after cd to a different directory is explicitly rejected. Each launch
+owns a private server/client and pane owner using the current Rust Hook/query
+contracts. Prompt/argv data travels through private records, not interpolated shell
+commands. Herdr startup has a ten-second deadline and sessions a 24-hour limit.
+Missing/incorrect pins reject startup without a silent fallback. Shell readiness
+timeout does not start the Agent. If Ctrl-C ends the Agent, or the launcher receives
+SIGHUP, the owned instance is cleaned up and the original shell restored; an Agent
+that handles Ctrl-C keeps its native behavior. Closing the whole managed Herdr
+instance ends this interaction; hiding the sidebar does not grant control authority.
+
+Earlier acceptance with fixed real Herdr and synthetic Qoder covered on-demand startup, metadata, argv,
+exit status, same-shell return, repeated launch, incorrect pins, Ctrl-C, launcher
+hangup and shell readiness timeout. A login-entry regression verifies that the
+inner pane runs `.bashrc` without replaying the outer login profile. Real Qoder
+1.1.47 has run through this entry; Stop callbacks confirm subsequent answers cite
+a marker generated only by the projection command. This does not remove original
+text from the user prompt. Those earlier probes did not certify a complete
+visual demonstration with native components. Follow the acceptance procedure
+above for that separate stage. Multiple panes, arbitrary detached descendants
+and SIGKILL cleanup remain uncertified. The sidebar reports observation, not complete
+16-event or final/protected coverage. To restore direct Qoder entry, remove the
+two Herdr fields from file configuration or the two Herdr variables from
+environment configuration, retaining the profile path/digest pair.
+Installation-time asset preparation is separate from runtime.
 
 ### Public lifecycle notification configuration
 
@@ -835,7 +937,9 @@ cwd. The fixed CLI version is 0.12.0.
 ```
 
 For Qoder PreToolUse Bash calls, this runs `scan-code --language bash --mode regex`.
-Only pass with no findings returns checked arguments. Warn, deny, failure, malformed
+Only pass with no findings releases the checked candidate. If its complete value
+is unchanged, the response is empty; only actual changes emit `updatedInput`. This
+avoids claiming an input rewrite for a pure check. Warn, deny, failure, malformed
 output, timeout and cancellation return native deny. Passing the scan never grants
 tool permission: normal approval still applies. Other tools are outside this Bash
 profile's check scope.
@@ -938,8 +1042,13 @@ late candidates. Journals retain source/candidate digests, not their text; the
 operator-owned command receives native content and controls its own retention.
 
 The response uses Qoder's `updatedToolOutput` slot. Query reports configuration
-and experimental replacement support without rerunning commands. This slice has
-synthetic command-process coverage; real Qoder adoption, native display and peer
-Hook precedence remain unverified. It does not automatically invoke Tokenless or
-sec-core, establish recovery, or grant final/protected guarantees. The existing
+and experimental replacement support without rerunning commands. Fixed Qoder
+1.1.47 print/TUI probes verified preserve and replacement in subsequent answers;
+the TUI evidence comes from Stop callbacks, not rendered answer-region assertions
+or native history verification. A later peer Hook can override AW's replacement.
+Malformed output, timeout and cancellation preserve the original; killing the
+helper can leave its check incomplete while Qoder continues and exits 0. The
+query adoption status remains unchanged. This external command backend does not
+automatically invoke Tokenless or sec-core, establish recovery, or grant
+final/protected guarantees. The existing
 single-turn `qoder-project` retains its separate inspection/history contract.

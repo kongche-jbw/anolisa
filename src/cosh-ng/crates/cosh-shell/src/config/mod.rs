@@ -1,4 +1,5 @@
 pub(crate) mod audit;
+pub(crate) mod aw;
 mod hook_feedback;
 mod language;
 mod load;

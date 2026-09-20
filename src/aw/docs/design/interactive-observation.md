@@ -105,7 +105,7 @@ hooks may still change content or suppress delivery.
 | session.start | SessionStart / N | Real compact/clear/resume observed; initial trust omits startup |
 | input.submit | UserPromptSubmit / N + explicit response | Context/rejection and native print cases verified below; queue/supplement pending; Turn unknown |
 | tool.before | PreToolUse / N | Real Bash arguments observed; native guard evidence is separate below |
-| tool.after | PostToolUse / PostToolUseFailure / N + explicit response | Completed main-agent Bash text projection has synthetic coverage; real interactive adoption pending |
+| tool.after | PostToolUse / PostToolUseFailure / N + explicit response | Fixed-version print/TUI subsequent answers reflect Bash success text replacement; peer override demonstrated; history verification and other result shapes remain open |
 | permission.request | PermissionRequest / N | Real approve-once/reject observed; AW emits no approval decision |
 | compact.before | PreCompact / N | Real manual compaction observed; automatic compaction pending |
 | compact.after | PostCompact / N | Real manual completion observed; failure coverage pending |
@@ -185,8 +185,8 @@ release. Candidate changes or new execution attempts require a new check. OS
 violations and check outcomes remain distinct evidence, not substitutes for this
 invocation. Format 2 notifications still reject this safety route. A separate
 tool_guard config connects ordered transformations and final scan-code without
-notify-only authority. Pass emits updatedInput, never native allow, preserving
-normal approval. Check errors, repeated tool occurrences and cancellation emit
+notify-only authority. Pass emits updatedInput only for a changed candidate and
+an empty response otherwise, never native allow, preserving normal approval. Check errors, repeated tool occurrences and cancellation emit
 deny; required/final remains unsupported.
 
 Transforms and optional notifications remain capped at one second each. The
@@ -384,5 +384,96 @@ output and acknowledges completion before release. The owner reserves success
 or failure once per session epoch/tool call, even without notification routes;
 unsupported terminal results cannot later be retried as successful replacements.
 Stale/cancelled/expired candidates are withheld. Optional failure preserves the
-original result; it is not a mandatory sanitization barrier. Real Qoder adoption
-and peer Hook precedence remain pending, with final/protected still unsupported.
+original result; it is not a mandatory sanitization barrier.
+
+Fixed Qoder 1.1.47 acceptance covered eight real print cases: preserve, replace,
+both peer declaration orders, malformed output, timeout, cancellation and helper
+SIGKILL. A peer declared after AW supplied the selected answer marker; reversing
+the order selected AW's marker. AW received the original stdout in both cases,
+so this is not a composition contract that passes each Hook's candidate to the next.
+Returnable failures preserved the original with diagnostic fields. SIGKILL left
+only a started record; Qoder still answered from the original and exited 0.
+
+Print probes used fixture-created process bindings. A separate natural
+cosh-to-Qoder TUI session used the current Rust owner/launcher and two inputs,
+preserve then replace. Stop callbacks confirmed the corresponding subsequent
+answer markers, including a replacement marker absent from the prompt and original
+output; runtime.exited was observed. No rendered answer-region assertion or native
+history verification was performed. Turn remains unknown, and query/journal
+adoption status is not promoted by this fixture. Wrong source digests retain
+synthetic coverage only. That earlier stage did not exercise interactive
+Tokenless/sec-core providers or on-demand Herdr. The following sections describe
+the subsequent implementation and its separate acceptance scope. Arbitrary plugin
+combinations and final/protected guarantees remain unverified.
+
+## On-demand terminal ownership
+
+Artifact installation, system login-shell registration/selection, and session-level
+AW/Herdr opt-in are separate boundaries; see
+[#3373](https://github.com/agentic-os-org/ANOLISA/issues/3373). On-demand launch does
+not require changing `/etc/shells` or an account's login shell. Logging into cosh
+alone does not enable AW or open Herdr. ShellHost owns the outer login startup
+semantics; the inner Herdr pane uses a non-login shell and must not replay login
+profiles through an inherited outer flag. Other ShellHost startup paths must retain
+the combined marker/AW shim startup chain, with separate checks for manual/login
+entry, AW enabled/disabled, and return to the original shell.
+
+The optional cosh runtime Herdr launcher preserves the outer Bash and opens a
+private, pinned Herdr v0.9.0 server/client only for a foreground `qoder` invocation.
+It calls the shared native launch admission check before opening the UI. The
+Herdr pane executes the current cosh binary directly; that process creates its
+own AW scope and native Bash, and Bash waits for the helper that execs Qoder.
+The pane hosts only the native terminal, without selecting another model adapter.
+
+A private 0700 session directory carries argv bytes, launcher/server identities
+and a pane binding. After shell readiness, a fixed internal command claims the
+launch once; user argv never enters the shell text. Only the bound pane owner can
+publish completion, so Herdr shell respawn cannot overwrite the Agent exit status.
+Inner AW/shell temporaries live below the session directory for abnormal teardown.
+The original XDG environment is restored for the pane; user hooks and native
+configuration are not rewritten. Fixed cwd admission remains unchanged.
+
+The launcher bounds startup, RPC, session lifetime and owned-child teardown.
+It asks Herdr to close its workspace, then checks registered descendant identities
+and uses pidfds for remaining signals. Native Bash retains normal Qoder reaping;
+this is not arbitrary detached-process containment or a final/protected boundary.
+SIGHUP cancels the launcher. A one-shot inner Bash INT trap preserves return to the
+outer shell when the Agent dies by SIGINT. Failed shell readiness reaps its Bash
+without injecting a launch into startup readers. Only single-pane automatic launch
+is supported; multi-pane behavior is not certified.
+
+The explicit ignored shell_host test uses the official Herdr binary and synthetic
+Qoder, checks metadata as well as ownership/argv/exit status, and records cleanup.
+A login regression also verifies that the pane does not replay the outer profile.
+Real Qoder 1.1.47 has run through this entry, with Stop callbacks confirming a
+projection marker in subsequent answers. This is not terminal-rendering evidence,
+exclusive redaction, or acceptance of a complete demonstration in one session.
+Visual acceptance of the combined product remains separate.
+The Rust runtime has no external Python/shell launcher dependency;
+installation-time fetching and test drivers remain separate.
+
+## Native component profile and effect evidence
+
+The checked-in default policy is admitted by `aw-hook-cli configure`, which
+verifies installed versions/pins and produces a private format-2 profile. User
+`[aw]` references reach Bash/panes through ShellHost environment overrides;
+configuration does not mutate process-global environment or refresh trust on launch.
+Qoder runs in cosh's inner PTY, so Herdr's outer-pane process detector need not
+recognize it as an Agent. The bridge verifies pane ownership and publishes the
+same read-only tokens to its workspace only while that workspace has one pane.
+Workspace rows display those facts without injecting an Agent identity or state.
+Pane metadata remains available to existing consumers. The generated sidebar
+sets its maximum width and hidden collapse mode; metadata alone does not establish
+visible rendering.
+
+The native Tokenless backend is separate from the single-Turn `qoder-project`
+launcher. It maps only authenticated successful root Bash results to the existing
+projection codec, preserving unknown Turn identity and reusing the callback budget,
+Core claim, journal and attachment fence. It does not invent a Turn or history receipt.
+
+Read-only effect counters verify journal prefixes and filter runtime/session/epoch.
+They distinguish checks, candidate replacements and preserved results. The default
+has no observer commands, so callback counts and zero notification-handler counts
+are both legitimate. Native adoption remains unconfirmed in product metadata;
+external acceptance may separately bind exact native-history result digests.
+See the [acceptance procedure](../../../../docs/developer-guide/en/aw/qoder-acceptance.md).

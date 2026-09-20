@@ -17,6 +17,7 @@ use crate::raw_input::{
 };
 use crate::types::ShellEvent;
 
+use super::aw_startup::dispatch_bootstrap;
 use super::bootstrap::{assistance_state_file, start_bash_session, start_zsh_session, PtySession};
 use super::io_loop::{read_until_streaming_with_presentation, wait_child_preserving_signal};
 use super::lifecycle::{build_shell_host_output, push_shell_exited_event};
@@ -387,8 +388,9 @@ where
         session.parser.set_assistance_control(control.clone());
         prompt_presentation = prompt_presentation.with_assistance_control(control.clone());
     }
+    let mut shell_ready = false;
     if config.integration.uses_markers() {
-        read_until_streaming_with_presentation(
+        shell_ready = read_until_streaming_with_presentation(
             &mut session.master,
             &mut session.child,
             &mut session.parser,
@@ -404,6 +406,7 @@ where
             },
         )?;
     }
+    dispatch_bootstrap(config, shell_ready, &mut session.master, &mut session.child)?;
     let input_master = session.master.try_clone()?;
     let (input_event_sender, input_event_receiver) = mpsc::channel();
     let input_mode = Arc::new(Mutex::new(RawInputMode::Passthrough));

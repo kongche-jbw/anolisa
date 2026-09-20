@@ -151,5 +151,14 @@ print 可能隐藏检查失败诊断并退出 0，见
 [停止响应配置](../../docs/user-guide/zh/user-entrypoint/aw.md#实验性主-agent-停止响应)。
 
 格式 2 可显式配置 `tool_response` 投影主 Agent 的 Bash 成功文本，必须接受 unrecoverable
-并匹配原结果摘要；失败保留原始结果。真实交互采用仍待验收，见
+并匹配原结果摘要；失败保留原始结果。固定 Qoder 1.1.47 print/TUI 已验证替换标记进入
+后续回答；后声明的 peer Hook 可覆盖替换，历史核验和 final/protected 保证仍需分别验收。见
 [工具结果响应](../../docs/user-guide/zh/user-entrypoint/aw.md#实验性交互工具结果响应)。
+
+同一 Rust cosh 二进制可在输入 `qoder` 时按需管理单 pane Herdr，保留原 shell 和原生
+参数/退出码，无需外部启动脚本。需显式选择官方固定制品，见
+[按需 Herdr](../../docs/user-guide/zh/user-entrypoint/aw.md#按需打开-herdr)。
+
+仓库内默认 Provider 策略接入真实 SecCore 检查和原生 Tokenless 压缩。一次性运行
+`aw-hook-cli configure`，把输出的 `[aw]` 段加入现有 cosh 用户配置；日常仍是 cosh → `qoder`。
+见[标准入口验收手册](../../docs/developer-guide/zh/aw/qoder-acceptance.md)。

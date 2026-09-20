@@ -5,6 +5,7 @@ use crate::types::CoshApprovalMode;
 
 #[derive(Debug, Clone)]
 pub struct CoshConfig {
+    pub(crate) aw: Result<Option<super::aw::AwConfig>, String>,
     pub shell_default: String,
     pub shell_integration: String,
     pub analysis_mode: String,
@@ -89,6 +90,7 @@ impl HealthServiceExpectedState {
 impl Default for CoshConfig {
     fn default() -> Self {
         Self {
+            aw: Ok(None),
             shell_default: "auto".into(),
             shell_integration: "enhanced".into(),
             analysis_mode: "smart".into(),

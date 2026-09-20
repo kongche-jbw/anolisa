@@ -99,10 +99,17 @@ fn publish(root: &Path, socket: &Path, pane: &str) -> Result<(), Error> {
     let tokens = match current {
         Some(view) => json!({
             "aw":format!("AW {} / attachment {} / gap {}", view["bridge_status"].as_str().unwrap_or("unknown"), view["attachment"], view["observation_gap"]),
-            "aw_observation":format!("{} observed / {} failed / {} pending", view["observed"], view["failed"], view["pending"]),
-            "aw_coverage":"Observation only | OS not attached | adoption unsupported"
+            "aw_observation":match view["callbacks_in_runtime"].as_u64() {
+                Some(callbacks) => format!("{callbacks} callbacks / {} handlers / {} failed", view["observed"], view["failed"]),
+                None => format!("{} observed / {} failed / {} pending", view["observed"], view["failed"], view["pending"]),
+            },
+            "aw_security":effect_text(&view, "checks"),
+            "aw_projection":effect_text(&view, "projections"),
+            "aw_coverage":"OS not attached | adoption unconfirmed"
         }),
-        None => json!({"aw":"AW idle / no live runtime","aw_observation":null,"aw_coverage":null}),
+        None => {
+            json!({"aw":"AW idle / no live runtime","aw_observation":null,"aw_security":null,"aw_projection":null,"aw_coverage":null})
+        }
     };
     let seq = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -115,7 +122,68 @@ fn publish(root: &Path, socket: &Path, pane: &str) -> Result<(), Error> {
             "pane_id":pane,"source":"anolisa.aw","seq":seq,"ttl_ms":3000,"tokens":tokens
         }),
     )?;
+    // Herdr cannot identify an Agent on cosh's nested PTY. Its workspace rows
+    // can show the same read-only evidence without inventing an Agent status.
+    let listing = rpc(socket, "pane.list", json!({}))?;
+    if let Some(workspace) = exclusive_workspace(&listing, pane)? {
+        rpc(
+            socket,
+            "workspace.report_metadata",
+            json!({
+                "workspace_id":workspace,"source":"anolisa.aw","seq":seq,
+                "ttl_ms":3000,"tokens":tokens
+            }),
+        )?;
+    }
     Ok(())
+}
+
+fn exclusive_workspace<'a>(listing: &'a Value, pane: &str) -> Result<Option<&'a str>, Error> {
+    let panes = listing["panes"]
+        .as_array()
+        .ok_or(Error::Profile("Herdr pane list missing"))?;
+    let mut matched = panes.iter().filter(|entry| entry["pane_id"] == pane);
+    let workspace = matched
+        .next()
+        .and_then(|entry| entry["workspace_id"].as_str())
+        .filter(|id| !id.is_empty())
+        .ok_or(Error::Profile("Herdr bound pane workspace missing"))?;
+    if matched.next().is_some() {
+        return Err(Error::Profile("Herdr bound pane identity is ambiguous"));
+    }
+    Ok((panes
+        .iter()
+        .filter(|entry| entry["workspace_id"] == workspace)
+        .count()
+        == 1)
+        .then_some(workspace))
+}
+
+fn effect_text(view: &Value, kind: &str) -> String {
+    let provider = if kind == "checks" {
+        "tool_guard"
+    } else {
+        "tool_response"
+    };
+    if view["format"] != 2 || view[provider] == "not_configured" {
+        return "No effect provider configured".into();
+    }
+    let effect = &view["effects"];
+    if effect["status"] != "available" {
+        return "Effect evidence unavailable".into();
+    }
+    let counts = &effect[kind];
+    if kind == "checks" {
+        format!(
+            "Checks {} pass / {} deny / {} failed / {} pending",
+            counts["passed"], counts["denied"], counts["failed"], counts["pending"]
+        )
+    } else {
+        format!(
+            "Results {} candidates / {} kept / {} failed",
+            counts["candidates"], counts["preserved"], counts["failed"]
+        )
+    }
 }
 
 fn rpc(path: &Path, method: &str, params: Value) -> Result<Value, Error> {
@@ -182,4 +250,38 @@ fn connect(path: &Path) -> Result<UnixStream, Error> {
         return Err(std::io::Error::last_os_error().into());
     }
     Ok(stream)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn absent_effect_provider_is_not_a_zero_count_check() {
+        let view = json!({"format":2,"tool_guard":"not_configured",
+            "tool_response":"experimental_bash_result_response","effects":{"status":"unavailable"}});
+        assert_eq!(
+            effect_text(&view, "checks"),
+            "No effect provider configured"
+        );
+        assert_eq!(
+            effect_text(&view, "projections"),
+            "Effect evidence unavailable"
+        );
+    }
+
+    #[test]
+    fn workspace_evidence_requires_the_bound_pane_to_be_exclusive() {
+        let one = json!({"panes":[{"pane_id":"one","workspace_id":"owned"},
+            {"pane_id":"other","workspace_id":"unrelated"}]});
+        assert_eq!(exclusive_workspace(&one, "one").unwrap(), Some("owned"));
+        let shared = json!({"panes":[{"pane_id":"one","workspace_id":"owned"},
+            {"pane_id":"two","workspace_id":"owned"}]});
+        assert_eq!(exclusive_workspace(&shared, "one").unwrap(), None);
+        assert!(exclusive_workspace(&one, "absent").is_err());
+        assert!(exclusive_workspace(&json!({}), "one").is_err());
+        let duplicate = json!({"panes":[{"pane_id":"one","workspace_id":"a"},
+            {"pane_id":"one","workspace_id":"b"}]});
+        assert!(exclusive_workspace(&duplicate, "one").is_err());
+    }
 }

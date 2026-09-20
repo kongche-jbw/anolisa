@@ -4,6 +4,7 @@
 //! Private local state detects accidental misbinding, not a same-user attacker.
 
 mod config;
+mod effects;
 mod herdr;
 mod hooks;
 mod input_response;
@@ -20,7 +21,7 @@ pub use config::prepare;
 pub use herdr::HerdrBridge;
 pub use hooks::{callback, callback_with_cancellation, guard_callback_with_cancellation};
 pub use hooks::{input_callback_with_cancellation, stop_callback_with_cancellation};
-pub use launch::{launch, launch_with_cancellation};
+pub use launch::{check_launch, launch, launch_with_cancellation};
 pub use runtime_events::RuntimeObserver;
 pub use view::query;
 
@@ -120,6 +121,8 @@ struct State {
     retired_sessions: Vec<String>,
     occurrences: u64,
     gap: bool,
+    #[serde(default)]
+    effect_gap_attachment: Option<u64>,
     #[serde(default)]
     notification_sequence: u64,
 }

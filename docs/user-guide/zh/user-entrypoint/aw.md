@@ -354,6 +354,44 @@ AW记录由操作方在审计保留期结束后删除精确归属目录。
 
 ## 实验性自然 Qoder 入口
 
+### 原生组件配置
+
+要使用真实 SecCore Bash 检查和 Tokenless 工具结果压缩，使用仓库内
+`src/aw/providers/qoder-native.json` 策略及编译后的 `aw-hook-cli configure`。
+[验收流程](../../../developer-guide/zh/aw/qoder-acceptance.md)提供完整构建、配置和终端步骤。
+配置是一次性接纳已安装制品；日常启动无需启动器或 observer 脚本。
+
+命令要求绝对路径参数 `--qoder`、`--native-config`、`--sec-core`、`--tokenless`、
+`--herdr`、`--workspace`、`--output`；可选 `--providers` 选择仓库策略，重复
+`--sec-core-pin` 增加已审阅的安装文件。不传 `--providers` 时使用内嵌默认策略。
+命令核对支持版本和 Herdr 制品，创建新的 0600 profile，输出带真实路径和摘要的用户配置：
+
+```toml
+[aw]
+config = "/absolute/path/aw.json"
+config_sha256 = "<reviewed lowercase SHA-256>"
+herdr = "/absolute/path/herdr"
+herdr_sha256 = "<official asset SHA-256>"
+```
+
+将其加入 `~/.copilot-shell/config.toml`，保留已有模型 Provider 配置。两个 Herdr 字段可
+成对省略。没有 `[aw]` 和显式 AW 环境变量时不启用集成；`COSH_AW_CONFIG`、
+`COSH_AW_CONFIG_SHA256`、`COSH_AW_HERDR`、`COSH_AW_HERDR_SHA256` 中任一覆盖会选择完整
+环境组，缺项不从文件借用。格式错误或构建未开启 AW 时明确报错。删除该段及四个环境覆盖，
+在新 shell 中禁用集成。
+
+生成的格式 2 profile 使用空通知路由、真实 SecCore `tool_guard`，以及取代
+`tool_response.command` 的 `tool_response.tokenless`。结果后端必须二选一。原生后端
+复用来源摘要/epoch 隔离与保守投影 codec，要求显式允许不可恢复结果，默认
+`allow_text_reencoding=false`。版本探测、pin 检查和压缩共享回调期限，失败保留原始结果。
+进程环境关闭 Tokenless stats 和 SLS、显式启用压缩，避免读取用户配置。
+
+侧栏分别展示回调、通知命令、检查和结果候选。Journal 计数只属于当前 attachment，损坏或
+不完整证据显示不可用，候选计数不证明原生采用。OS 覆盖和 final/protected 保证仍未确认。
+下方旧 observer 示例是独立协议示例，不是此配置的依赖。
+
+### 历史 observer 协议示例
+
 此 opt-in Linux/Bash profile 保留 Qoder 原生交互循环与 PTY，属于实验性观察切片，
 不代表强安全模式或四 Agent POC 完成。使用 Rust 1.97.1 构建包含 AW 的产品：
 
@@ -425,13 +463,53 @@ runtime 1024次工具调用和有界的 shell 启动次数，达到限制后开�
 时，可选 worker 发布观察计数。将 [interactive.toml](../../../../src/aw/integrations/herdr/interactive.toml)
 中的 rows 合并到已有 Herdr v0.9.0 配置。每个 pane 核对自己的 cosh PID；viewer 无权执行
 handler 或控制 Agent。RPC 失败后三秒内 metadata 过期，私有 query 显示 viewer 可用性。
-worker 最多刷新24小时。关闭 Herdr 展示不停止 Agent。真实原生 Hook 共存及 Herdr 视觉
-展示仍与合成协议/PTY 测试分别验收。
+worker 最多刷新24小时。隐藏侧栏或此可选 metadata worker 断开，本身不停止 Agent。
+关闭下文所述受管 Herdr 实例会结束本次交互。真实原生共存和视觉展示需独立于合成协议/PTY
+测试的证据。
 
-在新开 cosh 前 unset `COSH_AW_CONFIG` 和 `COSH_AW_CONFIG_SHA256` 即可禁用。
+对于这个仅用环境变量的示例，在新开 cosh 前 unset `COSH_AW_CONFIG` 和
+`COSH_AW_CONFIG_SHA256` 即可禁用；如果同时存在用户 `[aw]` 段，还需删除它以禁用文件配置。
 正常 shell 退出会 join 可选 viewer 并删除 AW 临时记录；SIGKILL 可能保留该 shell 的私有
 临时目录，原生 Qoder 历史沿自身保留策略处理。既有07B/07C1显式启动器继续可用，默认
 feature 与安全策略未改变。参见[归属与证据](../../../../src/aw/docs/design/interactive-observation_zh.md)。
+
+### 按需打开 Herdr
+
+原生组件的 `[aw]` 配置已启用此入口。也可以改用完整环境组，指定已准备好的固定
+Herdr v0.9.0 制品：
+
+```bash
+export COSH_AW_CONFIG=/absolute/path/to/aw.json
+export COSH_AW_CONFIG_SHA256='<reviewed configuration digest>'
+export COSH_AW_HERDR=/absolute/path/to/herdr
+export COSH_AW_HERDR_SHA256='<official digest for the selected architecture>'
+```
+
+摘要必须匹配 [固定制品清单](../../../../src/aw/integrations/herdr/upstream.json)。
+日常启动不下载或构建 Herdr，也不调用外部 Python/shell 启动脚本；Bash 本身和 cosh 内部
+shell 集成仍保留。进入 cosh 后普通命令保持原样，输入 `qoder` 才打开原生 Herdr 交互区
+及 AW 观察侧栏。结束 Agent 后回到同一个外层 Bash，保留其目录和变量，透传 Agent 退出码。
+无需先手动进入 Herdr，也不修改用户的 Herdr 配置。
+
+此配置仅启用当前会话的入口，不修改 `/etc/shells` 或账户的登录 shell。
+即使已将 cosh 选作登录 shell，仍需显式配置 AW/Herdr，并输入 `qoder` 才打开交互区。
+
+此入口当前限定 Linux/Bash、单 pane 和配置中固定的工作目录；cd 到其他目录时仍明确拒绝。
+每次启动创建私有 server/client 与 pane owner，使用当前 Rust Hook/query 合同；传入的
+prompt/参数通过私有记录交付，不作为 shell 命令拼接。Herdr 启动最多等待10秒，会话最多
+24小时。缺失/错误 pin 拒绝启动，不静默降级。内层 shell 就绪超时不启动 Agent。
+Ctrl-C 导致 Agent 退出或启动器收到 SIGHUP 时回收本次实例并恢复原 shell；Agent 自己处理
+Ctrl-C 的行为保持原生语义。关闭整个受管 Herdr 实例会结束本次交互；单独关闭侧栏不授予控制权。
+
+此前阶段使用真实固定 Herdr 与合成 Qoder 验证了按需启动、metadata、参数透传、退出码、
+同 shell 返回、二次启动、错误 pin、Ctrl-C、启动器挂断及 shell 就绪超时；登录入口回归
+确认内层 pane 执行 `.bashrc`，不重复外层登录 profile。
+真实 Qoder 1.1.47 已通过该入口运行，Stop 回调确认后续回答引用了仅由投影命令生成的
+标记；这不表示用户提示中的原文也被删除。此前探针没有认证原生组件的单轮完整视觉演示，
+该独立阶段请遵循上方验收流程。多 pane、任意脱离后代及 SIGKILL 清理仍未认证。
+侧栏仍显示观察状态，不表示全部16事件或 final/protected 完成。恢复直接 Qoder 入口时，
+文件配置需成对移除两个 Herdr 字段，环境配置需移除两个 Herdr 变量，并保留 profile 路径和
+摘要配对。安装期的固定制品准备与产品运行依赖分别管理。
 
 ### 公共生命周期通知配置
 
@@ -669,7 +747,8 @@ false，`notifications` 可以为空对象。将示例路径和摘要替换为�
 ```
 
 这个配置在 Qoder PreToolUse 的 Bash 调用中运行 `scan-code --language bash --mode regex`。
-pass 且无 findings 才返回检查过的参数；warn、deny、失败、畸形响应、超时和取消均返回原生
+pass 且无 findings 才放行检查过的候选；完整候选未变化时返回空响应，只有真实变化才返回
+`updatedInput`，避免纯检查被标为输入改写。warn、deny、失败、畸形响应、超时和取消均返回原生
 deny。通过扫描不会自动批准工具，原有审批继续生效。其他工具不受这个 Bash profile 检查。
 
 `transforms` 可配置 0–3 个同形状的命令配置，provider_id 与 scanner 及其他变换互不重复。
@@ -752,6 +831,9 @@ Bash 结果形状不执行投影命令。前后配对的工具结果只认领一
 命令会收到原生内容，其自身留存由操作者控制。
 
 响应使用 Qoder 的 `updatedToolOutput` 槽位。query 报告配置和实验性替换支持，不重跑命令。
-本切片有合成命令进程测试，真实 Qoder 采用、原生展示和其他 Hook 的覆盖顺序仍待验证。
-它不会自动调用 Tokenless/sec-core，不提供恢复或 final/protected 保证；原有单轮
+固定 Qoder 1.1.47 print/TUI 已验证保留/替换进入后续回答；TUI 证据来自 Stop 回调，
+不是渲染后回答区域断言或原生历史核验。后声明的 peer Hook 可覆盖 AW 替换。
+畸形输出、超时和取消保留原文；helper 被杀可缺少完成记录，Qoder 仍继续并退出 0。
+query 的采用状态保持不变。
+此外部 command 后端不会自动调用 Tokenless/sec-core，不提供恢复或 final/protected 保证；原有单轮
 `qoder-project` 保持独立的检查及历史记录合同。
