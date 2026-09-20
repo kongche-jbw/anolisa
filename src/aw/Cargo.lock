@@ -75,11 +75,13 @@ dependencies = [
  "aw-adapters",
  "aw-contracts",
  "aw-core",
+ "aw-host-process",
  "aw-sec-host",
  "aw-tokenless-host",
  "libc",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
 ]
 

@@ -59,6 +59,9 @@ fn bash_supports_prompt_command_array() -> bool {
         .is_ok_and(|status| status.success())
 }
 
+#[cfg(feature = "aw")]
+#[path = "shell_host/aw.rs"]
+mod aw;
 #[path = "shell_host/foreground.rs"]
 mod foreground;
 #[path = "shell_host/governance.rs"]

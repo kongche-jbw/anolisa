@@ -4,8 +4,14 @@
 //! Core invokes a trusted Host and journals facts. It never starts an Agent,
 //! installs OS protection, dispatches tools or manufactures adoption evidence.
 
+pub mod input_response;
 pub mod journal;
+pub mod notifications;
 pub mod ports;
+pub mod stop_response;
+
+pub mod tool_chain;
+pub mod tool_response;
 
 mod execute;
 mod prepare;

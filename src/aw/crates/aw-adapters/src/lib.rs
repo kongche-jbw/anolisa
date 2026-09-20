@@ -6,6 +6,11 @@
 
 pub mod native;
 pub mod profiles;
+pub mod qoder_events;
+pub mod qoder_input;
+pub mod qoder_result;
+pub mod qoder_stop;
+pub mod qoder_tool;
 
 mod bridge;
 mod capture;

@@ -143,13 +143,18 @@ def check_inventory() -> None:
         ("aw-core", "execution"),
         ("aw-core", "journal"),
         ("aw-core", "journal_read"),
+        ("aw-core", "notifications"),
+        ("aw-core", "tool_chain"),
+        ("aw-core", "tool_response"),
         ("aw-adapters", "profiles"),
         ("aw-adapters", "native"),
         ("aw-adapters", "bridge"),
         ("aw-sec-core", "pii"),
+        ("aw-sec-core", "code"),
         ("aw-sec-host", "host"),
         ("aw-hook-cli", "hook"),
         ("aw-hook-cli", "preflight"),
+        ("aw-hook-cli", "interactive"),
         ("aw-hook-cli", "projection"),
         ("aw-hook-cli", "adoption"),
         ("aw-host-process", "process"),
@@ -204,7 +209,7 @@ def structure(metadata: dict, root: Path) -> None:
         },
         "aw-hook-cli": {
             "aw-contracts", "aw-core", "aw-adapters", "aw-sec-host", "aw-tokenless-host",
-            "serde", "serde_json", "thiserror", "libc",
+            "serde", "serde_json", "thiserror", "libc", "aw-host-process", "sha2",
         },
     }
     allowed["aw-host-process"] = {

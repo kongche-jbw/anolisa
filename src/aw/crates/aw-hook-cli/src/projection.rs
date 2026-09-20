@@ -237,9 +237,7 @@ pub fn project_with_cancellation(
         .and_then(|call| call.result().output.as_ref())
         .and_then(|output| output["candidate"]["content"].as_str());
     let mut response = match candidate {
-        Some(text) => {
-            json!({"hookSpecificOutput":{"hookEventName":"PostToolUse","updatedToolOutput":text}})
-        }
+        Some(text) => aw_adapters::qoder_result::replacement(text),
         None => json!({}),
     };
     match verdict {

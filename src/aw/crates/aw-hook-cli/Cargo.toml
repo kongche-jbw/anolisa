@@ -16,3 +16,5 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 libc = { workspace = true }
 aw-tokenless-host = { workspace = true }
+aw-host-process = { workspace = true }
+sha2 = { workspace = true }

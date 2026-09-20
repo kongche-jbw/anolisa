@@ -3,6 +3,7 @@
 mod adoption;
 mod history;
 mod input;
+pub mod interactive;
 mod owner;
 pub mod preflight;
 mod projection;

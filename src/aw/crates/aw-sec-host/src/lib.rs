@@ -1,6 +1,8 @@
 //! Runs the existing SecCore native content scanner through a bounded Host port.
 //! Program/configuration pinning is local provenance, not sandbox attestation.
 
+pub mod code;
+
 use aw_host_process as process;
 pub use aw_host_process::{Config, FilePin, Limits, PinState};
 /// Native scan interface admitted independently of implementation language.

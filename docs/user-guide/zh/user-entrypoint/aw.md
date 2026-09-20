@@ -351,3 +351,407 @@ Provider和投影opt-in。已有根目录会被拒绝；重复调用不会覆盖
 独立调用拥有不同根目录与会话；清理不从持久PID恢复终止权限。原生历史按Qoder自身策略保留，
 AW记录由操作方在审计保留期结束后删除精确归属目录。
 见[连续对话归属设计](../../../../src/aw/docs/design/qoder-session_zh.md#有界连续对话)。
+
+## 实验性自然 Qoder 入口
+
+此 opt-in Linux/Bash profile 保留 Qoder 原生交互循环与 PTY，属于实验性观察切片，
+不代表强安全模式或四 Agent POC 完成。使用 Rust 1.97.1 构建包含 AW 的产品：
+
+```bash
+cargo +1.97.1 build --manifest-path src/cosh-ng/Cargo.toml --locked -p cosh-shell --features aw
+```
+
+准备调用者持有、权限为 `0600` 的私有 JSON 配置，放在不可信项目内容之外。
+先审阅 handler，再独立固定解释器和脚本摘要。下面的路径须替换为本机绝对路径，
+摘要须替换为对应已审阅文件的 lowercase SHA-256。handler 工作目录必须等于启动 Qoder 的目录。
+
+```json
+{
+  "format": 1,
+  "required_safety": false,
+  "qoder": {
+    "program": "/absolute/path/to/qodercli",
+    "program_sha256": "<reviewed Qoder 1.1.47 executable digest>"
+  },
+  "native_config_directory": "/absolute/path/to/native-qoder-config",
+  "handler": {
+    "provider_id": "tool-observer",
+    "provider_version": "1",
+    "program": "/usr/bin/python3",
+    "program_sha256": "<reviewed interpreter digest>",
+    "cwd": "/absolute/path/to/workspace",
+    "args": ["/absolute/path/to/tool-observer.py"],
+    "environment": {},
+    "pins": [{
+      "path": "/absolute/path/to/tool-observer.py",
+      "state": {"sha256": "<reviewed handler digest>"}
+    }],
+    "limits": {
+      "timeout_ms": 1000,
+      "input_bytes": 65536,
+      "output_bytes": 1024,
+      "stderr_bytes": 1024
+    }
+  }
+}
+```
+
+[示例 observer](../../../../src/aw/examples/tool-observer.py) 从 stdin 接收一个 AW JSON
+事件，返回严格的 `{"format":1,"observed":true}`。输入包含 runtime、session、attachment、
+tool、配置 revision 与原生结果状态，不含工具参数或结果原文。其他输出、pin 变化、非零退出
+或超时均记录为可选观察失败，原生执行继续。此 executable 协议不提供沙箱。
+
+在工作目录中显式启用已审阅的配置版本，再打开 cosh：
+
+```bash
+export COSH_AW_CONFIG=/absolute/path/to/aw.json
+export COSH_AW_CONFIG_SHA256='<reviewed configuration digest>'
+export COSH_SHELL_INTEGRATION=enhanced
+/absolute/path/to/cosh-shell --shell bash
+```
+
+在终端中输入 `qoder`。作用域 shim 在 exec 前加入原生配置，不改全局 PATH、可执行文件、
+登录状态或原有 Hook 文件。该 profile 接受位置参数 prompt、`--model`、`--name`，以及带
+明确 ID 的 `--resume`；其他选项拒绝。范围限于直接前台启动；alias/function、
+原生绝对路径、嵌套启动、管道、重定向与远程命令不属于已认证入口。shim 可以绕过，不提供
+OS enforcement。`required_safety: true` 在启动 Agent 前拒绝。
+
+reset 依据原生 session 身份切换。旧回调/完成结果不计入新 attachment；reset 不产生新原生
+session ID、或同进程返回已退休会话时报告缺口。实验上限为128个 attachment 代次、每个
+runtime 1024次工具调用和有界的 shell 启动次数，达到限制后开启新 cosh 会话。Qoder 历史与
+权限设置保留原生语义。
+
+当 Herdr 将 cosh 作为 pane 的默认 shell，并提供 `HERDR_SOCKET_PATH` 与 `HERDR_PANE_ID`
+时，可选 worker 发布观察计数。将 [interactive.toml](../../../../src/aw/integrations/herdr/interactive.toml)
+中的 rows 合并到已有 Herdr v0.9.0 配置。每个 pane 核对自己的 cosh PID；viewer 无权执行
+handler 或控制 Agent。RPC 失败后三秒内 metadata 过期，私有 query 显示 viewer 可用性。
+worker 最多刷新24小时。关闭 Herdr 展示不停止 Agent。真实原生 Hook 共存及 Herdr 视觉
+展示仍与合成协议/PTY 测试分别验收。
+
+在新开 cosh 前 unset `COSH_AW_CONFIG` 和 `COSH_AW_CONFIG_SHA256` 即可禁用。
+正常 shell 退出会 join 可选 viewer 并删除 AW 临时记录；SIGKILL 可能保留该 shell 的私有
+临时目录，原生 Qoder 历史沿自身保留策略处理。既有07B/07C1显式启动器继续可用，默认
+feature 与安全策略未改变。参见[归属与证据](../../../../src/aw/docs/design/interactive-observation_zh.md)。
+
+### 公共生命周期通知配置
+
+要在其他生命周期位置执行命令，显式选择格式 2。这是实验性通知 profile：命令会收到完整
+原生 payload，使用前确认脚本可以读取提示词、参数和结果。固定实际 Qoder CLI 可执行文件，
+不要固定分发脚本。下面的无操作命令确认会话开始；可替换为审阅过的命令。
+启用环境变量与启动命令沿用上文。
+
+```json
+{
+  "format": 2,
+  "required_safety": false,
+  "qoder": {
+    "program": "/absolute/path/to/qodercli",
+    "program_sha256": "<reviewed Qoder 1.1.47 executable digest>"
+  },
+  "native_config_directory": "/absolute/path/to/native-qoder-config",
+  "cwd": "/absolute/path/to/workspace",
+  "notifications": {
+    "session.start": [
+      {
+        "provider_id": "lifecycle-notifier",
+        "provider_version": "1",
+        "program": "/usr/bin/python3",
+        "program_sha256": "<reviewed interpreter digest>",
+        "cwd": "/absolute/path/to/workspace",
+        "args": [
+          "-c",
+          "import json,sys; event=json.load(sys.stdin); print(json.dumps({'format':1,'observed':True}))"
+        ],
+        "environment": {},
+        "pins": [],
+        "limits": {
+          "timeout_ms": 1000,
+          "input_bytes": 1048576,
+          "output_bytes": 1024,
+          "stderr_bytes": 1024
+        }
+      }
+    ]
+  }
+}
+```
+
+目前接受的通知键为 `session.start`、`input.submit`、`tool.before`、`tool.after`、
+`permission.request`、`compact.before`、`compact.after`、`subagent.start`、`subagent.stop`、
+`turn.stop`、`session.end`；owner 来源另接受 `runtime.observed`、`runtime.exited`、
+`coverage.changed`。原生工具成功和失败都映射为 tool.after，通过 native_event 与
+原样保留的 payload 区分。turn_id 为 null 并带未知原因；输入到达不证明 Qoder 接纳新任务。
+
+每个键配置 1–4 个顺序执行的命令，provider_id 互不重复，cwd 与顶层一致。
+执行前核对整条路由的 pin；单命令最多一秒，链执行最多两秒，每个 runtime 最多接纳
+1024 个回调。成功时精确返回 `{"format":1,"observed":true}`；其他输出或命令失败记录
+缺口，原生执行保持原状。Journal 防止同一已领取 occurrence 重跑；没有稳定原生 ID 的
+回调分配新的 arrival ID，因此重复提交的相同提示词仍是不同发生。
+
+格式 2 不包含 handler；格式 1 不包含 cwd、notifications、tool_guard、input_response、stop_response 和 tool_response。未知事件、未接通来源及
+required 安全要求在准入时拒绝。Bash 变换/guard 可通过下节的独立配置试验；其余来源与
+真实效果仍需逐项验收，不能计为 16 项已完成。见 [16 事件矩阵](../../../../src/aw/docs/design/interactive-observation_zh.md#qoder-16-事件适配矩阵)
+中的来源证据、缺口和下一动作。query 与可选 Herdr 只读命令计数，真实 Qoder TUI/Hook
+完整共存仍待验收。
+
+
+首次工作区信任流程中，Qoder 可能没有 SessionStart。格式 2 会从首个可信主 Agent 输入
+绑定原生会话并继续通知，同时 query 显示 observation_gap=true、session_start_observed=false，
+不会补造 session.start。真正 reset 仍要求 SessionStart 和新的会话身份；未知或已退休会话
+不能通过普通输入重新接入。
+
+## 实验性输入提交响应
+
+需要在 Qoder 处理前拒绝输入或附加上下文时，将下面的 `input_response` 字段加入格式 2。
+它显式授权一个响应命令；通知命令继续使用原有的确认合同。`required_safety` 保持 false，
+`notifications` 可以为空对象，命令 cwd 必须与顶层一致。使用前替换为审阅过的路径和摘要。
+
+```json
+{
+  "input_response": {
+    "provider_id": "input-policy",
+    "provider_version": "1",
+    "program": "/usr/bin/python3",
+    "program_sha256": "<reviewed interpreter digest>",
+    "cwd": "/absolute/path/to/workspace",
+    "args": [
+      "-c",
+      "import json,sys; request=json.load(sys.stdin); print(json.dumps({'format':1,'decision':'continue'}))"
+    ],
+    "environment": {},
+    "pins": [],
+    "limits": {
+      "timeout_ms": 1000,
+      "input_bytes": 1048576,
+      "output_bytes": 65536,
+      "stderr_bytes": 1024
+    }
+  }
+}
+```
+
+命令收到 `{"format":1,"scope":"input.submit.respond","event":{...}}`。
+event 是已经认证的生命周期信封，包含原生 payload.prompt，Turn 身份仍未知。
+只接受下面三种返回：
+
+- `{"format":1,"decision":"continue"}`：继续原生处理。
+- `{"format":1,"decision":"continue","additional_context":"reviewed context"}`：
+  在原始输入旁附加上下文。
+- `{"format":1,"decision":"reject","reason":"input policy declined"}`：拒绝本次输入。
+
+此处不提供提示词替换或许可批准。context/reason 必须非空、不含 NUL，且不超过 16384 个
+UTF-8 字节。额外/混合字段、通知确认、重复 JSON 键、非零退出、pin 变化、超时和取消均拒绝，
+不交付上下文。响应命令最多一秒，并与此前通知共享回调的两秒期限，不重新开始计时。
+失败通知的输出不能成为决策，但通知耗时仍计入预算。
+
+adapter 将上下文映射到 UserPromptSubmit.additionalContext，将拒绝映射为原生 decision=deny。
+独立 helper 将输入解析/binding 错误映射为 exit 2。reset 或会话结束会扣留旧响应。
+仅含元数据的 claim 位于 shell 私有 input-response-journal；query 的 input_response 显示
+experimental_native_response，不声称已经采用，查询也不会重跑命令。
+
+固定 Qoder 1.1.47 print 探针已实际采用返回上下文；策略拒绝、畸形返回、超时、取消及缺 binding
+均停止输入处理。其他 Hook 的拒绝仍生效，两份 Hook 上下文均被采用。杀死 AW helper 后，
+原生处理会在缺少其上下文时继续。这些仅是 native Hook 保证，不等于 final/protected，也不能
+证明已经控制模型请求边界。自然 cosh TUI 也从原生 Stop 回调确认上下文标记，随后策略/畸形/超时三次输入未产生新 Stop，
+Agent 和 shell 正常退出。排队/补充输入语义及其他插件组合仍待验证。
+
+## 实验性主 Agent 停止响应
+
+需要在主 Agent 停止时检查回答，可将 `stop_response` 加入格式 2，单独授权一个命令；
+notifications 可为空。使用核实后的路径/pin，cwd 与工作区一致，required_safety 保持 false。
+
+```json
+{
+  "stop_response": {
+    "provider_id": "stop-policy",
+    "provider_version": "1",
+    "program": "/usr/bin/python3",
+    "program_sha256": "<reviewed interpreter digest>",
+    "cwd": "/absolute/path/to/workspace",
+    "args": [
+      "-c",
+      "import json,sys; request=json.load(sys.stdin); print(json.dumps({'format':1,'decision':'allow_stop'}))"
+    ],
+    "environment": {},
+    "pins": [],
+    "limits": {
+      "timeout_ms": 1000,
+      "input_bytes": 1048576,
+      "output_bytes": 65536,
+      "stderr_bytes": 1024
+    }
+  }
+}
+```
+
+命令收到 `{"format":1,"scope":"turn.stop.respond","event":{...}}`，包含原生停止 payload，
+Turn 身份仍未知。输出只允许以下两种：
+
+- `{"format":1,"decision":"allow_stop"}`：允许停止，不宣称任务成功。
+- `{"format":1,"decision":"continue","reason":"complete the missing check"}`：
+  经原生 decision=deny 请求继续工作。
+
+reason 必须非空、无 NUL，且不超过 16384 个 UTF-8 字节。混合/原生字段、畸形输出、
+非零退出、pin 变化、超时和取消均返回 continue=false，并携带检查不可用诊断；不会请求更多工作，
+也不会记录检查通过。专用 --aw-stop 对畸形输入或缺 binding 使用相同失败语义；Stop 的
+退出码 2 会请求模型继续，因此不能作为错误回退。此处不批准工具，也不替换回答。
+
+原生 stop_hook_active=true 时跳过响应命令，使用同一诊断请求停止，限制递归检查，
+包括其他 Hook 请求的继续执行。后续原生 Stop 的该字段为 false 时，是另一次发生，可执行检查。
+此限制依赖原生字段，不依赖已证明的 Task 身份；重复检查不认证任务完成。通知路由仍独立运行，
+不能提供响应决策，其耗时计入同一两秒期限；响应命令最多一秒。reset/会话结束阻止旧响应交付。
+
+私有 stop-response-journal 只记录元数据及决策/跳过/失败类别，native_adoption=unconfirmed。
+query 显示 stop_response 配置状态且不重跑命令。固定 Qoder 1.1.47 print 探针已验证
+允许停止、继续理由被采用和重复检查停止；畸形返回、超时、协作取消和缺 binding 均没有
+触发下一次回答。另一 Hook 请求继续时，AW allow_stop 保留该请求；AW continue=false
+在两种已测声明顺序中均使其停止。这些案例不认证任意 Hook/插件组合。
+
+自然 cosh TUI 在用户级 Hook 共存下验证连续两次输入，每次继续理由均被采用，Stop 标志
+false → true；新输入将其重置为 false。畸形/超时检查没有触发下一次回答。TUI 显示了
+不可用诊断，/exit 后收到 runtime.exited，随后 shell 回收。print 模式未显示该诊断，且
+检查失败时仍退出 0。原生退出码和 allow_stop 都不证明任务成功，已显示回答不会撤回。
+helper 被杀后仅留下 started、没有完成记录，原生输出仍正常结束。因此仍不认证
+final/protected，required_safety 继续不可用。
+
+## 运行与覆盖通知
+
+在同一格式 2 notifications 映射中增加 runtime.observed、runtime.exited 或 coverage.changed，
+命令形状与上文一致。配置任一项即启动 cosh owner worker，不要求 Herdr。
+这些 envelope 的 source 为 runtime_owner、native_event 为 null；原生 Hook payload 不能选择该来源。
+
+- runtime.observed 记录 exec 前的准入登记与 PID/start ticks；不证明原生 exec 成功或 Agent ready，
+  此时 Session/Turn 未知。
+- runtime.exited 来自 exec 前打开的 pidfd，报告根进程退出；不依赖 SessionEnd，不消费 Bash 的
+  wait 状态。exit_status 为 null、descendants_reaped 为 false，任务成功与否未知。
+- coverage.changed 携带 previous/current 采样快照，记录回调接入、会话代次、已观察缺口、
+  通知交付和根退出。采样间的中间态可能合并。OS 覆盖仍为 not_attached；
+  回调静默或侧栏断开不能证明保护失效。
+
+启动前等待 owner 确认登记，最多五秒；pidfd 不可用或 owner 未确认时拒绝这个显式启用的启动。
+worker 在有界通知之间每 100ms 采样，观察窗口为 24 小时；每 shell 最多登记 128 次，
+每 runtime 最多 1024 次覆盖变化。通知仍限单命令一秒、整链两秒。失败不重试，终态交付失败
+也保留为缺口。关闭 shell 时取消正在执行的命令并关闭所持 pidfd；不承诺 owner 崩溃恢复或
+关闭后的补投。观察窗口到期后需打开新 cosh 会话。
+
+query 新增 owner_observation 与 runtime_observer 快照，原生回调计数单独保留。
+查询和 Herdr 重连不执行这些命令。通知 Journal 只保留元数据/摘要；运行快照随 shell 临时目录
+清理，外部留存由可信 handler 负责。required_safety 仍不支持。
+
+## 实验性 Bash 最终检查
+
+格式 2 可以增加以下 `tool_guard` 字段；它与通知路由分开。顶层 `required_safety` 仍须为
+false，`notifications` 可以为空对象。将示例路径和摘要替换为已核实制品，并显式配置 scanner
+所需环境与策略文件 pin；scanner cwd 必须与顶层一致。当前固定 CLI 版本为 0.12.0。
+
+```json
+{
+  "tool_guard": {
+    "transforms": [],
+    "scanner": {
+      "provider_id": "sec-code",
+      "provider_version": "0.12.0",
+      "program": "/absolute/path/to/agent-sec-cli",
+      "program_sha256": "REPLACE_WITH_EXECUTABLE_SHA256",
+      "cwd": "/absolute/path/to/workspace",
+      "args": [],
+      "environment": {},
+      "pins": [],
+      "limits": {
+        "timeout_ms": 2000,
+        "input_bytes": 1048576,
+        "output_bytes": 1048576,
+        "stderr_bytes": 1024
+      }
+    }
+  }
+}
+```
+
+这个配置在 Qoder PreToolUse 的 Bash 调用中运行 `scan-code --language bash --mode regex`。
+pass 且无 findings 才返回检查过的参数；warn、deny、失败、畸形响应、超时和取消均返回原生
+deny。通过扫描不会自动批准工具，原有审批继续生效。其他工具不受这个 Bash profile 检查。
+
+`transforms` 可配置 0–3 个同形状的命令配置，provider_id 与 scanner 及其他变换互不重复。
+命令顺序接收 `{"format":1,"event":"tool.before","candidate":...}`；candidate 包含 tool_name、
+tool_input 和 cwd。精确返回 `{"format":1,"command":"新的 Bash 命令"}`，只能修改 command，
+其他原生参数保持原样。所有通知和变换完成后才检查最终命令；整条工具前路径共享两秒预算，
+每个变换或通知仍不超过一秒。scanner 可配置最多 2000ms，供版本核对与扫描共用，
+实际还受整链剩余时间限制，不重开期限；已有更短配置继续生效。当前变换和通知均串行，
+独立只读动作并行尚未实现。
+
+query 的 effect 为 `experimental_native_bash_guard`，tool_guard 为 `configured_not_certified`；
+不表示发生过实际阻断。扫描内容通过原生 CLI 的 --code 参数传递，可能对同机进程查看者可见；
+AW Journal 仅保存摘要和检查结果，sec-core 自身的审计留存仍由其配置决定。
+
+真实 Qoder 1.1.47 TUI 与 sec-core 0.12.0 已验证变换后的命令审批、原生拒绝、策略拒绝
+和变换失败；这些有界证据仍保留下述 final 限制。
+
+Qoder 1.1.47 的隔离 print 探针已验证参数替换和 deny，但也确认其他 Hook 可以覆盖参数，
+Hook 退出 1 或被 SIGKILL 时原命令仍执行。专用检查入口会将可返回的解析/绑定等错误映射为
+阻断退出码 2；它不能控制自身被杀后的原生行为。详见
+[原生验收边界](../../../../src/aw/docs/design/interactive-observation_zh.md#原生消费与故障边界)。
+
+required_safety/final 继续拒绝准入；有界 TUI 案例不认证全部 Hook/插件组合及故障模式。已有格式 1 与
+未配置 tool_guard、input_response、stop_response 和 tool_response 的格式 2 保持通知行为。它不提供 OS 隔离，也不保证正则检查发现所有危险命令。
+
+## 实验性交互工具结果响应
+
+需要投影主 Agent 已完成的 Bash 结果时，将 `tool_response` 加入格式 2，显式授权一个
+结果处理命令；通知确认不能取得替换权限。下面是配置片段，需替换为可信可执行文件、
+摘要和工作目录：
+
+```json
+{
+  "tool_response": {
+    "command": {
+      "provider_id": "result-projector",
+      "provider_version": "1",
+      "program": "/absolute/path/to/projector",
+      "program_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "cwd": "/absolute/workspace",
+      "args": [],
+      "environment": {},
+      "pins": [],
+      "limits": {
+        "timeout_ms": 1000,
+        "input_bytes": 1048576,
+        "output_bytes": 131072,
+        "stderr_bytes": 4096
+      }
+    },
+    "accepted_reversibility": [
+      "unrecoverable"
+    ]
+  }
+}
+```
+
+命令收到 `format: 1`、`scope: "tool.after.respond"`、完整 `event`、
+`source: {"text": "...", "digest": "..."}` 和 `accepted_reversibility: ["unrecoverable"]`。
+摘要为原始 UTF-8 文本的 SHA-256；Turn 保持未知。只允许返回以下一种结果：
+
+```json
+{"format":1,"decision":"preserve"}
+```
+
+```json
+{"format":1,"decision":"replace","source_digest":"<request.source.digest>","text":"replacement text"}
+```
+
+替换时复制请求的实际摘要。空文本、NUL、超过 65,536 UTF-8 字节的文本、外来摘要、
+额外字段/原生控制字段、重复 JSON 键及命令失败均不能替换结果；编码后的响应还必须符合
+配置的输出预算。通知和响应共享原始两秒回调期限，响应命令最多一秒。取消、超时和非法
+响应保留原始结果，并返回诊断字段。required safety 仍不支持：这是可选投影，不是强制
+脱敏，也不能撤销已经执行的工具。
+
+只支持已有的 Bash completed stdout 对象：退出码 0、signal 为 null、未中断、非图片、
+未设置预期无输出标志且 stderr 为空。其他工具及 PostToolUseFailure 仍只通知；不支持的
+Bash 结果形状不执行投影命令。前后配对的工具结果只认领一次，包括失败结果，后续回调
+不能重试投影；reset/退出阻止旧候选交付。Journal 仅留原文/候选摘要，不留正文；受信任
+命令会收到原生内容，其自身留存由操作者控制。
+
+响应使用 Qoder 的 `updatedToolOutput` 槽位。query 报告配置和实验性替换支持，不重跑命令。
+本切片有合成命令进程测试，真实 Qoder 采用、原生展示和其他 Hook 的覆盖顺序仍待验证。
+它不会自动调用 Tokenless/sec-core，不提供恢复或 final/protected 保证；原有单轮
+`qoder-project` 保持独立的检查及历史记录合同。

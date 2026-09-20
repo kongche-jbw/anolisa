@@ -1,5 +1,6 @@
 pub(crate) mod approval_ledger;
 pub(crate) mod approval_state;
+pub(crate) mod aw;
 pub(crate) mod cancel;
 pub(crate) mod cli_args;
 pub(crate) mod continuity;

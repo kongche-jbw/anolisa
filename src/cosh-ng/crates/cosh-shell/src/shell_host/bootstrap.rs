@@ -111,9 +111,13 @@ fn start_shell_session(
     set_close_on_exec(stdout.as_raw_fd())?;
 
     let mut command = Command::new(adapter.executable(config));
+    let aw_rcfile =
+        super::aw_startup::rcfile(config, marker.as_ref().map(|(path, _)| path.as_path()))?;
     adapter.configure_command(
         &mut command,
-        marker.as_ref().map(|(path, _)| path.as_path()),
+        aw_rcfile
+            .as_deref()
+            .or_else(|| marker.as_ref().map(|(path, _)| path.as_path())),
         config,
     );
     command

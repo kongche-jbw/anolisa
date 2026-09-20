@@ -1,5 +1,6 @@
 mod adapter;
 mod auth;
+mod aw_startup;
 mod bootstrap;
 mod input_intent;
 mod io_loop;

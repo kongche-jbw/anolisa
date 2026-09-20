@@ -1,0 +1,9 @@
+# Merge these rows into the operator's existing Herdr v0.9.0 configuration.
+# Use the aw-enabled cosh binary as terminal.default_shell to bind pane ownership.
+[ui.sidebar.agents]
+rows = [
+  ["state_icon", "agent", "state_text"],
+  [{ token = "$aw", bold = true }],
+  [{ token = "$aw_observation" }],
+  [{ token = "$aw_coverage" }],
+]

@@ -4,6 +4,8 @@
 //! The embedding Host owns process execution, authentication, request/response
 //! binding and receipts. This library neither scans text nor enforces policy.
 
+pub mod code;
+
 mod protocol;
 
 use aw_contracts::{canonical, Registry};

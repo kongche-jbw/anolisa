@@ -163,6 +163,8 @@ pub struct ShellHostConfig {
     /// the Rust intercept path. Zsh never enables this Bash-only route.
     pub slash_via_shell: bool,
     pub env_overrides: Vec<(String, String)>,
+    /// Optional product-owned shim directory, installed after Bash startup files.
+    pub(crate) aw_shim_directory: Option<PathBuf>,
     pub raw_action_watchdog: Duration,
     /// #2161: shared input-wait episode clock. The relay's interactive
     /// sentinel marks/clears it; the runtime controller reads it to drive
@@ -199,6 +201,7 @@ impl ShellHostConfig {
             login_shell: false,
             slash_via_shell: slash_via_shell_default(),
             env_overrides: Vec::new(),
+            aw_shim_directory: None,
             raw_action_watchdog: Duration::from_secs(120),
             input_wait_status: InputWaitStatus::default(),
             hint_language: crate::config::Language::default(),

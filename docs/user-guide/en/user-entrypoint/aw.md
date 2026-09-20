@@ -459,3 +459,487 @@ separate roots and sessions. Cleanup never reconstructs authority from stored
 PIDs; native histories follow Qoder's own retention, and AW records remain until
 the operator removes the exact owned root after its audit period.
 See the [conversation ownership design](../../../../src/aw/docs/design/qoder-session.md#bounded-conversation-continuation).
+
+## Experimental natural Qoder entry
+
+This opt-in Linux/Bash profile keeps Qoder's native interactive loop and PTY.
+It is an experimental observation slice, not a strong security mode or a completed
+four-Agent POC. Build the product with the AW feature (Rust 1.97.1):
+
+```bash
+cargo +1.97.1 build --manifest-path src/cosh-ng/Cargo.toml --locked -p cosh-shell --features aw
+```
+
+Prepare a private, caller-owned `0600` JSON configuration outside untrusted
+project content. Review the handler code and independently pin its executable
+and script. Paths below are placeholders to replace with absolute local paths;
+all digest fields require the corresponding reviewed file's lowercase SHA-256.
+The handler workspace must equal the directory where Qoder starts.
+
+```json
+{
+  "format": 1,
+  "required_safety": false,
+  "qoder": {
+    "program": "/absolute/path/to/qodercli",
+    "program_sha256": "<reviewed Qoder 1.1.47 executable digest>"
+  },
+  "native_config_directory": "/absolute/path/to/native-qoder-config",
+  "handler": {
+    "provider_id": "tool-observer",
+    "provider_version": "1",
+    "program": "/usr/bin/python3",
+    "program_sha256": "<reviewed interpreter digest>",
+    "cwd": "/absolute/path/to/workspace",
+    "args": ["/absolute/path/to/tool-observer.py"],
+    "environment": {},
+    "pins": [{
+      "path": "/absolute/path/to/tool-observer.py",
+      "state": {"sha256": "<reviewed handler digest>"}
+    }],
+    "limits": {
+      "timeout_ms": 1000,
+      "input_bytes": 65536,
+      "output_bytes": 1024,
+      "stderr_bytes": 1024
+    }
+  }
+}
+```
+
+The [sample observer](../../../../src/aw/examples/tool-observer.py) receives one
+AW JSON occurrence on stdin and returns exactly `{"format":1,"observed":true}`.
+The input identifies the runtime, session, attachment, tool, configuration
+revision and native outcome without tool arguments or result text. Other output,
+changed pins, nonzero exit or timeout records an optional observation failure;
+native execution continues. This executable protocol is not a sandbox.
+
+In the workspace, explicitly enable the reviewed config revision, then open cosh:
+
+```bash
+export COSH_AW_CONFIG=/absolute/path/to/aw.json
+export COSH_AW_CONFIG_SHA256='<reviewed configuration digest>'
+export COSH_SHELL_INTEGRATION=enhanced
+/absolute/path/to/cosh-shell --shell bash
+```
+
+Inside that terminal, type `qoder`. The scoped shim adds native settings before
+exec; it does not modify the global PATH, executable, login state or existing
+Hook files. This profile accepts positional prompts, `--model`, `--name`, and
+`--resume` with an explicit identifier; other options are rejected. Plain
+foreground launches are supported. Aliases/functions, absolute native paths,
+nested launches, pipes, redirection and remote commands are not certified entry
+forms. The shim is bypassable and provides no OS enforcement. A config with
+`required_safety: true` is refused before Agent startup.
+
+Reset is tracked through native session identity. Old callbacks/completions do
+not count toward a new attachment. Reset without a new native session ID and
+in-process return to a retired session report a gap. Limits are 128 attachment
+generations, 1024 tool occurrences per runtime and a bounded shell launch count;
+open a new cosh session when these experimental limits are reached. Qoder's own
+history and permission settings retain their native semantics.
+
+When Herdr runs cosh as the pane's default shell and supplies `HERDR_SOCKET_PATH`
+and `HERDR_PANE_ID`, an optional worker publishes observation counters. Merge
+the rows from [interactive.toml](../../../../src/aw/integrations/herdr/interactive.toml)
+into the existing Herdr v0.9.0 configuration. Each pane validates its own cosh PID;
+the viewer cannot execute a handler or control an Agent. RPC failures expire the
+metadata after three seconds; the private query reports viewer availability.
+The worker refreshes for at most 24 hours. Closing Herdr's view does not stop the
+Agent. Real native coexistence and visible Herdr rendering remain separate from
+synthetic protocol/PTY tests.
+
+Unset `COSH_AW_CONFIG` and `COSH_AW_CONFIG_SHA256` before opening another cosh
+session to disable the integration. Normal shell exit joins the optional viewer
+and removes AW scratch records. SIGKILL can leave that shell's private scratch
+directory; native Qoder history follows its own retention policy. Existing
+07B/07C1 explicit launchers remain available. No default feature or security
+policy is changed. See [ownership and evidence](../../../../src/aw/docs/design/interactive-observation.md).
+
+### Public lifecycle notification configuration
+
+To run commands at other lifecycle points, explicitly select format 2. This is
+an experimental notification profile: commands receive the complete native
+payload, so authorize scripts to read prompts, arguments and results before use.
+Pin the actual Qoder CLI executable, not a dispatcher script. The following
+no-op command acknowledges session start; replace it with your reviewed command.
+Use the same opt-in environment and launch commands above.
+
+```json
+{
+  "format": 2,
+  "required_safety": false,
+  "qoder": {
+    "program": "/absolute/path/to/qodercli",
+    "program_sha256": "<reviewed Qoder 1.1.47 executable digest>"
+  },
+  "native_config_directory": "/absolute/path/to/native-qoder-config",
+  "cwd": "/absolute/path/to/workspace",
+  "notifications": {
+    "session.start": [
+      {
+        "provider_id": "lifecycle-notifier",
+        "provider_version": "1",
+        "program": "/usr/bin/python3",
+        "program_sha256": "<reviewed interpreter digest>",
+        "cwd": "/absolute/path/to/workspace",
+        "args": [
+          "-c",
+          "import json,sys; event=json.load(sys.stdin); print(json.dumps({'format':1,'observed':True}))"
+        ],
+        "environment": {},
+        "pins": [],
+        "limits": {
+          "timeout_ms": 1000,
+          "input_bytes": 1048576,
+          "output_bytes": 1024,
+          "stderr_bytes": 1024
+        }
+      }
+    ]
+  }
+}
+```
+
+The notification keys currently accepted are `session.start`, `input.submit`,
+`tool.before`, `tool.after`, `permission.request`, `compact.before`, `compact.after`,
+`subagent.start`, `subagent.stop`, `turn.stop`, and `session.end`. Owner routes additionally
+accept `runtime.observed`, `runtime.exited`, and `coverage.changed`. Both native tool
+outcomes map to `tool.after`; inspect `native_event` and the unchanged `payload`
+to distinguish success from failure. `turn_id` is null with an explicit unknown
+reason; input arrival is not proof that Qoder accepted a new task.
+
+Each key takes 1–4 ordered command configurations with distinct `provider_id`s,
+all using the top-level cwd. The entire route's pins are checked before execution.
+Each command has at most 1 second, the chain at most 2 seconds of execution, and
+at most 1024 callbacks are admitted per runtime. Successful output must be exactly
+`{"format":1,"observed":true}`. Other output or command failure records a gap and
+leaves native execution unchanged. Journal claims prevent an already claimed
+occurrence from running twice; native callbacks without stable IDs receive fresh
+arrival IDs, so repeated identical prompts remain separate occurrences.
+
+Format 2 excludes `handler`; format 1 excludes `cwd`, `notifications`, `tool_guard`, `input_response`, `stop_response` and `tool_response`. Unknown
+names, unconnected sources, and required safety fail admission. Bash transformations
+and guards can be tried through the separate configuration below. Remaining
+sources and real effects still need per-event acceptance, not a claim of all 16. See the [16-event matrix](../../../../src/aw/docs/design/interactive-observation.md#qoder-16-event-adaptation-matrix)
+for source evidence, gaps and next actions. Queries and the optional Herdr view
+only read command counts. Full real Qoder TUI/Hook coexistence remains unverified.
+
+
+On a first-workspace trust flow, Qoder may omit SessionStart. Format 2 binds
+the first authenticated main input to its native session and continues notifications,
+while query reports observation_gap=true and session_start_observed=false.
+No session.start is fabricated. A real reset still requires SessionStart and a
+new session identity; unknown or retired sessions cannot attach through input.
+
+## Experimental input submission responses
+
+To reject a submitted input or add context before Qoder handles it, add the following
+`input_response` field to format 2. This explicitly authorizes one response command;
+notification commands keep their existing acknowledgement-only contract. Keep
+`required_safety` false. `notifications` may be empty, and the command cwd must match
+the top-level cwd. Replace paths and pins with reviewed values before use.
+
+```json
+{
+  "input_response": {
+    "provider_id": "input-policy",
+    "provider_version": "1",
+    "program": "/usr/bin/python3",
+    "program_sha256": "<reviewed interpreter digest>",
+    "cwd": "/absolute/path/to/workspace",
+    "args": [
+      "-c",
+      "import json,sys; request=json.load(sys.stdin); print(json.dumps({'format':1,'decision':'continue'}))"
+    ],
+    "environment": {},
+    "pins": [],
+    "limits": {
+      "timeout_ms": 1000,
+      "input_bytes": 1048576,
+      "output_bytes": 65536,
+      "stderr_bytes": 1024
+    }
+  }
+}
+```
+
+The command receives `{"format":1,"scope":"input.submit.respond","event":{...}}`.
+`event` is the authenticated lifecycle envelope, including the original native
+`payload.prompt`; its Turn identity remains unknown. Return exactly one of:
+
+- `{"format":1,"decision":"continue"}` to continue native handling.
+- `{"format":1,"decision":"continue","additional_context":"reviewed context"}`
+  to add context alongside the original input.
+- `{"format":1,"decision":"reject","reason":"input policy declined"}` to reject it.
+
+No prompt replacement or permission approval is available here. Context and reasons
+must be nonempty, NUL-free strings of at most 16384 UTF-8 bytes. Extra/mixed fields,
+notification acknowledgements, duplicate JSON keys, nonzero exits, changed pins,
+timeouts and cancellation yield rejection without context. Each response command
+has at most one second and shares a two-second callback deadline with preceding
+notifications; it does not receive a fresh deadline. Failed notification output
+cannot become a decision, but its elapsed time still consumes this budget.
+
+The adapter maps context to UserPromptSubmit.additionalContext and rejection to
+native `decision=deny`. The dedicated helper maps input/binding errors to exit 2.
+Reset or session end withholds stale responses. Metadata-only claims live in the
+shell's private `input-response-journal`; query reports `input_response` as
+`experimental_native_response`, not adoption. Queries never run the command again.
+
+Fixed Qoder 1.1.47 print probes consumed the returned context and rejected policy,
+malformed-output, timeout, cancellation and missing-binding cases. A peer Hook's
+denial still blocked input; two context Hooks were both consumed. Killing the AW
+helper let native processing continue without its context. These are native Hook
+guarantees, not final/protected or proof of a controlled model-request boundary.
+A natural cosh TUI probe also observed the context marker in the native Stop
+callback, followed by policy/malformed/timeout submissions without further Stops,
+then normal Agent and shell exit. Queue/supplement semantics and other plugin
+combinations remain unverified.
+
+## Experimental main-agent stop responses
+
+To check an answer when the main Agent stops, add `stop_response` to format 2.
+This separately authorizes one command; `notifications` may be empty. Use reviewed
+paths/pins, match the workspace cwd, and keep `required_safety` false.
+
+```json
+{
+  "stop_response": {
+    "provider_id": "stop-policy",
+    "provider_version": "1",
+    "program": "/usr/bin/python3",
+    "program_sha256": "<reviewed interpreter digest>",
+    "cwd": "/absolute/path/to/workspace",
+    "args": [
+      "-c",
+      "import json,sys; request=json.load(sys.stdin); print(json.dumps({'format':1,'decision':'allow_stop'}))"
+    ],
+    "environment": {},
+    "pins": [],
+    "limits": {
+      "timeout_ms": 1000,
+      "input_bytes": 1048576,
+      "output_bytes": 65536,
+      "stderr_bytes": 1024
+    }
+  }
+}
+```
+
+The command receives `{"format":1,"scope":"turn.stop.respond","event":{...}}`,
+including the native stop payload and unknown Turn identity. Return exactly one of:
+
+- `{"format":1,"decision":"allow_stop"}` to permit stopping without claiming task success.
+- `{"format":1,"decision":"continue","reason":"complete the missing check"}`
+  to request further work through native `decision=deny`.
+
+Reasons must be nonempty, NUL-free and at most 16384 UTF-8 bytes. Mixed/native
+fields, malformed output, nonzero exit, pin changes, timeout and cancellation
+produce `continue=false` with unavailable diagnostic fields. They never request
+further work or report a passed check. The dedicated `--aw-stop` helper uses this
+same failure behavior for malformed input or missing binding; exit 2 would instead
+request more model work for Stop. No tool approval or output replacement is granted.
+
+A native `stop_hook_active=true` skips the response command and requests stopping
+with the same diagnostic to bound recursive checks, including continuations
+requested by another Hook. A later native Stop with that flag false is a distinct
+occurrence and can invoke the check. This relies on the native flag, not a proven
+Task identity; repeated checks do not certify task completion. Notification routes
+still run independently and cannot supply the response decision. Their elapsed
+time counts toward the shared two-second deadline; the response command itself
+has at most one second. Reset/session end fences stale responses.
+
+The private `stop-response-journal` stores only metadata and decision/skip/failure
+classes, with `native_adoption=unconfirmed`. Query reports the configured
+`stop_response` and never reruns it. Fixed Qoder 1.1.47 print probes verified
+allowing stop, consuming a continuation reason, and stopping repeated checks.
+Malformed output, timeout, cooperative cancellation and missing binding ended
+without another response. With a peer Hook requesting continuation, AW allow_stop
+permitted that request; AW continue=false stopped it in both tested declaration
+orders. These cases do not certify arbitrary Hook/plugin combinations.
+
+A natural cosh TUI run with user-level Hooks verified two successive inputs, each
+with a consumed continuation reason and Stop flags false → true. New input reset
+the flag to false; malformed/timeout checks did not trigger another response.
+The TUI displayed the unavailable diagnostic, and /exit produced runtime.exited
+before shell teardown. Print mode omitted that diagnostic and exited 0 even when
+checks failed. Neither the native exit code nor allow_stop proves task success;
+already displayed answers are not retracted. Killing the helper left a started,
+incomplete check while native output still completed. This excludes final/protected
+certification; required_safety remains unavailable.
+
+## Runtime and coverage notifications
+
+Add runtime.observed, runtime.exited or coverage.changed to the same format-2
+notifications map, using the command shape above. Any of these keys starts a
+cosh-owned worker; Herdr is optional. These envelopes have source runtime_owner
+and native_event null. Native hook payloads cannot select this source.
+
+- runtime.observed records admission and PID/start-tick identity before exec.
+  It does not prove native exec success or Agent readiness; session/Turn is unknown.
+- runtime.exited reports the root process exit from a pidfd opened before exec.
+  It works without SessionEnd and does not consume Bash's wait status. exit_status
+  stays null, descendants_reaped false, and task success unknown.
+- coverage.changed carries previous/current sampled snapshots of callback
+  attachment, session epoch, observed gaps, notification delivery and root exit.
+  Intermediate states between samples may be coalesced. OS coverage remains
+  not_attached; silence or viewer disconnection does not establish protection loss.
+
+Registration is acknowledged before launch, with a five-second wait limit.
+Unusable pidfds or missing owner registration reject this opted-in launch.
+The worker samples at 100 ms between bounded deliveries, with a 24-hour observation
+window, at most 128 registrations per shell and 1024 coverage changes per runtime.
+Notifications retain the one-second command/two-second chain limits. Failed
+deliveries are not retried; they remain a gap, including failed terminal delivery.
+Stopping the shell cancels in-flight commands and closes owned pidfds. No
+owner-crash recovery or post-shutdown delivery is promised; open a new cosh session
+when the observation window expires.
+
+Query adds owner_observation and runtime_observer snapshots; native callback
+counts remain separate. Reading query or reconnecting Herdr never executes these
+commands. The notification journal contains metadata/digests only. Runtime
+snapshots are shell-scoped and removed with its temporary directory; trusted
+handlers own any external retention. required_safety remains unsupported.
+
+## Experimental final Bash check
+
+Format 2 accepts the following `tool_guard` field separately from notification
+routes. Keep top-level `required_safety` false; `notifications` may be empty.
+Replace paths and the digest with verified artifacts, and explicitly configure
+the scanner environment and policy-file pins. Its cwd must match the top-level
+cwd. The fixed CLI version is 0.12.0.
+
+```json
+{
+  "tool_guard": {
+    "transforms": [],
+    "scanner": {
+      "provider_id": "sec-code",
+      "provider_version": "0.12.0",
+      "program": "/absolute/path/to/agent-sec-cli",
+      "program_sha256": "REPLACE_WITH_EXECUTABLE_SHA256",
+      "cwd": "/absolute/path/to/workspace",
+      "args": [],
+      "environment": {},
+      "pins": [],
+      "limits": {
+        "timeout_ms": 2000,
+        "input_bytes": 1048576,
+        "output_bytes": 1048576,
+        "stderr_bytes": 1024
+      }
+    }
+  }
+}
+```
+
+For Qoder PreToolUse Bash calls, this runs `scan-code --language bash --mode regex`.
+Only pass with no findings returns checked arguments. Warn, deny, failure, malformed
+output, timeout and cancellation return native deny. Passing the scan never grants
+tool permission: normal approval still applies. Other tools are outside this Bash
+profile's check scope.
+
+`transforms` accepts zero to three command configurations of the same shape, with
+provider IDs distinct from each other and the scanner. Commands receive
+`{"format":1,"event":"tool.before","candidate":...}` in order; the candidate contains
+tool_name, tool_input and cwd. Return exactly
+`{"format":1,"command":"new Bash command"}`; only command is writable, preserving
+all other native arguments. All notifications and transformations finish before
+the final check. The entire pre-tool path shares two seconds; each transform or notification
+gets at most one second. The scanner may request
+up to 2000 ms for version verification plus scanning, capped by the chain
+time remaining; it never restarts that deadline. Existing shorter configured
+limits remain effective. Transformations and notifications are currently serial;
+parallel independent read-only actions remain unimplemented.
+
+Query reports effect `experimental_native_bash_guard` and tool_guard
+`configured_not_certified`, not proof of actual blocking. The native CLI receives
+scan content in --code argv, potentially visible to local process observers. AW
+journals contain only digests and check results; sec-core audit retention remains
+controlled by its own configuration.
+
+Real Qoder 1.1.47 TUI probes with sec-core 0.12.0 verified approval of the
+transformed command, native rejection, policy denial and transform failure. These
+bounded observations preserve the final-safety limitations below.
+
+Isolated Qoder 1.1.47 print probes verified replacement and denial, but also
+confirmed that another hook can overwrite arguments and that exit 1 or SIGKILL
+allows the original command. The dedicated guard entry maps recoverable
+parse/binding errors to blocking exit 2; it cannot control native behavior after
+being killed. See the [native acceptance boundary](../../../../src/aw/docs/design/interactive-observation.md#native-consumption-and-failure-boundary).
+
+Required safety/final admission remains refused; the bounded TUI cases do not
+certify all hook/plugin combinations or failure modes. Format 1 and format 2 without
+tool_guard, input_response, stop_response and tool_response retain notification behavior. This provides neither OS isolation nor
+assurance that regex scanning detects every dangerous command.
+
+## Experimental interactive tool result responses
+
+To project a completed main-agent Bash result, add `tool_response` to format 2.
+This explicitly authorizes one result command; a notification acknowledgement
+cannot acquire replacement authority. The following is a configuration fragment;
+replace the executable, digest and workspace with trusted values:
+
+```json
+{
+  "tool_response": {
+    "command": {
+      "provider_id": "result-projector",
+      "provider_version": "1",
+      "program": "/absolute/path/to/projector",
+      "program_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "cwd": "/absolute/workspace",
+      "args": [],
+      "environment": {},
+      "pins": [],
+      "limits": {
+        "timeout_ms": 1000,
+        "input_bytes": 1048576,
+        "output_bytes": 131072,
+        "stderr_bytes": 4096
+      }
+    },
+    "accepted_reversibility": [
+      "unrecoverable"
+    ]
+  }
+}
+```
+
+The command receives `format: 1`, `scope: "tool.after.respond"`, the full `event`,
+`source: {"text": "...", "digest": "..."}` and
+`accepted_reversibility: ["unrecoverable"]`. The digest is SHA-256 of the original
+UTF-8 text. Turn remains unknown. Return exactly one of:
+
+```json
+{"format":1,"decision":"preserve"}
+```
+
+```json
+{"format":1,"decision":"replace","source_digest":"<request.source.digest>","text":"replacement text"}
+```
+
+Copy the actual request digest in a replacement. Empty text, NUL, text over
+65,536 UTF-8 bytes, foreign digests, extra/native control fields, duplicate JSON
+keys and failed commands cannot replace the result. The encoded response must
+also fit the configured output budget. Notifications and the response share the
+original two-second callback deadline; the response command is limited to one
+second. Cancellation, timeout and invalid responses retain the original result
+with diagnostic fields. Required safety remains unsupported: this optional
+projection is not mandatory redaction and does not undo an executed tool.
+
+Only the existing completed Bash stdout object is supported: exit code 0, null
+signal, no interruption, image or expected-silence flag, and empty stderr.
+Other tools and PostToolUseFailure remain notification-only. Unsupported Bash
+shapes do not dispatch the projector. The paired tool result is reserved once,
+including failures, so a later callback cannot retry projection. Reset/exit fence
+late candidates. Journals retain source/candidate digests, not their text; the
+operator-owned command receives native content and controls its own retention.
+
+The response uses Qoder's `updatedToolOutput` slot. Query reports configuration
+and experimental replacement support without rerunning commands. This slice has
+synthetic command-process coverage; real Qoder adoption, native display and peer
+Hook precedence remain unverified. It does not automatically invoke Tokenless or
+sec-core, establish recovery, or grant final/protected guarantees. The existing
+single-turn `qoder-project` retains its separate inspection/history contract.

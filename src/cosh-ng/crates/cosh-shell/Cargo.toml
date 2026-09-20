@@ -13,7 +13,11 @@ categories = ["command-line-utilities", "development-tools"]
 name = "cosh-shell"
 path = "src/main.rs"
 
+[features]
+aw = ["dep:aw-hook-cli"]
+
 [dependencies]
+aw-hook-cli = { workspace = true, optional = true }
 chrono = { workspace = true, features = ["clock", "serde"] }
 nix = { workspace = true, features = ["dir", "fs", "signal", "term"] }
 ratatui = "0.28"

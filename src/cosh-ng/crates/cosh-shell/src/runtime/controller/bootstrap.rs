@@ -130,6 +130,13 @@ pub(crate) fn run_raw(
     if config.native_mode && enhanced_integration {
         bootstrap_process_path_from_shell(&shell_kind, login, &config.winsize);
     }
+    let _aw_scope = match crate::runtime::aw::configure(&mut config, &shell_kind) {
+        Ok(scope) => scope,
+        Err(error) => {
+            eprintln!("{error}");
+            return 2;
+        }
+    };
     let recommendations_environment_override = parse_recommendations_environment_override(
         std::env::var("COSH_RECOMMENDATIONS_ENABLED")
             .ok()

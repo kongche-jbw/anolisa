@@ -153,3 +153,45 @@ created earlier in that invocation and supports an explicit fresh-session reset.
 Each prompt has a new process incarnation and immutable turn evidence; failure
 or cancellation stops the sequence. This is sequential print-mode continuation,
 not interactive PTY or pane management. See the [conversation reference](../../docs/user-guide/en/user-entrypoint/aw.md#bounded-qoder-conversations).
+
+## Experimental natural Qoder entry
+
+The `cosh-shell` Cargo feature `aw` embeds an optional observation bridge. In an
+explicitly configured Linux Bash session, typing `qoder` installs native hooks
+before exec and retains the shell's existing PTY, job control and reaping owner.
+A trusted local handler receives content-free AW tool observations; attachment
+changes fence old completions. Required safety modes are rejected by this profile.
+
+Herdr metadata is optional and read-only. Synthetic native-peer PTY tests are
+separate from real Qoder/Herdr acceptance. See the [setup and limits](../../docs/user-guide/en/user-entrypoint/aw.md#experimental-natural-qoder-entry)
+and [ownership design](docs/design/interactive-observation.md).
+
+Configuration format 2 adds ordered, optional lifecycle notifications through
+Core and Journal for eleven Qoder event names, with full native payloads and
+explicit unknown Turn identity. Notification routes do not grant transform/guard authority.
+Three additional owner routes, runtime.observed, runtime.exited and coverage.changed,
+use a shell-owned pidfd observer independently of Herdr. Remaining source/effect
+gaps and real runtime acceptance are tracked
+in the [16-event matrix](docs/design/interactive-observation.md#qoder-16-event-adaptation-matrix);
+see the [configuration reference](../../docs/user-guide/en/user-entrypoint/aw.md#public-lifecycle-notification-configuration).
+
+Format 2 separately accepts an explicit experimental Bash `tool_guard`: ordered
+transforms precede sec-core scan-code, risks and failures deny, and successful
+checks preserve normal approval. Required/final remains uncertified. See the
+[pre-tool configuration](../../docs/user-guide/en/user-entrypoint/aw.md#experimental-final-bash-check).
+
+Format 2 also accepts an explicit `input_response` command to reject submitted
+input or add context. Notification output cannot acquire this authority. Invalid
+responses and command failures reject; native helper death remains a final-safety
+gap. See [input responses](../../docs/user-guide/en/user-entrypoint/aw.md#experimental-input-submission-responses).
+
+Format 2 optionally accepts `stop_response` to allow main-agent stopping or request
+continuation with a reason. Repeated checks and unavailable responses request stopping
+with diagnostic fields. Fixed-version print/TUI probes verified continuation and
+bounded Hook coexistence; print can hide failed-check diagnostics and exit 0. See
+[stop responses](../../docs/user-guide/en/user-entrypoint/aw.md#experimental-main-agent-stop-responses).
+
+Format 2 optionally accepts `tool_response` for main-agent Bash success text.
+An explicit unrecoverable opt-in and matching source digest are required;
+failures preserve the native result. Real interactive adoption remains pending.
+See [tool result responses](../../docs/user-guide/en/user-entrypoint/aw.md#experimental-interactive-tool-result-responses).

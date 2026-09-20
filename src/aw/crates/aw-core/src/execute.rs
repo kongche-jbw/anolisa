@@ -7,9 +7,9 @@ use crate::{
 use aw_contracts::canonical;
 use serde_json::{json, Value};
 
-struct JournalClaim<'a, J: Journal> {
-    journal: &'a mut J,
-    event_key: &'a str,
+pub(crate) struct JournalClaim<'a, J: Journal> {
+    pub(crate) journal: &'a mut J,
+    pub(crate) event_key: &'a str,
 }
 
 impl<J: Journal> Drop for JournalClaim<'_, J> {
@@ -237,7 +237,7 @@ impl Core {
         })
     }
 
-    fn validate_journal_ack(&self, acknowledgement: Value) -> Result<Value, Error> {
+    pub(crate) fn validate_journal_ack(&self, acknowledgement: Value) -> Result<Value, Error> {
         // Shape validation cannot establish storage durability; the Journal owns it.
         self.registry.validate_evidence(&acknowledgement)?;
         Ok(acknowledgement)

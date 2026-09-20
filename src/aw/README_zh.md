@@ -119,3 +119,37 @@ Registry 包含 21 个 Schema 资源。`crates/aw-contracts/schemas/` 中的 8 �
 需要有界连续对话时，`integrations/qoder/conversation.py` 只续接本次调用此前创建的会话，
 支持显式reset开启新会话。每个prompt有新进程代次与不可变轮次证据，失败或取消即停止。
 这是顺序print-mode续接，不提供交互PTY/pane管理。见[连续对话配置](../../docs/user-guide/zh/user-entrypoint/aw.md#有界-qoder-连续对话)。
+
+## 实验性自然 Qoder 入口
+
+`cosh-shell` 的 Cargo feature `aw` 内嵌可选观察桥接。在显式配置的 Linux Bash 会话中，
+直接输入 `qoder`，系统在 exec 前安装原生 Hook，保留 shell 的 PTY、作业控制与回收责任。
+可信本地 handler 接收不含工具原文的 AW 观察事件；attachment 变更隔离旧回调完成结果。
+此 profile 拒绝 required 安全模式，Herdr 仅作可选只读展示。
+
+合成原生 peer 的 PTY 测试与真实 Qoder/Herdr 验收分别记录。参见
+[配置与限制](../../docs/user-guide/zh/user-entrypoint/aw.md#实验性自然-qoder-入口)和
+[归属设计](docs/design/interactive-observation_zh.md)。
+
+配置格式 2 为 Qoder 的 11 个公共事件增加经 Core/Journal 执行的顺序可选通知，
+保留完整原生 payload 与显式未知 Turn；通知路由不授予变换/guard 权限。
+另有 runtime.observed、runtime.exited、coverage.changed 三项 owner 通知，
+由 shell 持有的 pidfd 观察器独立于 Herdr 产生。其余来源/效果缺口及真实运行验收见 [16 事件矩阵](docs/design/interactive-observation_zh.md#qoder-16-事件适配矩阵)，
+配置见 [通知配置参考](../../docs/user-guide/zh/user-entrypoint/aw.md#公共生命周期通知配置)。
+
+格式 2 另可显式配置实验性 Bash `tool_guard`：有序变换后调用 sec-core scan-code，
+拒绝风险或失败，扫描通过仍保留原生审批；required/final 尚未认证。见
+[工具前检查配置](../../docs/user-guide/zh/user-entrypoint/aw.md#实验性-bash-最终检查)。
+
+格式 2 另可显式配置 input_response 命令，拒绝提交输入或附加上下文；通知输出不能获取
+这项权限。无效返回及命令失败会拒绝，原生 helper 被杀仍是 final 安全缺口。
+参见[输入响应配置](../../docs/user-guide/zh/user-entrypoint/aw.md#实验性输入提交响应)。
+
+格式 2 可选配置 `stop_response`，在主 Agent Stop 时允许停止或附理由请求继续；
+重复检查和不可用响应请求停止并携带诊断。固定版 print/TUI 已验证继续采用与有界 Hook 共存；
+print 可能隐藏检查失败诊断并退出 0，见
+[停止响应配置](../../docs/user-guide/zh/user-entrypoint/aw.md#实验性主-agent-停止响应)。
+
+格式 2 可显式配置 `tool_response` 投影主 Agent 的 Bash 成功文本，必须接受 unrecoverable
+并匹配原结果摘要；失败保留原始结果。真实交互采用仍待验收，见
+[工具结果响应](../../docs/user-guide/zh/user-entrypoint/aw.md#实验性交互工具结果响应)。

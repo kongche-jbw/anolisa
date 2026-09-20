@@ -85,6 +85,9 @@ fn cosh_entry_args() -> Option<Vec<std::ffi::OsString>> {
 }
 
 fn main() {
+    if let Some(status) = runtime::aw::dispatch() {
+        std::process::exit(status);
+    }
     if let Some(status) = runtime::startup::run_profile_probe_helper_if_requested() {
         std::process::exit(status);
     }
