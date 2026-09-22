@@ -371,7 +371,7 @@ AW记录由操作方在审计保留期结束后删除精确归属目录。
 config = "/absolute/path/aw.json"
 config_sha256 = "<reviewed lowercase SHA-256>"
 herdr = "/absolute/path/herdr"
-herdr_sha256 = "<official asset SHA-256>"
+herdr_sha256 = "<pinned integration SHA-256>"
 ```
 
 将其加入 `~/.copilot-shell/config.toml`，保留已有模型 Provider 配置。两个 Herdr 字段可
@@ -386,9 +386,38 @@ herdr_sha256 = "<official asset SHA-256>"
 `allow_text_reencoding=false`。版本探测、pin 检查和压缩共享回调期限，失败保留原始结果。
 进程环境关闭 Tokenless stats 和 SLS、显式启用压缩，避免读取用户配置。
 
-侧栏分别展示回调、通知命令、检查和结果候选。Journal 计数只属于当前 attachment，损坏或
-不完整证据显示不可用，候选计数不证明原生采用。OS 覆盖和 final/protected 保证仍未确认。
-下方旧 observer 示例是独立协议示例，不是此配置的依赖。
+format-2 Agent 详情竖向列出全部 16 个 AW 事件。`seen N` 是当前 attachment 中经过校验的
+收到次数；`waiting` 表示尚未收到，`not wired` 表示未支持，`not attached` 表示 owner
+来源未配置。`unavailable` 表示证据缺失，也适用于没有逐事件计数的旧会话；观测不完整时
+首行保留 `GAP!`。`tool.before` 同行显示 SecCore pass/deny 计数，`tool.after` 同行显示
+candidate/kept 计数。收到回调不证明处理器成功、工具执行或模型采用。模型请求与最终安全
+检查边界仍未接入，SecCore 拒绝不会把 `security.violation` 标为已实现。
+
+Qoder 卡片单独显示 Agent 名称、pane 和彩色活动状态：`working` 蓝色、`blocked` 黄色、
+`idle`/`done` 绿色。状态来自已绑定原生回调的提示：输入/工具回调表示 working，权限请求
+表示 blocked，停止回调表示 idle；有继续执行的 Stop 处理器、观察缺口或失效运行时显示
+unknown。它不证明模型正在请求、工具执行成功或任务完成。AW 使用 Herdr 原生 Agent
+状态上报接口展示已验证的 Qoder 身份，不依赖嵌套 PTY 的进程自动识别；退出时清除自身上报。
+workspace 区常驻项目名，下方汇总当前运行中 Agent。全部 16 类事件合为 13 行：
+session start/end、compact before/after、subagent start/stop 成对展示，
+次数按顺序分开（如 `seen 2/0`）。已收到为青色，正数拒绝/失败及缺失证据为红色，
+待处理或不完整上报为黄色，未接入为灰色。查询新增 `activity` 和
+`activity_source=native_callback_hint`，用于解释该提示来源。
+
+`cosh --aw-query /absolute/SESSION/run-PID-TICKS` 返回同一份 16 项 `events`，包含来源、
+原生 Hook 名称、收到次数和独立的通知处理器结果，以及既有 `effects` 摘要。该诊断查询
+需要当前私有运行目录，不执行处理器。重开 cosh 才会加载新代码和行配置。
+带 AW 客户端补丁的 Herdr 支持右键 agents 区的 `qodercli` 行，选择 **AW details**：
+弹层绑定被点击的 pane，显示该 Agent 活动状态与全部 16 项事件，可用滚轮、方向键和
+PageUp/PageDown 滚动，Esc 或关闭按钮返回。缺失或过期的 metadata 显示 unavailable，
+不会沿用其他 pane 的数据。状态与计数仍是观察证据，不代表最终防御或模型采用。
+官方原版 v0.9.0 不含此弹层；补丁来源、构建与固定摘要见
+[Herdr 集成清单](../../../../src/aw/integrations/herdr/upstream.json)。
+workspace 汇总同一受管工作区所有存活 Agent，覆盖拆分 pane 与其他 tab，切换焦点
+不改变总数。普通 shell 不计为 Agent，退出后移除该 runtime 的计数。缺失或超过三秒的
+上报显示 `partial`/`unavailable`，不算成功零值；即使 metadata 全部过期，项目名仍可见。
+这里只汇总当前运行，不保留历史审计；各 Agent 的卡片和右键详情继续独立展示。
+受管会话清理时删除当前运行记录。
 
 ### 历史 observer 协议示例
 
@@ -482,7 +511,7 @@ Herdr v0.9.0 制品：
 export COSH_AW_CONFIG=/absolute/path/to/aw.json
 export COSH_AW_CONFIG_SHA256='<reviewed configuration digest>'
 export COSH_AW_HERDR=/absolute/path/to/herdr
-export COSH_AW_HERDR_SHA256='<official digest for the selected architecture>'
+export COSH_AW_HERDR_SHA256='<pinned digest for the selected architecture>'
 ```
 
 摘要必须匹配 [固定制品清单](../../../../src/aw/integrations/herdr/upstream.json)。
@@ -494,7 +523,11 @@ shell 集成仍保留。进入 cosh 后普通命令保持原样，输入 `qoder`
 此配置仅启用当前会话的入口，不修改 `/etc/shells` 或账户的登录 shell。
 即使已将 cosh 选作登录 shell，仍需显式配置 AW/Herdr，并输入 `qoder` 才打开交互区。
 
-此入口当前限定 Linux/Bash、单 pane 和配置中固定的工作目录；cd 到其他目录时仍明确拒绝。
+此入口支持 Linux/Bash 下受管 workspace 内的 Split right 和 New tab。新增 pane
+先进入独立 cosh，输入 `qoder` 后在该 pane 启动 Agent；它不重放首次调用的参数，也不再
+嵌套打开 Herdr。各 pane 的 AW owner、运行目录和 metadata 独立。首个 Qoder 退出后仍
+保留其他 pane；关闭受管 workspace 的全部 pane/tab 后回到原 cosh，保留首个 Agent 的
+退出码。Qoder 仍限定配置中的固定工作目录；cd 到其他目录时启动会明确拒绝。
 每次启动创建私有 server/client 与 pane owner，使用当前 Rust Hook/query 合同；传入的
 prompt/参数通过私有记录交付，不作为 shell 命令拼接。Herdr 启动最多等待10秒，会话最多
 24小时。缺失/错误 pin 拒绝启动，不静默降级。内层 shell 就绪超时不启动 Agent。

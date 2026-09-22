@@ -3,8 +3,10 @@
 //! Optional native Bash guards do not grant final dispatch or OS protection authority.
 //! Private local state detects accidental misbinding, not a same-user attacker.
 
+mod activity;
 mod config;
 mod effects;
+mod event_view;
 mod herdr;
 mod hooks;
 mod input_response;
@@ -16,6 +18,7 @@ mod storage;
 mod tool_guard;
 mod tool_response;
 mod view;
+mod workspace;
 
 pub use config::prepare;
 pub use herdr::HerdrBridge;
@@ -24,6 +27,7 @@ pub use hooks::{input_callback_with_cancellation, stop_callback_with_cancellatio
 pub use launch::{check_launch, launch, launch_with_cancellation};
 pub use runtime_events::RuntimeObserver;
 pub use view::query;
+pub use workspace::tokens as workspace_tokens;
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -113,6 +117,8 @@ struct Binding {
 #[derive(Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct State {
+    #[serde(default)]
+    activity: activity::Activity,
     session_id: Option<String>,
     #[serde(default)]
     session_start_observed: bool,
@@ -125,6 +131,8 @@ struct State {
     effect_gap_attachment: Option<u64>,
     #[serde(default)]
     notification_sequence: u64,
+    #[serde(default)]
+    event_counts: Option<std::collections::BTreeMap<aw_contracts::events::EventName, u64>>,
 }
 
 fn evidence<T>(_: T) -> Error {

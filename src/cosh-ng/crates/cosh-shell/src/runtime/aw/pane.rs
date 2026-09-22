@@ -30,7 +30,7 @@ fn directory() -> Result<PathBuf, String> {
     Ok(path)
 }
 
-fn read<T: DeserializeOwned>(path: &Path) -> Result<T, String> {
+pub(super) fn read<T: DeserializeOwned>(path: &Path) -> Result<T, String> {
     let file = OpenOptions::new()
         .read(true)
         .custom_flags(nix::libc::O_NOFOLLOW)
@@ -55,7 +55,6 @@ fn context() -> Result<(PathBuf, SessionDescriptor, PaneBinding), String> {
         || herdr::process_identity(descriptor.launcher_pid)? != descriptor.launcher_start_ticks
         || herdr::process_identity(descriptor.server_pid)? != descriptor.server_start_ticks
         || std::env::var_os("HERDR_SOCKET_PATH").as_deref() != Some(descriptor.socket.as_os_str())
-        || std::env::current_dir().map_err(|e| e.to_string())? != descriptor.cwd
     {
         return Err("AW pane session binding changed".into());
     }
@@ -66,18 +65,34 @@ fn context() -> Result<(PathBuf, SessionDescriptor, PaneBinding), String> {
         }
         thread::sleep(Duration::from_millis(20));
     }
-    let binding: PaneBinding = read(&directory.join("binding.json"))?;
-    if std::env::var("HERDR_PANE_ID").as_deref() != Ok(binding.pane_id.as_str()) {
-        return Err("AW automatic launch belongs to another pane".into());
-    }
+    let pane_id = std::env::var("HERDR_PANE_ID").map_err(|_| "AW pane identity missing")?;
     let process = herdr::rpc(
         &descriptor.socket,
         "pane.process_info",
-        serde_json::json!({"pane_id":binding.pane_id}),
+        serde_json::json!({"pane_id":pane_id}),
     )?;
-    if process["process_info"]["shell_pid"].as_u64() != Some(u64::from(binding.shell_pid)) {
-        return Err("AW pane owner changed".into());
+    let shell_pid = process["process_info"]["shell_pid"]
+        .as_u64()
+        .and_then(|pid| u32::try_from(pid).ok())
+        .filter(|pid| *pid > 0)
+        .ok_or("AW pane owner missing")?;
+    let initial: PaneBinding = read(&directory.join("binding.json"))?;
+    if pane_id == initial.pane_id && shell_pid != initial.shell_pid {
+        return Err("AW initial pane owner already exited".into());
     }
+    let info = herdr::rpc(
+        &descriptor.socket,
+        "pane.get",
+        serde_json::json!({"pane_id":pane_id}),
+    )?;
+    if info["pane"]["workspace_id"].as_str() != Some(initial.workspace_id.as_str()) {
+        return Err("AW pane belongs to another workspace".into());
+    }
+    let binding = PaneBinding {
+        workspace_id: initial.workspace_id,
+        pane_id,
+        shell_pid,
+    };
     Ok((directory, descriptor, binding))
 }
 
@@ -131,7 +146,7 @@ fn run_owned() -> Result<i32, String> {
     let status = {
         let mut config = ShellHostConfig::new(
             format!("aw-pane-{}", std::process::id()),
-            directory.join("shell"),
+            directory.join(format!("shell-{}", std::process::id())),
         );
         config.bound_interactive_transcript();
         config.native_mode = std::env::var("COSH_SHELL_ISOLATED").as_deref() != Ok("1");
@@ -148,6 +163,9 @@ fn run_owned() -> Result<i32, String> {
             .exit_status
             .unwrap_or(1)
     };
+    if !initial_owner(&directory, &binding)? {
+        return Ok(status);
+    }
     let temporary = directory.join("finished.tmp");
     let mut file = OpenOptions::new()
         .write(true)
@@ -168,9 +186,13 @@ pub(super) fn configure(
     if std::env::var_os("COSH_AW_HERDR_SESSION").is_none() {
         return Ok(());
     }
-    let (_, _, binding) = context()?;
+    let (directory, _, binding) = context()?;
     if binding.shell_pid != std::process::id() {
         return Err("AW pane configuration requires its cosh owner".into());
+    }
+    herdr::workspace::register(&directory, &binding, root)?;
+    if !initial_owner(&directory, &binding)? {
+        return Ok(());
     }
     let quote = |path: &Path| format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"));
     config.aw_bootstrap_command = Some(format!(
@@ -183,6 +205,9 @@ pub(super) fn configure(
 
 pub(super) fn arguments(root: &Path) -> Result<Vec<OsString>, String> {
     let (directory, descriptor, binding) = context()?;
+    if !initial_owner(&directory, &binding)? {
+        return Err("AW automatic launch belongs to the initial pane owner".into());
+    }
     let prepared: serde_json::Value = read(&root.join("prepared.json"))?;
     if prepared["owner_pid"].as_u64() != Some(u64::from(binding.shell_pid)) {
         return Err("AW launch is not owned by this pane".into());
@@ -213,4 +238,9 @@ pub(super) fn attached(root: &Path) -> Result<bool, String> {
         return Err("AW shell does not own this Herdr pane".into());
     }
     Ok(true)
+}
+
+fn initial_owner(directory: &Path, binding: &PaneBinding) -> Result<bool, String> {
+    let initial: PaneBinding = read(&directory.join("binding.json"))?;
+    Ok(binding.pane_id == initial.pane_id && binding.shell_pid == initial.shell_pid)
 }

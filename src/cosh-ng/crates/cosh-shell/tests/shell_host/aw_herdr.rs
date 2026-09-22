@@ -12,6 +12,12 @@ fn aw_herdr_login_shell_uses_non_login_pane() {
     run_fixture(Some("login"));
 }
 
+#[test]
+#[ignore = "requires COSH_TEST_HERDR pointing to the pinned Herdr binary"]
+fn aw_herdr_split_and_tab_have_independent_owners() {
+    run_fixture(Some("multipane"));
+}
+
 fn run_fixture(case: Option<&str>) {
     let herdr = std::env::var_os("COSH_TEST_HERDR")
         .expect("set COSH_TEST_HERDR to the pinned Herdr binary");

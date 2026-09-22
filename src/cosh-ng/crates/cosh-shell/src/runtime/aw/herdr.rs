@@ -2,6 +2,7 @@
 
 mod process;
 mod protocol;
+pub(super) mod workspace;
 
 pub(super) use process::process_identity;
 use process::{OwnedSession, TerminalRestore};
@@ -38,6 +39,7 @@ pub(super) struct SessionDescriptor {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct PaneBinding {
+    pub workspace_id: String,
     pub pane_id: String,
     pub shell_pid: u32,
 }
@@ -135,10 +137,11 @@ fn run(
         }
         thread::sleep(Duration::from_millis(50));
     }
+    fs::create_dir(temporary.join("panes")).map_err(|e| e.to_string())?;
     let created = rpc(
         &owned.socket,
         "workspace.create",
-        json!({"label":"AW Qoder", "cwd":cwd,"focus":true}),
+        json!({"label":cwd.file_name().and_then(|name| name.to_str()).unwrap_or("AW workspace"), "cwd":cwd,"focus":true}),
     )?;
     owned.workspace = Some(
         created["workspace"]["workspace_id"]
@@ -166,6 +169,10 @@ fn run(
     write_json(
         &temporary.join("binding.json"),
         &PaneBinding {
+            workspace_id: owned
+                .workspace
+                .clone()
+                .ok_or("Herdr workspace identity missing")?,
             pane_id: pane.into(),
             shell_pid: pid,
         },
@@ -176,7 +183,8 @@ fn run(
             .map_err(|e| format!("start Herdr client: {e}"))?,
     );
     let deadline = Instant::now() + Duration::from_secs(86_400);
-    let mut multiple_panes = false;
+    let mut next_summary = Instant::now();
+
     loop {
         if cancelled() {
             return Err("AW Herdr session cancelled".into());
@@ -191,21 +199,43 @@ fn run(
         }
         owned.observe_descendants()?;
         let list = rpc(&owned.socket, "pane.list", json!({}))?;
-        let panes = list["panes"].as_array().ok_or("Herdr pane list missing")?;
-        multiple_panes |= panes.len() > 1;
+        // Herdr creates a default workspace when the last owned tab closes.
+        // That replacement is not part of this foreground Agent invocation.
+        let panes: Vec<_> = list["panes"]
+            .as_array()
+            .ok_or("Herdr pane list missing")?
+            .iter()
+            .filter(|entry| entry["workspace_id"].as_str() == owned.workspace.as_deref())
+            .collect();
         let first_present = panes
             .iter()
             .any(|entry| entry["pane_id"].as_str() == Some(pane));
-        if !multiple_panes
-            && (temporary.join("finished.json").exists()
-                || !first_present
-                || process_identity(pid).is_err())
-        {
-            if !temporary.join("finished.json").exists() {
-                return Err("AW Herdr pane exited before reporting completion".into());
+        let finished = temporary.join("finished.json").exists();
+        let first_exited = finished || !first_present || process_identity(pid).is_err();
+        if first_exited {
+            // Additional panes have independent shell owners. Retire only the
+            // initial pane and keep the session until all other panes close.
+            if first_present && panes.len() > 1 {
+                rpc(&owned.socket, "pane.close", json!({"pane_id":pane}))?;
+            } else if panes.is_empty() || (first_present && panes.len() == 1) {
+                return completion_status(temporary)?
+                    .ok_or_else(|| "AW Herdr pane exited before reporting completion".into());
             }
-            return completion_status(temporary)?
-                .ok_or_else(|| "AW pane completion status missing".into());
+        }
+        if Instant::now() >= next_summary {
+            let status = if workspace::publish(temporary, &descriptor, &panes).is_ok() {
+                "connected"
+            } else {
+                "unavailable"
+            };
+            // Optional dashboard failure does not end an Agent invocation.
+            if let Err(error) = write_json(
+                &temporary.join("workspace-viewer.json"),
+                &json!({"status":status}),
+            ) {
+                eprintln!("cosh: AW workspace viewer status unavailable: {error}");
+            }
+            next_summary = Instant::now() + Duration::from_secs(1);
         }
         thread::sleep(Duration::from_millis(100));
     }
@@ -299,13 +329,13 @@ fn verify_binary(binary: &Path) -> Result<(), String> {
         "../../../../../../aw/integrations/herdr/upstream.json"
     ))
     .map_err(|e| e.to_string())?;
-    let expected = manifest["assets"][std::env::consts::ARCH]["sha256"]
-        .as_str()
-        .ok_or("Herdr has no pinned binary for this architecture")?;
     let supplied =
         std::env::var("COSH_AW_HERDR_SHA256").map_err(|_| "Herdr trust digest missing")?;
-    if supplied != expected {
-        return Err("Herdr digest does not match the pinned v0.9.0 release".into());
+    let admitted = ["assets", "patched_assets"].into_iter().any(|kind| {
+        manifest[kind][std::env::consts::ARCH]["sha256"].as_str() == Some(supplied.as_str())
+    });
+    if !admitted {
+        return Err("Herdr digest does not match a pinned integration build".into());
     }
     let mut file = fs::File::open(binary).map_err(|e| format!("open Herdr: {e}"))?;
     let metadata = file.metadata().map_err(|e| e.to_string())?;
@@ -321,7 +351,7 @@ fn verify_binary(binary: &Path) -> Result<(), String> {
         }
         hasher.update(&bytes[..count]);
     }
-    if format!("{:x}", hasher.finalize()) != expected {
+    if format!("{:x}", hasher.finalize()) != supplied {
         return Err("Herdr binary digest mismatch".into());
     }
     Ok(())
@@ -360,16 +390,22 @@ mod tests {
         let rows = config["ui"]["sidebar"]["agents"]["rows"]
             .as_array()
             .unwrap();
-        assert!(rows.iter().any(|row| row
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(
-                |cell| cell.get("token").and_then(toml::Value::as_str) == Some("$aw_observation")
-            )));
+        assert_eq!(rows[0][0].as_str(), Some("state_icon"));
+        assert_eq!(rows[0][1]["token"].as_str(), Some("agent"));
+        assert_eq!(rows[0][2]["token"].as_str(), Some("state_text"));
         let workspace_rows = config["ui"]["sidebar"]["spaces"]["rows"]
             .as_array()
             .unwrap();
-        assert_eq!(&workspace_rows[1..], &rows[1..]);
+        assert_eq!(workspace_rows.len(), 16);
+        assert_eq!(workspace_rows[15][0]["token"].as_str(), Some("$aw_ws_13"));
+        assert_eq!(workspace_rows[0][1]["token"].as_str(), Some("workspace"));
+        assert_eq!(
+            workspace_rows[1][0]["token"].as_str(),
+            Some("$aw_ws_agents")
+        );
+        // Fault styles must win over a positive receipt/check count.
+        let rules = workspace_rows[5][0]["rules"].as_array().unwrap();
+        assert_eq!(rules[0]["contains"].as_str(), Some("ALERT"));
+        assert_eq!(rules[1]["contains"].as_str(), Some("overflow"));
     }
 }

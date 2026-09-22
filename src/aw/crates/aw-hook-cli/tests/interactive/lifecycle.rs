@@ -39,6 +39,9 @@ fn a_later_command_pin_is_checked_before_any_command_executes() {
     assert!(response.get("systemMessage").is_some());
     assert!(!dir.0.join("events").exists());
     assert_eq!(query(&dir.0).unwrap()["failed"], 1);
+    let view = query(&dir.0).unwrap();
+    assert_eq!(view["events"][0]["received"], 1);
+    assert_eq!(view["events"][0]["handlers"]["failed"], 1);
 }
 
 #[test]
@@ -277,4 +280,126 @@ fn first_trusted_input_binds_session_but_preserves_missing_start_evidence() {
     callback(&dir.0, native(&dir, "SessionStart", "s2", "t2")).unwrap();
     assert_eq!(query(&dir.0).unwrap()["session_start_observed"], true);
     assert_eq!(query(&dir.0).unwrap()["attachment"], 2);
+}
+
+#[test]
+fn event_receipts_do_not_require_handlers_or_retain_private_payloads() {
+    let dir = super::tool_guard::fixture_guard(None, super::tool_guard::SCANNER);
+    let sequence = [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUseFailure",
+        "Stop",
+    ];
+    for name in sequence {
+        callback(&dir.0, native(&dir, name, "s1", "t1")).unwrap();
+    }
+    // An envelope rejected after native shape validation is not a receipt.
+    let mut invalid = native(&dir, "SubagentStart", "s1", "t1");
+    invalid["agent_id"] = json!("x".repeat(257));
+    assert!(callback(&dir.0, invalid).is_err());
+    let view = query(&dir.0).unwrap();
+    assert_eq!(view["calls"], 0);
+    assert_eq!(view["callbacks_in_runtime"], 5);
+    let rows = view["events"].as_array().unwrap();
+    assert_eq!(rows.len(), 16);
+    for name in sequence {
+        let event =
+            serde_json::to_value(aw_adapters::qoder_events::event_name(name).unwrap()).unwrap();
+        let row = rows.iter().find(|r| r["event"] == event).unwrap();
+        assert_eq!(row["received"], 1);
+        assert_eq!(row["status"], "received");
+        assert_eq!(row["handlers_configured"], false);
+    }
+    for name in ["model.before_request", "security.violation"] {
+        let row = rows.iter().find(|r| r["event"] == name).unwrap();
+        assert_eq!(row["status"], "unsupported");
+        assert!(row["received"].is_null());
+    }
+    assert_eq!(
+        rows.iter()
+            .find(|r| r["event"] == "runtime.observed")
+            .unwrap()["status"],
+        "not_configured"
+    );
+    assert_eq!(
+        rows.iter().find(|r| r["event"] == "session.end").unwrap()["status"],
+        "waiting"
+    );
+    // A replay is rejected before a second receipt is persisted.
+    let replay = callback(&dir.0, native(&dir, "PreToolUse", "s1", "t1")).unwrap();
+    assert_eq!(replay["hookSpecificOutput"]["permissionDecision"], "deny");
+    assert_eq!(query(&dir.0).unwrap()["callbacks_in_runtime"], 5);
+    let state = fs::read_to_string(dir.0.join("state.json")).unwrap();
+    for private in [
+        "private result",
+        "same input",
+        "failed tool result",
+        "echo private",
+    ] {
+        assert!(!state.contains(private));
+        assert!(!view.to_string().contains(private));
+    }
+    callback(&dir.0, native(&dir, "SessionStart", "s2", "t2")).unwrap();
+    let view = query(&dir.0).unwrap();
+    let rows = view["events"].as_array().unwrap();
+    assert_eq!(
+        rows.iter().find(|r| r["event"] == "tool.before").unwrap()["received"],
+        0
+    );
+    assert_eq!(
+        rows.iter().find(|r| r["event"] == "session.start").unwrap()["received"],
+        1
+    );
+}
+
+#[test]
+fn old_state_without_event_counts_does_not_invent_zero_receipts() {
+    let dir = super::tool_guard::fixture_guard(None, super::tool_guard::SCANNER);
+    callback(&dir.0, native(&dir, "SessionStart", "s1", "t1")).unwrap();
+    let path = dir.0.join("state.json");
+    let mut state: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    state.as_object_mut().unwrap().remove("event_counts");
+    write(&path, &state);
+    callback(&dir.0, native(&dir, "Stop", "s1", "t1")).unwrap();
+    let view = query(&dir.0).unwrap();
+    for row in view["events"].as_array().unwrap().iter().take(11) {
+        assert_eq!(row["status"], "unavailable");
+        assert!(row["received"].is_null());
+    }
+}
+
+#[test]
+fn activity_query_tracks_callbacks_and_invalidates_gaps_or_exited_owners() {
+    let dir = super::tool_guard::fixture_guard(None, super::tool_guard::SCANNER);
+    for (name, expected) in [
+        ("SessionStart", "idle"),
+        ("UserPromptSubmit", "working"),
+        ("PermissionRequest", "blocked"),
+        ("Stop", "idle"),
+        ("UserPromptSubmit", "working"),
+    ] {
+        callback(&dir.0, native(&dir, name, "s1", "t1")).unwrap();
+        let view = query(&dir.0).unwrap();
+        assert_eq!(view["activity"], expected);
+        assert_eq!(view["activity_source"], "native_callback_hint");
+    }
+    assert!(callback(&dir.0, native(&dir, "Stop", "wrong-session", "t1")).is_err());
+    assert_eq!(query(&dir.0).unwrap()["activity"], "working");
+    let path = dir.0.join("state.json");
+    let mut state: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    state["gap"] = json!(true);
+    write(&path, &state);
+    assert_eq!(query(&dir.0).unwrap()["activity"], "unknown");
+    state["gap"] = json!(false);
+    write(&path, &state);
+    callback(&dir.0, native(&dir, "SessionEnd", "s1", "t1")).unwrap();
+    assert_eq!(query(&dir.0).unwrap()["activity"], "unknown");
+    callback(&dir.0, native(&dir, "SessionStart", "s2", "t1")).unwrap();
+    let path = dir.0.join("binding.json");
+    let mut binding: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    binding["agent_ticks"] = json!(0);
+    write(&path, &binding);
+    assert_eq!(query(&dir.0).unwrap()["activity"], "unknown");
 }

@@ -162,3 +162,5 @@ print 可能隐藏检查失败诊断并退出 0，见
 仓库内默认 Provider 策略接入真实 SecCore 检查和原生 Tokenless 压缩。一次性运行
 `aw-hook-cli configure`，把输出的 `[aw]` 段加入现有 cosh 用户配置；日常仍是 cosh → `qoder`。
 见[标准入口验收手册](../../docs/developer-guide/zh/aw/qoder-acceptance.md)。
+
+format-2 Herdr 视图逐项展示 16 个事件的收到状态，并区分 SecCore、Tokenless 结果；诊断查询提供逐事件详情。

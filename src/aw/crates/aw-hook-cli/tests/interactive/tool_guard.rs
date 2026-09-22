@@ -3,7 +3,7 @@
 use super::lifecycle::{lifecycle_config, native};
 use super::*;
 
-const SCANNER: &str = r#"import json,sys,pathlib
+pub(super) const SCANNER: &str = r#"import json,sys,pathlib
 if sys.argv[-1]=='--version':
  print('agent-sec-cli 0.12.0');sys.exit(0)
 assert sys.argv[1:3]==['scan-code','--code']
@@ -14,7 +14,7 @@ findings=[] if 'forbidden' not in command else [{'rule_id':'fixture','severity':
 print(json.dumps({'ok':True,'verdict':'deny' if findings else 'pass','summary':'','findings':findings,'language':'bash','engine_version':'0.12.0','elapsed_ms':0}))
 "#;
 
-fn fixture_guard(transform: Option<&str>, scanner: &str) -> Directory {
+pub(super) fn fixture_guard(transform: Option<&str>, scanner: &str) -> Directory {
     fixture_guard_budget(transform, scanner, 500)
 }
 

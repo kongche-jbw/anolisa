@@ -51,9 +51,13 @@ impl HerdrBridge {
                     }
                     match receiver.recv_timeout(Duration::from_secs(1)) {
                         Err(mpsc::RecvTimeoutError::Timeout) => {}
-                        _ => return,
+                        _ => {
+                            let _ = clear_agent(&root, &socket, &pane);
+                            return;
+                        }
                     }
                 }
+                let _ = clear_agent(&root, &socket, &pane);
                 let _ = storage::replace(&root.join("viewer.json"), &json!({"status":"expired"}));
             })?;
         Ok(Self {
@@ -88,7 +92,13 @@ fn publish(root: &Path, socket: &Path, pane: &str) -> Result<(), Error> {
         if !entry.file_name().to_string_lossy().starts_with("run-") {
             continue;
         }
-        let view = query(&entry.path())?;
+        let view = match query(&entry.path()) {
+            Ok(view) => view,
+            Err(error) => {
+                let _ = clear_agent(root, socket, pane);
+                return Err(error);
+            }
+        };
         if view["runtime_alive"] == true {
             if current.is_some() {
                 return Err(Error::Profile("ambiguous foreground runtime"));
@@ -96,25 +106,54 @@ fn publish(root: &Path, socket: &Path, pane: &str) -> Result<(), Error> {
             current = Some(view);
         }
     }
-    let tokens = match current {
+    let tokens = match &current {
+        Some(view) if view["format"] == 2 => super::event_view::tokens(Some(view)),
         Some(view) => json!({
             "aw":format!("AW {} / attachment {} / gap {}", view["bridge_status"].as_str().unwrap_or("unknown"), view["attachment"], view["observation_gap"]),
             "aw_observation":match view["callbacks_in_runtime"].as_u64() {
                 Some(callbacks) => format!("{callbacks} callbacks / {} handlers / {} failed", view["observed"], view["failed"]),
                 None => format!("{} observed / {} failed / {} pending", view["observed"], view["failed"], view["pending"]),
             },
-            "aw_security":effect_text(&view, "checks"),
-            "aw_projection":effect_text(&view, "projections"),
+            "aw_security":effect_text(view, "checks"),
+            "aw_projection":effect_text(view, "projections"),
             "aw_coverage":"OS not attached | adoption unconfirmed"
         }),
-        None => {
-            json!({"aw":"AW idle / no live runtime","aw_observation":null,"aw_security":null,"aw_projection":null,"aw_coverage":null})
-        }
+        None => super::event_view::tokens(None),
     };
     let seq = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(evidence)?
         .as_millis();
+    // The managed session owner aggregates these structured reports. Pane
+    // publishers never compete for workspace metadata, even in a single pane.
+    storage::replace(
+        &root.join("viewer-snapshot.json"),
+        &json!({"format":1,"pane_id":pane,"owner_pid":prepared.owner_pid,
+            "owner_ticks":prepared.owner_ticks,"observed_at_ms":seq,"view":current}),
+    )?;
+    if let Some(view) = &current {
+        if view["format"] == 2 {
+            // The verified owner and live binding identify the nested Qoder PTY.
+            // Activity is only the last authenticated callback's presentation hint.
+            rpc(
+                socket,
+                "pane.report_agent",
+                json!({
+                    "pane_id":pane,"source":"anolisa.aw","agent":"qodercli",
+                    "state":view["activity"].as_str().unwrap_or("unknown"),
+                    "seq":seq
+                }),
+            )?;
+        }
+    } else {
+        rpc(
+            socket,
+            "pane.clear_agent_authority",
+            json!({
+                "pane_id":pane,"source":"anolisa.aw","seq":seq
+            }),
+        )?;
+    }
     rpc(
         socket,
         "pane.report_metadata",
@@ -122,41 +161,27 @@ fn publish(root: &Path, socket: &Path, pane: &str) -> Result<(), Error> {
             "pane_id":pane,"source":"anolisa.aw","seq":seq,"ttl_ms":3000,"tokens":tokens
         }),
     )?;
-    // Herdr cannot identify an Agent on cosh's nested PTY. Its workspace rows
-    // can show the same read-only evidence without inventing an Agent status.
-    let listing = rpc(socket, "pane.list", json!({}))?;
-    if let Some(workspace) = exclusive_workspace(&listing, pane)? {
-        rpc(
-            socket,
-            "workspace.report_metadata",
-            json!({
-                "workspace_id":workspace,"source":"anolisa.aw","seq":seq,
-                "ttl_ms":3000,"tokens":tokens
-            }),
-        )?;
-    }
+
     Ok(())
 }
 
-fn exclusive_workspace<'a>(listing: &'a Value, pane: &str) -> Result<Option<&'a str>, Error> {
-    let panes = listing["panes"]
-        .as_array()
-        .ok_or(Error::Profile("Herdr pane list missing"))?;
-    let mut matched = panes.iter().filter(|entry| entry["pane_id"] == pane);
-    let workspace = matched
-        .next()
-        .and_then(|entry| entry["workspace_id"].as_str())
-        .filter(|id| !id.is_empty())
-        .ok_or(Error::Profile("Herdr bound pane workspace missing"))?;
-    if matched.next().is_some() {
-        return Err(Error::Profile("Herdr bound pane identity is ambiguous"));
+fn clear_agent(root: &Path, socket: &Path, pane: &str) -> Result<(), Error> {
+    let prepared: Prepared = storage::read(&root.join("prepared.json"))?;
+    let process = rpc(socket, "pane.process_info", json!({"pane_id":pane}))?;
+    if process["process_info"]["shell_pid"] != prepared.owner_pid {
+        return Err(Error::Profile(
+            "Herdr pane owner changed before clearing activity",
+        ));
     }
-    Ok((panes
-        .iter()
-        .filter(|entry| entry["workspace_id"] == workspace)
-        .count()
-        == 1)
-        .then_some(workspace))
+    rpc(
+        socket,
+        "pane.clear_agent_authority",
+        json!({
+            "pane_id":pane,"source":"anolisa.aw",
+            "seq":SystemTime::now().duration_since(UNIX_EPOCH).map_err(evidence)?.as_millis() + 1
+        }),
+    )?;
+    Ok(())
 }
 
 fn effect_text(view: &Value, kind: &str) -> String {
@@ -268,20 +293,5 @@ mod tests {
             effect_text(&view, "projections"),
             "Effect evidence unavailable"
         );
-    }
-
-    #[test]
-    fn workspace_evidence_requires_the_bound_pane_to_be_exclusive() {
-        let one = json!({"panes":[{"pane_id":"one","workspace_id":"owned"},
-            {"pane_id":"other","workspace_id":"unrelated"}]});
-        assert_eq!(exclusive_workspace(&one, "one").unwrap(), Some("owned"));
-        let shared = json!({"panes":[{"pane_id":"one","workspace_id":"owned"},
-            {"pane_id":"two","workspace_id":"owned"}]});
-        assert_eq!(exclusive_workspace(&shared, "one").unwrap(), None);
-        assert!(exclusive_workspace(&one, "absent").is_err());
-        assert!(exclusive_workspace(&json!({}), "one").is_err());
-        let duplicate = json!({"panes":[{"pane_id":"one","workspace_id":"a"},
-            {"pane_id":"one","workspace_id":"b"}]});
-        assert!(exclusive_workspace(&duplicate, "one").is_err());
     }
 }

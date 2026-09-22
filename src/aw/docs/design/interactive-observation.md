@@ -434,17 +434,27 @@ The original XDG environment is restored for the pane; user hooks and native
 configuration are not rewritten. Fixed cwd admission remains unchanged.
 
 The launcher bounds startup, RPC, session lifetime and owned-child teardown.
+RPC read polls may time out while Herdr closes another pane; the same response
+continues within the original two-second deadline without replaying the request.
 It asks Herdr to close its workspace, then checks registered descendant identities
 and uses pidfds for remaining signals. Native Bash retains normal Qoder reaping;
 this is not arbitrary detached-process containment or a final/protected boundary.
 SIGHUP cancels the launcher. A one-shot inner Bash INT trap preserves return to the
 outer shell when the Agent dies by SIGINT. Failed shell readiness reaps its Bash
-without injecting a launch into startup readers. Only single-pane automatic launch
-is supported; multi-pane behavior is not certified.
+without injecting a launch into startup readers. Only the initial pane owner may
+claim automatic launch and publish its completion. Split/new-tab shells bind via
+their own `pane.process_info`, create independent AW scopes and start as ordinary
+cosh shells. Their `qoder` shim executes inside that pane. Completion waits for the
+current panes in the owned workspace, not a sticky historical multi-pane flag;
+Herdr's automatic replacement workspace is outside that foreground invocation.
+The optional AW details client patch reads the clicked Agent's existing metadata
+snapshot; it adds no wire fields, external commands or execution authority.
 
-The explicit ignored shell_host test uses the official Herdr binary and synthetic
+The explicit ignored shell_host tests use pinned Herdr builds and synthetic
 Qoder, checks metadata as well as ownership/argv/exit status, and records cleanup.
 A login regression also verifies that the pane does not replay the outer profile.
+The multi-pane fixture checks split and new-tab ownership, no argv replay,
+independent event receipts, both pane-close orders and return to the original shell.
 Real Qoder 1.1.47 has run through this entry, with Stop callbacks confirming a
 projection marker in subsequent answers. This is not terminal-rendering evidence,
 exclusive redaction, or acceptance of a complete demonstration in one session.
@@ -459,9 +469,23 @@ verifies installed versions/pins and produces a private format-2 profile. User
 `[aw]` references reach Bash/panes through ShellHost environment overrides;
 configuration does not mutate process-global environment or refresh trust on launch.
 Qoder runs in cosh's inner PTY, so Herdr's outer-pane process detector need not
-recognize it as an Agent. The bridge verifies pane ownership and publishes the
-same read-only tokens to its workspace only while that workspace has one pane.
-Workspace rows display those facts without injecting an Agent identity or state.
+recognize it as an Agent. Each bridge verifies pane ownership and atomically writes
+`viewer-snapshot.json` in its private scope, containing the structured query and
+owner identity. Format-2 query includes `agent_start_ticks` alongside `agent_pid`.
+The managed session launcher is the sole workspace publisher: once per second it
+matches current panes to registered scopes, validates owner PID/start time and
+server parentage, rejects future or more-than-three-second-old snapshots, and
+excludes exited runtime identities. Missing reports are partial, not zero. It
+publishes fifteen tokens (two overview rows and thirteen grouped event rows) with
+a three-second TTL. The static workspace title survives metadata expiry. Counts
+cover current live runtimes and attachments, not retained history; focus does not
+change the scope. Ordinary shell snapshots carry a null view. Only numeric facts
+and fixed labels reach metadata; no prompts, commands or raw payloads are copied.
+Per-pane tokens and details remain independent. For format-2, the bridge also reports the
+verified live Qoder binding through `pane.report_agent` using source `anolisa.aw`.
+Its activity is a native-callback presentation hint, not execution or safety
+authority; missing evidence stays unknown. The bridge clears only its own
+Agent-state source when observation ends, rechecking pane ownership.
 Pane metadata remains available to existing consumers. The generated sidebar
 sets its maximum width and hidden collapse mode; metadata alone does not establish
 visible rendering.
@@ -477,3 +501,31 @@ has no observer commands, so callback counts and zero notification-handler count
 are both legitimate. Native adoption remains unconfirmed in product metadata;
 external acceptance may separately bind exact native-history result digests.
 See the [acceptance procedure](../../../../docs/developer-guide/en/aw/qoder-acceptance.md).
+
+
+### Local Herdr client patch
+
+`integrations/herdr/upstream.json` retains the official v0.9.0 asset pins and lists
+`patches/0001-aw-agent-details.patch` with its digest. The patch adds only client
+presentation and tests; server/wire behavior is unchanged. `patched_assets`
+separately pins the locally validated aarch64 executable and build toolchain.
+This is not an official Herdr release, and no patched x86_64 asset is certified.
+Remove the patch when a pinned upstream build provides equivalent details and
+passes the listed integration tests. No upstream submission has been made.
+
+To rebuild, check out the manifest's exact upstream commit in a separate source
+directory, apply the listed patch with `git apply`, select Zig 0.15.2, and run
+`cargo build --release --locked`. A checkout nested below an ANOLISA Cargo
+workspace also needs an empty `[workspace]` in its local Cargo.toml; this build
+isolation edit is not part of the client patch. Keep the upstream Apache-2.0
+license beside distributed binaries. The observed build used the Rust version
+recorded in the manifest. A rebuild with different paths/toolchain may have a
+different digest and requires explicit verification and a reviewed manifest
+update; runtime admission never accepts an arbitrary supplied digest.
+
+Validate with Herdr's `aw_details` and
+`context_menus_capture_stable_targets_and_route_actions` tests, then the cosh
+`aw_herdr` ignored shell-host tests with `COSH_TEST_HERDR` pointing at the reviewed
+binary. These tests cover synthetic Qoder PTYs and native client rendering/input;
+real-model and human visual acceptance remain separate. The standard product
+entry still uses only the compiled cosh and Herdr executables.

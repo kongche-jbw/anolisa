@@ -1,22 +1,31 @@
-# Merge these rows into the operator's existing Herdr v0.9.0 configuration.
-# Use the aw-enabled cosh binary as terminal.default_shell to bind pane ownership.
-# Workspace evidence remains visible when the Agent runs on cosh's nested PTY.
+# Workspace summary covers currently running Agents; paired events share a row.
+# The workspace title remains visible when metadata expires.
+# Agent activity is a callback hint, not proof of adoption.
+
 [ui.sidebar.spaces]
 rows = [
-  ["state_icon", "workspace", "state_text"],
-  [{ token = "$aw", bold = true }],
-  [{ token = "$aw_observation" }],
-  [{ token = "$aw_security" }],
-  [{ token = "$aw_projection" }],
-  [{ token = "$aw_coverage" }],
+  ["state_icon", { token = "workspace", fg = "#7dcfff", bold = true }],
+  [{ token = "$aw_ws_agents", fg = "#a9b1d6", rules = [{ contains = "ALERT", fg = "#f7768e" }, { contains = "overflow", fg = "#f7768e" }, { contains = "unavailable", fg = "#f7768e" }, { contains = "partial", fg = "#e0af68" }, { contains = "GAP!", fg = "#f7768e" }, { contains = "WAIT", fg = "#e0af68" }, { contains = "not wired", fg = "#565f89" }, { contains = "off", fg = "#565f89" }, { contains = "seen ", fg = "#7dcfff" }] }],
+  [{ token = "$aw_ws_health", fg = "#a9b1d6", rules = [{ contains = "ALERT", fg = "#f7768e" }, { contains = "overflow", fg = "#f7768e" }, { contains = "unavailable", fg = "#f7768e" }, { contains = "partial", fg = "#e0af68" }, { contains = "GAP!", fg = "#f7768e" }, { contains = "WAIT", fg = "#e0af68" }, { contains = "not wired", fg = "#565f89" }, { contains = "off", fg = "#565f89" }, { contains = "seen ", fg = "#7dcfff" }] }],
+  [{ token = "$aw_ws_01", fg = "#a9b1d6", rules = [{ contains = "ALERT", fg = "#f7768e" }, { contains = "overflow", fg = "#f7768e" }, { contains = "unavailable", fg = "#f7768e" }, { contains = "partial", fg = "#e0af68" }, { contains = "GAP!", fg = "#f7768e" }, { contains = "WAIT", fg = "#e0af68" }, { contains = "not wired", fg = "#565f89" }, { contains = "off", fg = "#565f89" }, { contains = "seen ", fg = "#7dcfff" }] }],
+  [{ token = "$aw_ws_02", fg = "#a9b1d6", rules = [{ contains = "ALERT", fg = "#f7768e" }, { contains = "overflow", fg = "#f7768e" }, { contains = "unavailable", fg = "#f7768e" }, { contains = "partial", fg = "#e0af68" }, { contains = "GAP!", fg = "#f7768e" }, { contains = "WAIT", fg = "#e0af68" }, { contains = "not wired", fg = "#565f89" }, { contains = "off", fg = "#565f89" }, { contains = "seen ", fg = "#7dcfff" }] }],
+  [{ token = "$aw_ws_03", fg = "#a9b1d6", rules = [{ contains = "ALERT", fg = "#f7768e" }, { contains = "overflow", fg = "#f7768e" }, { contains = "unavailable", fg = "#f7768e" }, { contains = "partial", fg = "#e0af68" }, { contains = "GAP!", fg = "#f7768e" }, { contains = "WAIT", fg = "#e0af68" }, { contains = "not wired", fg = "#565f89" }, { contains = "off", fg = "#565f89" }, { contains = "seen ", fg = "#7dcfff" }] }],
+  [{ token = "$aw_ws_04", fg = "#a9b1d6", rules = [{ contains = "ALERT", fg = "#f7768e" }, { contains = "overflow", fg = "#f7768e" }, { contains = "unavailable", fg = "#f7768e" }, { contains = "partial", fg = "#e0af68" }, { contains = "GAP!", fg = "#f7768e" }, { contains = "WAIT", fg = "#e0af68" }, { contains = "not wired", fg = "#565f89" }, { contains = "off", fg = "#565f89" }, { contains = "seen ", fg = "#7dcfff" }] }],
+  [{ token = "$aw_ws_05", fg = "#a9b1d6", rules = [{ contains = "ALERT", fg = "#f7768e" }, { contains = "overflow", fg = "#f7768e" }, { contains = "unavailable", fg = "#f7768e" }, { contains = "partial", fg = "#e0af68" }, { contains = "GAP!", fg = "#f7768e" }, { contains = "WAIT", fg = "#e0af68" }, { contains = "not wired", fg = "#565f89" }, { contains = "off", fg = "#565f89" }, { contains = "seen ", fg = "#7dcfff" }] }],
+  [{ token = "$aw_ws_06", fg = "#a9b1d6", rules = [{ contains = "ALERT", fg = "#f7768e" }, { contains = "overflow", fg = "#f7768e" }, { contains = "unavailable", fg = "#f7768e" }, { contains = "partial", fg = "#e0af68" }, { contains = "GAP!", fg = "#f7768e" }, { contains = "WAIT", fg = "#e0af68" }, { contains = "not wired", fg = "#565f89" }, { contains = "off", fg = "#565f89" }, { contains = "seen ", fg = "#7dcfff" }] }],
+  [{ token = "$aw_ws_07", fg = "#a9b1d6", rules = [{ contains = "ALERT", fg = "#f7768e" }, { contains = "overflow", fg = "#f7768e" }, { contains = "unavailable", fg = "#f7768e" }, { contains = "partial", fg = "#e0af68" }, { contains = "GAP!", fg = "#f7768e" }, { contains = "WAIT", fg = "#e0af68" }, { contains = "not wired", fg = "#565f89" }, { contains = "off", fg = "#565f89" }, { contains = "seen ", fg = "#7dcfff" }] }],
+  [{ token = "$aw_ws_08", fg = "#a9b1d6", rules = [{ contains = "ALERT", fg = "#f7768e" }, { contains = "overflow", fg = "#f7768e" }, { contains = "unavailable", fg = "#f7768e" }, { contains = "partial", fg = "#e0af68" }, { contains = "GAP!", fg = "#f7768e" }, { contains = "WAIT", fg = "#e0af68" }, { contains = "not wired", fg = "#565f89" }, { contains = "off", fg = "#565f89" }, { contains = "seen ", fg = "#7dcfff" }] }],
+  [{ token = "$aw_ws_09", fg = "#a9b1d6", rules = [{ contains = "ALERT", fg = "#f7768e" }, { contains = "overflow", fg = "#f7768e" }, { contains = "unavailable", fg = "#f7768e" }, { contains = "partial", fg = "#e0af68" }, { contains = "GAP!", fg = "#f7768e" }, { contains = "WAIT", fg = "#e0af68" }, { contains = "not wired", fg = "#565f89" }, { contains = "off", fg = "#565f89" }, { contains = "seen ", fg = "#7dcfff" }] }],
+  [{ token = "$aw_ws_10", fg = "#a9b1d6", rules = [{ contains = "ALERT", fg = "#f7768e" }, { contains = "overflow", fg = "#f7768e" }, { contains = "unavailable", fg = "#f7768e" }, { contains = "partial", fg = "#e0af68" }, { contains = "GAP!", fg = "#f7768e" }, { contains = "WAIT", fg = "#e0af68" }, { contains = "not wired", fg = "#565f89" }, { contains = "off", fg = "#565f89" }, { contains = "seen ", fg = "#7dcfff" }] }],
+  [{ token = "$aw_ws_11", fg = "#a9b1d6", rules = [{ contains = "ALERT", fg = "#f7768e" }, { contains = "overflow", fg = "#f7768e" }, { contains = "unavailable", fg = "#f7768e" }, { contains = "partial", fg = "#e0af68" }, { contains = "GAP!", fg = "#f7768e" }, { contains = "WAIT", fg = "#e0af68" }, { contains = "not wired", fg = "#565f89" }, { contains = "off", fg = "#565f89" }, { contains = "seen ", fg = "#7dcfff" }] }],
+  [{ token = "$aw_ws_12", fg = "#a9b1d6", rules = [{ contains = "ALERT", fg = "#f7768e" }, { contains = "overflow", fg = "#f7768e" }, { contains = "unavailable", fg = "#f7768e" }, { contains = "partial", fg = "#e0af68" }, { contains = "GAP!", fg = "#f7768e" }, { contains = "WAIT", fg = "#e0af68" }, { contains = "not wired", fg = "#565f89" }, { contains = "off", fg = "#565f89" }, { contains = "seen ", fg = "#7dcfff" }] }],
+  [{ token = "$aw_ws_13", fg = "#a9b1d6", rules = [{ contains = "ALERT", fg = "#f7768e" }, { contains = "overflow", fg = "#f7768e" }, { contains = "unavailable", fg = "#f7768e" }, { contains = "partial", fg = "#e0af68" }, { contains = "GAP!", fg = "#f7768e" }, { contains = "WAIT", fg = "#e0af68" }, { contains = "not wired", fg = "#565f89" }, { contains = "off", fg = "#565f89" }, { contains = "seen ", fg = "#7dcfff" }] }],
 ]
 
 [ui.sidebar.agents]
 rows = [
-  ["state_icon", "agent", "state_text"],
-  [{ token = "$aw", bold = true }],
-  [{ token = "$aw_observation" }],
-  [{ token = "$aw_security" }],
-  [{ token = "$aw_projection" }],
-  [{ token = "$aw_coverage" }],
+  ["state_icon", { token = "agent", fg = "#bb9af7", bold = true }, { token = "state_text", bold = true, rules = [{ equals = "working", ignore_case = true, fg = "#7aa2f7" }, { equals = "blocked", ignore_case = true, fg = "#e0af68" }, { equals = "idle", ignore_case = true, fg = "#9ece6a" }, { equals = "done", ignore_case = true, fg = "#9ece6a" }, { equals = "unknown", ignore_case = true, fg = "#a9b1d6" }] }],
+  [{ token = "workspace", fg = "#7dcfff" }, "pane"],
+  [{ token = "$aw_event_03", fg = "#a9b1d6", rules = [{ contains = "GAP!", fg = "#f7768e", bold = true }, { contains = "unavailable", fg = "#f7768e", bold = true }, { contains = "failed", fg = "#f7768e", bold = true }, { contains = "pending", fg = "#e0af68" }, { contains = "deny 0", fg = "#9ece6a" }, { contains = "deny ", fg = "#f7768e", bold = true }, { contains = "seen ", fg = "#7dcfff" }] }],
+  [{ token = "$aw_event_04", fg = "#a9b1d6", rules = [{ contains = "GAP!", fg = "#f7768e", bold = true }, { contains = "unavailable", fg = "#f7768e", bold = true }, { contains = "failed", fg = "#f7768e", bold = true }, { contains = "pending", fg = "#e0af68" }, { contains = "deny 0", fg = "#9ece6a" }, { contains = "deny ", fg = "#f7768e", bold = true }, { contains = "seen ", fg = "#7dcfff" }] }],
 ]

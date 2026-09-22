@@ -39,7 +39,13 @@ pub fn launch_with_cancellation(
             storage::directory(&run.join("notifications"))?;
         }
         storage::create(&run.join("state.lock"), &json!({}))?;
-        storage::create(&run.join("state.json"), &State::default())?;
+        storage::create(
+            &run.join("state.json"),
+            &State {
+                event_counts: Some(Default::default()),
+                ..State::default()
+            },
+        )?;
         let runtime_id = canonical::digest(run.as_os_str().as_encoded_bytes());
         let binding = Binding {
             prepared,

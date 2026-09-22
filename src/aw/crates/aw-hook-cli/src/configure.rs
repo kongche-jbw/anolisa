@@ -280,8 +280,11 @@ fn verify_herdr(digest: &str) -> Result<(), String> {
     let manifest: Value =
         serde_json::from_str(include_str!("../../../integrations/herdr/upstream.json"))
             .map_err(|error| error.to_string())?;
-    if manifest["assets"][std::env::consts::ARCH]["sha256"].as_str() != Some(digest) {
-        return Err("Herdr does not match the fixed official v0.9.0 architecture asset".into());
+    if !["assets", "patched_assets"]
+        .into_iter()
+        .any(|kind| manifest[kind][std::env::consts::ARCH]["sha256"].as_str() == Some(digest))
+    {
+        return Err("Herdr does not match a pinned integration build".into());
     }
     Ok(())
 }
@@ -338,6 +341,26 @@ mod tests {
         fn drop(&mut self) {
             fs::remove_dir_all(&self.0).expect("remove owned configure fixture");
         }
+    }
+
+    #[test]
+    fn herdr_trust_only_admits_pinned_architecture_builds() {
+        let manifest: Value =
+            serde_json::from_str(include_str!("../../../integrations/herdr/upstream.json"))
+                .unwrap();
+        for kind in ["assets", "patched_assets"] {
+            if let Some(digest) = manifest[kind][std::env::consts::ARCH]["sha256"].as_str() {
+                verify_herdr(digest).unwrap();
+            }
+        }
+        assert!(verify_herdr(&"0".repeat(64)).is_err());
+        assert!(verify_herdr("").is_err());
+        let other = if std::env::consts::ARCH == "aarch64" {
+            "x86_64"
+        } else {
+            "aarch64"
+        };
+        assert!(verify_herdr(manifest["assets"][other]["sha256"].as_str().unwrap()).is_err());
     }
 
     #[test]

@@ -483,7 +483,7 @@ and prints the following user configuration (with actual paths and digests):
 config = "/absolute/path/aw.json"
 config_sha256 = "<reviewed lowercase SHA-256>"
 herdr = "/absolute/path/herdr"
-herdr_sha256 = "<official asset SHA-256>"
+herdr_sha256 = "<pinned integration SHA-256>"
 ```
 
 Add it to `~/.copilot-shell/config.toml`, preserving existing model-provider
@@ -503,11 +503,49 @@ Version probing, pin checks and compression share the callback deadline. Failure
 preserves the original result. Its process environment disables Tokenless stats
 and SLS, explicitly enables compression, and avoids user configuration lookup.
 
-The sidebar distinguishes callbacks, handler notifications, checks and candidate
-results. Journal counters are scoped to the current attachment; corrupt or
-incomplete evidence is unavailable. Candidate counts never prove native adoption.
-OS coverage and final/protected guarantees remain unconfirmed. The older observer
-example below is a separate protocol example, not a dependency of this setup.
+The format-2 Agent details list all sixteen AW events vertically. `seen N` counts
+validated receipts in the current attachment; `waiting` means no receipt yet,
+`not wired` means unsupported, and `not attached` means the owner source is not
+configured. `unavailable` means evidence is missing, including older sessions
+without per-event counters. `GAP!` remains visible on the first row when observation
+is incomplete. SecCore pass/deny counts accompany `tool.before`; candidate/kept
+counts accompany `tool.after`. Receipts do not prove handler success, tool
+execution or model adoption. Model-request and final safety boundaries remain
+unwired; a SecCore denial does not mark `security.violation` as implemented.
+
+A separate Qoder card shows the Agent name, pane and colored activity: blue
+`working`, amber `blocked`, and green `idle`/`done`. Activity is a bound native
+callback hint: input/tool callbacks indicate working, permission requests indicate
+blocked, and Stop indicates idle. A continuation-capable Stop handler, observation
+gap or unavailable runtime yields unknown. It does not prove an active model
+request, successful tool execution or task completion. AW reports the verified
+Qoder identity through Herdr's native Agent-state API instead of relying on
+process detection across nested PTYs, and clears its own report on exit.
+The workspace section keeps the project name above a summary of currently running
+Agents. All sixteen events fit into thirteen rows by pairing session start/end,
+compact before/after and subagent start/stop; paired counts retain their order
+(for example, `seen 2/0`). Receipts are cyan, positive denials/failures and unavailable
+evidence red, pending or partial reports amber, and unwired entries gray. Query includes `activity` and
+`activity_source=native_callback_hint` to identify this presentation source.
+
+`cosh --aw-query /absolute/SESSION/run-PID-TICKS` returns the same sixteen `events`
+with source, native Hook names, receipt count and separate notification-handler
+outcomes, plus the existing `effects` summary. Query is diagnostic and requires
+the current private run directory; it does not execute handlers. Restart cosh to
+load updated code and row configuration. With the AW client patch, right-click
+`qodercli` in the agents section and choose **AW details**. The popup follows the
+clicked pane and shows its Agent activity and all sixteen events. Scroll with the
+wheel, arrows or PageUp/PageDown; close with Esc or the close button. Missing or
+expired metadata is unavailable, never borrowed from another pane. These counts
+remain observations, not final enforcement or proof of model adoption.
+Official unpatched v0.9.0 does not include this popup; see the
+[Herdr integration manifest](../../../../src/aw/integrations/herdr/upstream.json)
+for patch provenance, build information and pinned digests. Workspace summaries cover every live Agent in that managed workspace, including
+split panes and other tabs. Switching focus does not change the totals. Ordinary
+shell panes do not count as Agents; exiting removes that runtime from the totals.
+Missing or more-than-three-second-old reports appear as `partial`/`unavailable`,
+not successful zeroes. The workspace name remains visible even if all metadata
+expires. This is a current-runtime summary, not retained audit history. Current-run records are removed when the managed session is cleaned up.
 
 ### Historical observer protocol example
 
@@ -617,7 +655,7 @@ v0.9.0 binary:
 export COSH_AW_CONFIG=/absolute/path/to/aw.json
 export COSH_AW_CONFIG_SHA256='<reviewed configuration digest>'
 export COSH_AW_HERDR=/absolute/path/to/herdr
-export COSH_AW_HERDR_SHA256='<official digest for the selected architecture>'
+export COSH_AW_HERDR_SHA256='<pinned digest for the selected architecture>'
 ```
 
 The digest must match the [pinned asset manifest](../../../../src/aw/integrations/herdr/upstream.json).
@@ -632,8 +670,13 @@ This configuration enables the entry for the current session; it does not change
 `/etc/shells` or an account's login shell. Selecting cosh as the login shell still
 requires explicit AW/Herdr configuration and a `qoder` command to open the terminal.
 
-This entry currently supports Linux/Bash, one pane and the configured fixed cwd;
-launching after cd to a different directory is explicitly rejected. Each launch
+The Linux/Bash entry supports Split right and New tab inside the managed workspace.
+Each new pane starts an independent cosh. Typing `qoder` starts the Agent there,
+without replaying the first invocation's arguments or nesting another Herdr.
+AW owners, run directories and metadata are separate per pane. Exiting the first
+Qoder keeps other panes alive; closing all panes/tabs in the managed workspace
+returns to the original cosh with the first Agent's exit status. Qoder still
+requires the configured fixed cwd; launching after cd elsewhere is rejected. Each launch
 owns a private server/client and pane owner using the current Rust Hook/query
 contracts. Prompt/argv data travels through private records, not interpolated shell
 commands. Herdr startup has a ten-second deadline and sessions a 24-hour limit.

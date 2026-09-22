@@ -10,7 +10,7 @@ SecCore's installed Python runtime remains a dependency of that component.
 
 This is an acceptance procedure for the experimental integration, not a claim
 that all 16 events, arbitrary plugins or final/OS-enforced protection are ready.
-Use one Linux/Bash pane and the exact configured workspace. Record the checkout
+Use Linux/Bash within one managed workspace and the exact configured directory. Record the checkout
 SHA, build commands, component versions and binary hashes with each result.
 
 ## Validated scenario
@@ -33,7 +33,8 @@ attachment change in that run; reset is not included in this acceptance result.
 
 Use a clean checkout of the candidate branch. The installed Qoder must be 1.1.47
 and already logged in. The native component versions are SecCore 0.12.0,
-Tokenless 0.8.1 and the official pinned Herdr 0.9.0 architecture asset.
+Tokenless 0.8.1 and a pinned Herdr 0.9.0 architecture build (the details popup
+requires the AW client patch).
 See the components' installation/build guides for those dependencies.
 
 Build only the integration artifacts from the repository root:
@@ -71,7 +72,7 @@ src/aw/target/release/aw-hook-cli configure \
   --output /absolute/path/aw.json
 ```
 
-The command verifies versions and the official Herdr pin, then creates a new
+The command verifies versions and the Herdr integration pin, then creates a new
 0600 profile. It never overwrites an existing output, installs components or
 changes the account's login shell. It prints an `[aw]` section: place that section
 in the existing `~/.copilot-shell/config.toml`, preserving the other settings.
@@ -163,7 +164,7 @@ candidates. Its adoption field remains unconfirmed. Missing, corrupt or incomple
 effect evidence must not be displayed as a successful zero count. Hiding the
 sidebar is different from losing the entire managed Herdr server/control socket;
 the latter ends the managed interaction. Non-Bash tool results, failed-result
-projection, multiple panes and changing away from the configured cwd remain
+projection and changing away from the configured cwd remain
 outside this acceptance slice.
 
 Keep a sanitized result and hashes, not credentials or raw private transcripts.
@@ -172,3 +173,64 @@ To disable integration, remove only the `[aw]` section and open a new cosh;
 preserve the existing model-provider settings. Delete only the profile and
 artifacts you created after no session is using them. No system registration or
 account-shell rollback is needed for this procedure.
+
+## Event rows and diagnostic details
+
+The format-2 Agent details list all sixteen AW events vertically. `seen N` counts
+validated receipts in the current attachment; `waiting` means no receipt yet,
+`not wired` means unsupported, and `not attached` means the owner source is not
+configured. `unavailable` means evidence is missing, including older sessions
+without per-event counters. `GAP!` remains visible on the first row when observation
+is incomplete. SecCore pass/deny counts accompany `tool.before`; candidate/kept
+counts accompany `tool.after`. Receipts do not prove handler success, tool
+execution or model adoption. Model-request and final safety boundaries remain
+unwired; a SecCore denial does not mark `security.violation` as implemented.
+
+A separate Qoder card shows the Agent name, pane and colored activity: blue
+`working`, amber `blocked`, and green `idle`/`done`. Activity is a bound native
+callback hint: input/tool callbacks indicate working, permission requests indicate
+blocked, and Stop indicates idle. A continuation-capable Stop handler, observation
+gap or unavailable runtime yields unknown. It does not prove an active model
+request, successful tool execution or task completion. AW reports the verified
+Qoder identity through Herdr's native Agent-state API instead of relying on
+process detection across nested PTYs, and clears its own report on exit.
+The workspace section keeps the project name above a summary of currently running
+Agents. All sixteen events fit into thirteen rows by pairing session start/end,
+compact before/after and subagent start/stop; paired counts retain their order
+(for example, `seen 2/0`). Receipts are cyan, positive denials/failures and unavailable
+evidence red, pending or partial reports amber, and unwired entries gray. Query includes `activity` and
+`activity_source=native_callback_hint` to identify this presentation source.
+
+`cosh --aw-query /absolute/SESSION/run-PID-TICKS` returns the same sixteen `events`
+with source, native Hook names, receipt count and separate notification-handler
+outcomes, plus the existing `effects` summary. Query is diagnostic and requires
+the current private run directory; it does not execute handlers. Restart cosh to
+load updated code and row configuration. With the AW client patch, right-click
+`qodercli` in the agents section and choose **AW details**. The popup follows the
+clicked pane and shows its Agent activity and all sixteen events. Scroll with the
+wheel, arrows or PageUp/PageDown; close with Esc or the close button. Missing or
+expired metadata is unavailable, never borrowed from another pane. These counts
+remain observations, not final enforcement or proof of model adoption.
+Official unpatched v0.9.0 does not include this popup; see the
+[Herdr integration manifest](../../../../src/aw/integrations/herdr/upstream.json)
+for patch provenance, build information and pinned digests. Workspace summaries cover every live Agent in that managed workspace, including
+split panes and other tabs. Switching focus does not change the totals. Ordinary
+shell panes do not count as Agents; exiting removes that runtime from the totals.
+Missing or more-than-three-second-old reports appear as `partial`/`unavailable`,
+not successful zeroes. The workspace name remains visible even if all metadata
+expires. This is a current-runtime summary, not retained audit history. Current-run records are removed when the managed session is cleaned up.
+
+### Workspace summary regression
+
+From a running Qoder, use Split right and New tab, then run `qoder` in one new
+pane. The spaces title remains the project name, and live Agent count changes
+from one to two; the other ordinary shell adds no Agent. Switch focus across all
+three panes: workspace totals remain unchanged, while each Agent's right-click
+details keep that pane's counters. Exit the second Qoder: its counts disappear
+from the live summary. Exit the first while other shells remain: spaces retains
+the project title and shows no active Agents. Close the remaining panes to return
+to the original cosh.
+
+The fixed-Herdr synthetic PTY test covers both closing orders and pauses only an
+owned test process to verify three-second report expiry and recovery. It does not
+replace real Qoder/SecCore/Tokenless combined visual acceptance.

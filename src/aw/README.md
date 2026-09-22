@@ -207,3 +207,5 @@ A checked-in default Provider policy wires real SecCore checks and native Tokenl
 compression. Run `aw-hook-cli configure` once and add its `[aw]` section to the
 existing cosh user config; daily entry remains cosh → `qoder`. See the
 [standard-entry acceptance guide](../../docs/developer-guide/en/aw/qoder-acceptance.md).
+
+The format-2 Herdr view lists sixteen event receipt states, with separate SecCore and Tokenless outcomes; its diagnostic query exposes per-event details.

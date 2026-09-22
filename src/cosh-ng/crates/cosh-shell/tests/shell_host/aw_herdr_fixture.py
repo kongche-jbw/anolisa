@@ -30,8 +30,10 @@ spec.loader.exec_module(peer)
 sys.argv = saved_argv
 
 UPSTREAM = Path(__file__).resolve().parents[5] / "aw/integrations/herdr/upstream.json"
-PIN = json.loads(UPSTREAM.read_text())["assets"][platform.machine()]["sha256"]
-assert hashlib.sha256(HERDR.read_bytes()).hexdigest() == PIN, "Herdr differs from official pin"
+PINS = json.loads(UPSTREAM.read_text())
+PIN = hashlib.sha256(HERDR.read_bytes()).hexdigest()
+assert PIN in [PINS.get(kind, {}).get(platform.machine(), {}).get("sha256")
+               for kind in ("assets", "patched_assets")], "Herdr differs from integration pins"
 TASK = Path(tempfile.mkdtemp(prefix="awh-", dir=BINARY.parent.parent))
 PANES = []
 REGISTERED = {}
@@ -60,8 +62,10 @@ def register():
             try:
                 command = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
                 cwd = os.readlink(f"/proc/{pid}/cwd")
-            except (FileNotFoundError, ProcessLookupError):
-                command, cwd = "exited during registration", "unknown"
+            except (FileNotFoundError, ProcessLookupError, PermissionError):
+                # A dying process can lose /proc/cwd access before stat disappears.
+                # Keep its recorded identity for cleanup even without this label.
+                command, cwd = "process details unavailable during registration", "unknown"
             row = {"pid": pid, "ticks": ticks, "command": command, "cwd": cwd,
                    "lifetime": "one bounded fixture case", "ports": [],
                    "stop": f"kill -TERM {pid}; wait {pid}"}
@@ -116,24 +120,53 @@ def snapshot(pane, suffix):
     return path.read_text().splitlines()
 
 
+def rpc(descriptor, method, allow_shutdown=False, **params):
+    with socket.socket(socket.AF_UNIX) as client:
+        client.settimeout(2)
+        client.connect(descriptor["socket"])
+        client.sendall((json.dumps(dict(id="fixture", method=method, params=params)) + "\n").encode())
+        data = bytearray()
+        for _ in range(128):
+            try:
+                chunk = client.recv(8192)
+            except ConnectionResetError:
+                if allow_shutdown:
+                    return None
+                raise
+            if not chunk and allow_shutdown:
+                return None
+            assert chunk, "Herdr closed before replying"
+            data.extend(chunk)
+            if b"\n" in data:
+                response = json.loads(data.split(b"\n", 1)[0])
+                assert response["id"] == "fixture", response
+                if allow_shutdown and response.get("error", {}).get("code") == "server_unavailable":
+                    return None
+                if "error" in response and method in ("pane.list", "pane.close"):
+                    for _ in range(60):
+                        for outer in PANES:
+                            if not outer.reaped:
+                                outer.drain()
+                        if any((outer.root / "multi-status").exists() for outer in PANES):
+                            break
+                        time.sleep(0.05)
+                    (TASK / "rpc-failure.json").write_text(json.dumps({
+                        "response": response,
+                        "outer_status": [(outer.root / "multi-status").read_text()
+                                         for outer in PANES if (outer.root / "multi-status").exists()],
+                    }, indent=2))
+                assert "error" not in response, response
+                return response["result"]
+        raise AssertionError("bounded metadata reply exceeded")
+
+
 def metadata(ready):
     session = Path(ready["root"]).parents[2]
     descriptor = json.loads((session / "launch.json").read_text())
-    with socket.socket(socket.AF_UNIX) as client:
-        client.settimeout(1)
-        client.connect(descriptor["socket"])
-        client.sendall(b'{"id":"fixture","method":"pane.list","params":{}}\n')
-        data = bytearray()
-        for _ in range(128):
-            data.extend(client.recv(8192))
-            if b"\n" in data:
-                response = json.loads(data.split(b"\n", 1)[0])
-                assert response["id"] == "fixture"
-                panes = response["result"]["panes"]
-                assert len(panes) == 1
-                tokens = panes[0]["tokens"]
-                return tokens if "callback_observed" in tokens.get("aw", "") else None
-        raise AssertionError("bounded metadata reply exceeded")
+    panes = rpc(descriptor, "pane.list")["panes"]
+    assert len(panes) == 1
+    tokens = panes[0]["tokens"]
+    return tokens if "seen 1" in tokens.get("aw_event_01", "") else None
 
 
 def launch_and_return(pane, before, sequence):
@@ -295,6 +328,140 @@ def login_pane():
     finish_shell(pane, before)
 
 
+def multipane(primary_first):
+    pane, before = start("multi-first" if primary_first else "multi-last")
+    pane.send('qoder; printf "%s\\n" "$?" > multi-status\n')
+    ready_path = pane.root / "ready.json"
+    wait(ready_path.exists, timeout=25)
+    first = json.loads(ready_path.read_text())
+    session = Path(first["root"]).parents[2]
+    descriptor = json.loads((session / "launch.json").read_text())
+    primary = json.loads((session / "binding.json").read_text())
+    listing = rpc(descriptor, "pane.list")["panes"]
+    workspace = listing[0]["workspace_id"]
+    dashboards = {}
+
+    def summary(name, agents, missing=0, before_count=None):
+        def current():
+            space = next(w for w in rpc(descriptor, "workspace.list")["workspaces"]
+                         if w["workspace_id"] == workspace)
+            assert space["label"] == pane.root.name, space["label"]
+            tokens = space.get("tokens", {})
+            total = "no active Agents" if agents == 0 and missing == 0 else f"live Agents {agents}:"
+            if total not in tokens.get("aw_ws_agents", ""):
+                return None
+            if f"missing {missing} " not in tokens.get("aw_ws_health", ""):
+                return None
+            if before_count is not None and f"seen {before_count}" not in tokens.get("aw_ws_03", ""):
+                return None
+            assert len(tokens) == 15, tokens
+            return tokens
+        dashboards[name] = wait(current, timeout=8)
+        return dashboards[name]
+
+    summary("one", 1)
+    split = rpc(descriptor, "pane.split", target_pane_id=primary["pane_id"], direction="right")["pane"]["pane_id"]
+    tab = rpc(descriptor, "tab.create", workspace_id=workspace)["root_pane"]["pane_id"]
+    identities = []
+    for index, pane_id in enumerate((split, tab)):
+        marker = pane.root / f"new-shell-{index}"
+        rpc(descriptor, "pane.send_text", pane_id=pane_id,
+            text=f'printf "%s\\n%s\\n%s\\n" "$$" "$COSH_AW_ROOT" "$HERDR_PANE_ID" > {marker.name}\n')
+        wait(marker.exists)
+        shell_pid, scope, reported = marker.read_text().splitlines()
+        owner = json.loads((Path(scope) / "prepared.json").read_text())["owner_pid"]
+        assert reported == pane_id and owner != pane.pid and owner != primary["shell_pid"]
+        assert int(Path(f"/proc/{shell_pid}/stat").read_text().rsplit(")", 1)[1].split()[1]) == owner
+        assert not list(Path(scope).glob("run-*")), "new pane replayed primary Qoder argv"
+        identities.append(dict(pane=pane_id, owner=owner, root=scope, shell=int(shell_pid)))
+    assert len({row["owner"] for row in identities}) == 2
+    summary("one-with-shells", 1)
+    ready_path.unlink()
+    rpc(descriptor, "pane.send_text", pane_id=split, text="qoder\n")
+    wait(ready_path.exists, timeout=15)
+    second = json.loads(ready_path.read_text())
+    assert Path(second["root"]).parent == Path(identities[0]["root"])
+    assert Path(second["root"]).parents[2] == session, "split recursively launched another Herdr"
+    assert first["root"] != second["root"]
+    rpc(descriptor, "pane.send_text", pane_id=split, text="call\n")
+    wait(lambda: (pane.root / "result-1.json").exists())
+
+    def isolated_tokens():
+        tokens = {p["pane_id"]: p["tokens"] for p in rpc(descriptor, "pane.list")["panes"]}
+        return ("seen 1" in tokens[split].get("aw_event_03", "")
+                and "seen 1" in tokens[primary["pane_id"]].get("aw_event_01", "")
+                and "seen 1" not in tokens[primary["pane_id"]].get("aw_event_03", ""))
+
+    wait(isolated_tokens, timeout=6)
+    combined = summary("two", 2, before_count=1)
+    for pane_id in (primary["pane_id"], split, tab):
+        rpc(descriptor, "pane.focus", pane_id=pane_id)
+        assert summary("focus-" + pane_id, 2, before_count=1) == combined
+    # Pause only this fixture's recorded second owner to expire its report.
+    owner = identities[0]["owner"]
+    owner_ticks = identity(owner)
+    register()
+    assert (owner, owner_ticks) in REGISTERED
+    os.kill(owner, signal.SIGSTOP)
+    try:
+        summary("stale", 1, missing=1, before_count=0)
+    finally:
+        if identity(owner) == owner_ticks:
+            os.kill(owner, signal.SIGCONT)
+    summary("recovered", 2, before_count=1)
+    rpc(descriptor, "pane.send_text", pane_id=split, text="quit\n")
+    done = pane.root / "second-done"
+    rpc(descriptor, "pane.send_text", pane_id=split, text='printf "%s\\n" "$?" > second-done\n')
+    wait(done.exists)
+    assert done.read_text().strip() == "7"
+    summary("second-exited", 1, before_count=0)
+    if primary_first:
+        rpc(descriptor, "pane.send_text", pane_id=primary["pane_id"], text="quit\n")
+        wait(lambda: (session / "finished.json").exists())
+        wait(lambda: len(rpc(descriptor, "pane.list")["panes"]) == 2)
+        assert not (pane.root / "multi-status").exists(), "primary exit killed other panes"
+        assert all(identity(row["owner"]) is not None for row in identities)
+        summary("zero", 0)
+    (TASK / f"workspace-dashboard-{primary_first}.json").write_text(json.dumps(dashboards, indent=2))
+    for index, row in enumerate(identities):
+        # Closing the final pane may race the launcher's server teardown reply.
+        # The exit status, original shell and removed owners below are the oracle.
+        trace = {"primary_first": primary_first, "closing": row["pane"],
+                 "primary_identity": identity(primary["shell_pid"]),
+                 "finished": (session / "finished.json").read_text() if (session / "finished.json").exists() else None,
+                 "panes": rpc(descriptor, "pane.list")["panes"]}
+        (TASK / f"before-close-{primary_first}-{index}.json").write_text(json.dumps(trace, indent=2))
+        try:
+            rpc(descriptor, "pane.close", pane_id=row["pane"],
+                allow_shutdown=primary_first and index == len(identities) - 1)
+        except AssertionError:
+            wait(lambda: (pane.root / "multi-status").exists(), timeout=10)
+            (TASK / "close-failure-status.json").write_text((pane.root / "multi-status").read_text())
+            raise
+    if not primary_first:
+        wait(lambda: len(rpc(descriptor, "pane.list")["panes"]) == 1)
+        rpc(descriptor, "pane.send_text", pane_id=primary["pane_id"], text="quit\n")
+    try:
+        wait(lambda: (pane.root / "multi-status").exists(), timeout=20)
+    except AssertionError:
+        (TASK / "multipane-failure.json").write_text(json.dumps({
+            "primary": primary, "workspace": workspace,
+            "panes": rpc(descriptor, "pane.list"),
+            "finished": (session / "finished.json").read_text() if (session / "finished.json").exists() else None,
+        }, indent=2))
+        raise
+    assert (pane.root / "multi-status").read_text().strip() == "7"
+    assert snapshot(pane, "multi") == before[:2] + ["preserved"]
+    assert not session.exists()
+    assert all(identity(row["owner"]) is None for row in identities)
+    (TASK / f"multipane-{primary_first}.json").write_text(json.dumps({
+        "primary_first": primary_first, "independent_panes": identities,
+        "metadata_isolated": True, "no_argv_replay": True,
+        "same_shell_return": True, "session_removed": True,
+    }, indent=2) + "\n")
+    finish_shell(pane, before)
+
+
 def cleanup():
     register()
     for pane in PANES:
@@ -348,6 +515,10 @@ if __name__ == "__main__":
         if sys.argv[3:] == ["login"]:
             login_pane()
             print("PASS: login profile once, non-login pane bashrc, same shell return", flush=True)
+        elif sys.argv[3:] == ["multipane"]:
+            multipane(False)
+            multipane(True)
+            print("PASS: split/tab owners, local Qoder, isolated metadata, both close orders, original shell return", flush=True)
         else:
             assert not sys.argv[3:], "unknown fixture case"
             cases()

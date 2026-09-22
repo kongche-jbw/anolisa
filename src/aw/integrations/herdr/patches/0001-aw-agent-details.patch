@@ -1,0 +1,622 @@
+diff --git a/src/client/shell/composition.rs b/src/client/shell/composition.rs
+index a80ebb3..800c87e 100644
+--- a/src/client/shell/composition.rs
++++ b/src/client/shell/composition.rs
+@@ -572,6 +572,8 @@ impl ClientShellState {
+                 self.hits.navigator_rows = rendered.navigator_rows;
+                 self.hits.worktree_search = rendered.worktree_search;
+                 self.hits.worktree_rows = rendered.worktree_rows;
++                self.hits.aw_details_popup = rendered.aw_details_popup;
++                self.hits.aw_details_max_scroll = rendered.aw_details_max_scroll;
+                 self.hits.help_popup = rendered.help_popup;
+                 self.hits.help_scrollbar = rendered.help_scrollbar;
+                 self.hits.help_scroll_metrics = rendered.help_scroll_metrics;
+diff --git a/src/client/shell/context_menu.rs b/src/client/shell/context_menu.rs
+index af271bb..c0ac977 100644
+--- a/src/client/shell/context_menu.rs
++++ b/src/client/shell/context_menu.rs
+@@ -71,6 +71,7 @@ impl ClientContextMenuOverlay {
+                         },
+                         Action::ToggleRightClickPassthrough,
+                     ),
++                    item("AW details", Action::AwDetails),
+                     item("Close pane", Action::ClosePane),
+                 ]);
+                 items
+@@ -382,6 +383,12 @@ impl ClientShellState {
+         };
+ 
+         match action {
++            ClientContextMenuAction::AwDetails => {
++                self.overlay = Some(ClientShellOverlay::AwDetails(ClientAwDetailsOverlay {
++                    pane_id,
++                    scroll: 0,
++                }));
++            }
+             ClientContextMenuAction::RenamePane => {
+                 let label = self.snapshot.as_deref().and_then(|snapshot| {
+                     snapshot
+diff --git a/src/client/shell/input_source.rs b/src/client/shell/input_source.rs
+index 7997c72..e8df1cc 100644
+--- a/src/client/shell/input_source.rs
++++ b/src/client/shell/input_source.rs
+@@ -7,6 +7,7 @@ impl ClientShellState {
+                 overlay,
+                 ClientShellOverlay::ConfirmClose(_)
+                     | ClientShellOverlay::Help(_)
++                    | ClientShellOverlay::AwDetails(_)
+                     | ClientShellOverlay::Navigator(_)
+                     | ClientShellOverlay::WorktreeRemove(_)
+                     | ClientShellOverlay::ContextMenu(_)
+diff --git a/src/client/shell/mouse.rs b/src/client/shell/mouse.rs
+index cd4a6c1..e1e9c6d 100644
+--- a/src/client/shell/mouse.rs
++++ b/src/client/shell/mouse.rs
+@@ -1462,6 +1462,21 @@ impl ClientShellState {
+             }
+             return;
+         }
++        if matches!(self.overlay, Some(ClientShellOverlay::AwDetails(_))) {
++            match mouse.kind {
++                MouseEventKind::ScrollUp => self.scroll_aw_details(-3),
++                MouseEventKind::ScrollDown => self.scroll_aw_details(3),
++                MouseEventKind::Down(MouseButton::Left)
++                    if super::contains(self.hits.overlay_cancel, point)
++                        || !super::contains(self.hits.aw_details_popup, point) =>
++                {
++                    self.overlay = None;
++                }
++                _ => {}
++            }
++            outcome.repaint = true;
++            return;
++        }
+         if matches!(self.overlay, Some(ClientShellOverlay::Help(_))) {
+             match mouse.kind {
+                 MouseEventKind::ScrollUp => {
+@@ -1718,6 +1733,37 @@ impl ClientShellState {
+                 if !self.config.mouse_capture {
+                     return;
+                 }
++                if let Some((endpoint_id, pane_id)) = self
++                    .hits
++                    .endpoint_agents
++                    .iter()
++                    .find(|(rect, _, _)| super::contains(*rect, point))
++                    .map(|(_, endpoint_id, pane_id)| (endpoint_id.clone(), pane_id.clone()))
++                {
++                    if endpoint_id == self.active_endpoint_id
++                        && self.endpoint_is_online(&endpoint_id)
++                    {
++                        self.open_pane_context_menu(pane_id, mouse.column, mouse.row);
++                    } else {
++                        let label = self.endpoint_label(&endpoint_id).to_owned();
++                        self.receive_endpoint_unavailable(format!(
++                            "Activate {label} to inspect this agent"
++                        ));
++                    }
++                    outcome.repaint = true;
++                    return;
++                }
++                if let Some(pane_id) = self
++                    .hits
++                    .agents
++                    .iter()
++                    .find(|(rect, _)| super::contains(*rect, point))
++                    .map(|(_, pane_id)| pane_id.clone())
++                {
++                    self.open_pane_context_menu(pane_id, mouse.column, mouse.row);
++                    outcome.repaint = true;
++                    return;
++                }
+                 let workspace_id = (!self.sidebar_collapsed)
+                     .then(|| self.active_endpoint_workspace_at(point))
+                     .flatten();
+diff --git a/src/client/shell/overlay_input.rs b/src/client/shell/overlay_input.rs
+index db089f4..763639d 100644
+--- a/src/client/shell/overlay_input.rs
++++ b/src/client/shell/overlay_input.rs
+@@ -1,6 +1,16 @@
+ use super::*;
+ 
+ impl ClientShellState {
++    pub(super) fn scroll_aw_details(&mut self, delta: isize) {
++        if let Some(ClientShellOverlay::AwDetails(details)) = self.overlay.as_mut() {
++            details.scroll = details
++                .scroll
++                .min(self.hits.aw_details_max_scroll)
++                .saturating_add_signed(delta)
++                .min(self.hits.aw_details_max_scroll);
++        }
++    }
++
+     pub(super) fn dismiss_product_announcement(&mut self, outcome: &mut ClientShellInput) {
+         let announcement = match self.overlay.take() {
+             Some(ClientShellOverlay::ProductAnnouncement(announcement)) => announcement,
+@@ -472,6 +482,21 @@ impl ClientShellState {
+     ) {
+         use crossterm::event::KeyModifiers;
+ 
++        if matches!(self.overlay, Some(ClientShellOverlay::AwDetails(_))) {
++            match key.code {
++                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => self.overlay = None,
++                KeyCode::Up | KeyCode::Char('k') => self.scroll_aw_details(-1),
++                KeyCode::Down | KeyCode::Char('j') => self.scroll_aw_details(1),
++                KeyCode::PageUp => self.scroll_aw_details(-8),
++                KeyCode::PageDown => self.scroll_aw_details(8),
++                KeyCode::Home => self.scroll_aw_details(isize::MIN),
++                KeyCode::End => self.scroll_aw_details(isize::MAX),
++                _ => {}
++            }
++            outcome.repaint = true;
++            return;
++        }
++
+         if matches!(self.overlay, Some(ClientShellOverlay::Onboarding)) {
+             if matches!(
+                 key.code,
+diff --git a/src/client/shell/overlays.rs b/src/client/shell/overlays.rs
+index faf252a..73d2949 100644
+--- a/src/client/shell/overlays.rs
++++ b/src/client/shell/overlays.rs
+@@ -1,5 +1,6 @@
+ use super::*;
+ 
++mod aw_details;
+ mod settings_overlay;
+ mod worktree_overlays;
+ 
+@@ -13,6 +14,8 @@ pub(crate) struct OverlayRender {
+     pub(crate) navigator_rows: Vec<(Rect, ClientNavigatorTarget)>,
+     pub(crate) worktree_search: Rect,
+     pub(crate) worktree_rows: Vec<(Rect, usize)>,
++    pub(crate) aw_details_popup: Rect,
++    pub(crate) aw_details_max_scroll: usize,
+     pub(crate) help_popup: Rect,
+     pub(crate) help_scrollbar: Rect,
+     pub(crate) help_scroll_metrics: Option<crate::pane::ScrollMetrics>,
+@@ -60,6 +63,7 @@ pub(crate) fn render_client_overlay(
+         ClientShellOverlay::Rename(v) => render_rename_overlay(b, v, p),
+         ClientShellOverlay::ConfirmClose(v) => render_confirm_close_overlay(b, v, p),
+         ClientShellOverlay::Help(v) => render_help_overlay(b, v, k, p),
++        ClientShellOverlay::AwDetails(v) => aw_details::render(b, v, s, p),
+         ClientShellOverlay::Navigator(v) => {
+             render_navigator_overlay(b, v, endpoints, active_endpoint_id, p)
+         }
+diff --git a/src/client/shell/state.rs b/src/client/shell/state.rs
+index 81845d3..5a86cfa 100644
+--- a/src/client/shell/state.rs
++++ b/src/client/shell/state.rs
+@@ -179,6 +179,8 @@ pub(super) struct ShellHitMap {
+     pub(super) navigator_rows: Vec<(Rect, ClientNavigatorTarget)>,
+     pub(super) worktree_search: Rect,
+     pub(super) worktree_rows: Vec<(Rect, usize)>,
++    pub(super) aw_details_popup: Rect,
++    pub(super) aw_details_max_scroll: usize,
+     pub(super) help_popup: Rect,
+     pub(super) help_scrollbar: Rect,
+     pub(super) help_scroll_metrics: Option<crate::pane::ScrollMetrics>,
+@@ -335,6 +337,7 @@ pub(super) enum ClientShellOverlayKind {
+     Rename,
+     ConfirmClose,
+     Help,
++    AwDetails,
+     Navigator,
+     WorktreeCreate,
+     WorktreeOpen,
+@@ -581,6 +584,7 @@ pub(super) enum ClientContextMenuAction {
+     Zoom,
+     ToggleRightClickPassthrough,
+     ClosePane,
++    AwDetails,
+ }
+ 
+ #[derive(Debug)]
+@@ -625,6 +629,12 @@ pub(super) struct ClientConfirmCloseOverlay {
+     pub(super) detail: String,
+ }
+ 
++#[derive(Debug)]
++pub(super) struct ClientAwDetailsOverlay {
++    pub(super) pane_id: String,
++    pub(super) scroll: usize,
++}
++
+ #[derive(Debug)]
+ pub(super) enum ClientShellOverlay {
+     Onboarding,
+@@ -633,6 +643,7 @@ pub(super) enum ClientShellOverlay {
+     Rename(ClientRenameOverlay),
+     ConfirmClose(ClientConfirmCloseOverlay),
+     Help(ClientHelpOverlay),
++    AwDetails(ClientAwDetailsOverlay),
+     Navigator(ClientNavigatorOverlay),
+     WorktreeCreate(ClientWorktreeCreateOverlay),
+     WorktreeOpen(ClientWorktreeOpenOverlay),
+@@ -651,6 +662,7 @@ impl ClientShellOverlay {
+             Self::Rename(_) => ClientShellOverlayKind::Rename,
+             Self::ConfirmClose(_) => ClientShellOverlayKind::ConfirmClose,
+             Self::Help(_) => ClientShellOverlayKind::Help,
++            Self::AwDetails(_) => ClientShellOverlayKind::AwDetails,
+             Self::Navigator(_) => ClientShellOverlayKind::Navigator,
+             Self::WorktreeCreate(_) => ClientShellOverlayKind::WorktreeCreate,
+             Self::WorktreeOpen(_) => ClientShellOverlayKind::WorktreeOpen,
+diff --git a/src/client/shell/tests/mod.rs b/src/client/shell/tests/mod.rs
+index 497ce2c..c2c5c38 100644
+--- a/src/client/shell/tests/mod.rs
++++ b/src/client/shell/tests/mod.rs
+@@ -209,6 +209,7 @@ fn surface_with_popup() -> PaneSurfaceFrame {
+ }
+ 
+ mod agents_worktrees_notifications;
++mod aw_details;
+ mod chrome_context;
+ mod copy;
+ mod endpoint_requests;
+diff --git a/src/client/shell/aw_details.rs b/src/client/shell/aw_details.rs
+new file mode 100644
+index 0000000..ca0752b
+--- /dev/null
++++ b/src/client/shell/aw_details.rs
+@@ -0,0 +1,181 @@
++//! Render live AW metadata for one explicitly selected agent pane.
++
++use super::*;
++
++const EVENTS: [&str; 16] = [
++    "session.start",
++    "input.submit",
++    "tool.before",
++    "tool.after",
++    "permission.request",
++    "compact.before",
++    "compact.after",
++    "subagent.start",
++    "subagent.stop",
++    "turn.stop",
++    "session.end",
++    "model.before_request",
++    "runtime.observed",
++    "runtime.exited",
++    "security.violation",
++    "coverage.changed",
++];
++
++pub(super) fn render(
++    buffer: &mut Buffer,
++    details: &ClientAwDetailsOverlay,
++    snapshot: &ClientShellSnapshot,
++    palette: &Palette,
++) -> Option<OverlayRender> {
++    use ratatui::text::Line;
++    use ratatui::widgets::{Paragraph, Widget, Wrap};
++
++    let popup = popup(buffer.area, 100, 27)?;
++    let inner = panel(buffer, popup, palette.accent, palette.panel_bg)?;
++    let normal = Style::default().fg(palette.text).bg(palette.panel_bg);
++    put_text(
++        buffer,
++        inner.x,
++        inner.y,
++        inner.width.saturating_sub(13),
++        "AW details",
++        normal.add_modifier(Modifier::BOLD),
++    );
++    let close = Rect::new(
++        inner.right().saturating_sub(11).max(inner.x),
++        inner.y,
++        inner.width.min(11),
++        1,
++    );
++    button(
++        buffer,
++        close,
++        " esc close ",
++        Style::default().fg(contrast(palette)).bg(palette.accent),
++    );
++    let body = Rect::new(
++        inner.x,
++        inner.y.saturating_add(2),
++        inner.width,
++        inner.height.saturating_sub(3),
++    );
++    let agent = snapshot
++        .agents
++        .iter()
++        .find(|agent| agent.pane_id == details.pane_id);
++    let mut lines = vec![Line::raw(format!("Pane: {}", details.pane_id))];
++    if let Some(agent) = agent {
++        let name = agent
++            .display_agent
++            .as_deref()
++            .or(agent.agent.as_deref())
++            .unwrap_or("unknown");
++        lines.push(Line::raw(format!(
++            "Agent: {name} / {}",
++            status_text(agent.agent_status)
++        )));
++    } else {
++        lines.push(Line::raw(
++            "Agent: unavailable (pane exited or no current report)",
++        ));
++    }
++    lines.push(Line::raw(
++        "Live AW report; receipts do not prove final enforcement or adoption.",
++    ));
++    lines.push(Line::raw(""));
++    for (index, event) in EVENTS.iter().enumerate() {
++        let key = format!("aw_event_{:02}", index + 1);
++        let value = agent
++            .and_then(|agent| agent.tokens.iter().find(|(name, _)| name == &key))
++            .map(|(_, value)| value.clone())
++            .unwrap_or_else(|| format!("{event}: unavailable"));
++        let color = event_color(&value, palette);
++        lines.push(Line::styled(value, normal.fg(color)));
++    }
++    let paragraph = Paragraph::new(lines)
++        .style(normal)
++        .wrap(Wrap { trim: false });
++    let total_rows = paragraph.line_count(body.width.max(1));
++    let max_scroll = total_rows.saturating_sub(usize::from(body.height));
++    let scroll = details.scroll.min(max_scroll).min(usize::from(u16::MAX));
++    paragraph.scroll((scroll as u16, 0)).render(body, buffer);
++    if inner.height > 2 {
++        put_text(
++            buffer,
++            inner.x,
++            inner.bottom() - 1,
++            inner.width,
++            &format!(
++                "scroll: arrows / PgUp PgDn / wheel  |  {}-{} of {total_rows}",
++                scroll + 1,
++                (scroll + usize::from(body.height)).min(total_rows)
++            ),
++            Style::default().fg(palette.overlay0).bg(palette.panel_bg),
++        );
++    }
++    Some(OverlayRender {
++        cancel: close,
++        aw_details_popup: popup,
++        aw_details_max_scroll: max_scroll,
++        ..Default::default()
++    })
++}
++
++fn event_color(value: &str, palette: &Palette) -> ratatui::style::Color {
++    let count = |label: &str| {
++        value
++            .split_once(label)
++            .and_then(|(_, tail)| tail.split_whitespace().next())
++            .and_then(|count| count.parse::<u64>().ok())
++    };
++    if value.contains("failed")
++        || value.contains("unavailable")
++        || value.contains("GAP!")
++        || count("deny ").is_some_and(|count| count > 0)
++    {
++        palette.red
++    } else if value.contains("pending")
++        || value.contains("waiting")
++        || value.contains("not wired")
++        || value.contains("not attached")
++    {
++        palette.yellow
++    } else if count("pass ").is_some_and(|count| count > 0) && count("deny ") == Some(0) {
++        palette.green
++    } else if value.contains("seen ") {
++        palette.blue
++    } else {
++        palette.overlay0
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn aw_details_colors_distinguish_denial_from_zero_and_missing_evidence() {
++        let palette = ClientShellConfig::from_config(&Config::default()).palette;
++        assert_eq!(
++            event_color("tool.before: seen 1 / pass 1 deny 0", &palette),
++            palette.green
++        );
++        assert_eq!(
++            event_color("tool.before: seen 1 / pass 0 deny 1", &palette),
++            palette.red
++        );
++        assert_eq!(
++            event_color("tool.before: seen 1 / pending 1", &palette),
++            palette.yellow
++        );
++        assert_eq!(event_color("tool.after: seen 1", &palette), palette.blue);
++        assert_eq!(
++            event_color("tool.after: evidence unavailable", &palette),
++            palette.red
++        );
++        assert_eq!(
++            event_color("security.violation: final not wired", &palette),
++            palette.yellow
++        );
++    }
++}
+diff --git a/src/client/shell/tests/aw_details.rs b/src/client/shell/tests/aw_details.rs
+new file mode 100644
+index 0000000..10f44de
+--- /dev/null
++++ b/src/client/shell/tests/aw_details.rs
+@@ -0,0 +1,174 @@
++use super::*;
++
++fn state_with_aw_agents() -> ClientShellState {
++    let mut projected = snapshot();
++    let mut second = projected.panes[0].clone();
++    second.pane_id = "pane_2".into();
++    second.focused = false;
++    projected.panes.push(second);
++    projected.agents = (1..=2)
++        .map(|index| ClientShellAgent {
++            pane_id: format!("pane_{index}"),
++            workspace_id: "ws_1".into(),
++            tab_id: "tab_1".into(),
++            name: Some("qodercli".into()),
++            display_agent: None,
++            agent: Some("qodercli".into()),
++            title: None,
++            terminal_title: None,
++            terminal_title_stripped: None,
++            agent_status: AgentStatus::Working,
++            state_change_seq: index,
++            state_labels: Vec::new(),
++            tokens: vec![(
++                "aw_event_03".into(),
++                format!("tool.before: pane-{index} / pass 0 deny {index}"),
++            )],
++            focused: index == 1,
++        })
++        .collect();
++    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
++    state.set_snapshot(Box::new(projected));
++    state.set_pane_surface(surface());
++    state.compose(106, 30).expect("agent sidebar");
++    state
++}
++
++fn mouse(state: &mut ClientShellState, kind: MouseEventKind, rect: Rect) -> ClientShellInput {
++    state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
++        kind,
++        column: rect.x,
++        row: rect.y,
++        modifiers: KeyModifiers::empty(),
++    })])
++}
++
++fn text(frame: &FrameData) -> String {
++    frame
++        .cells
++        .chunks(usize::from(frame.width))
++        .map(|row| {
++            row.iter()
++                .map(|cell| cell.symbol.as_str())
++                .collect::<String>()
++        })
++        .collect::<Vec<_>>()
++        .join("\n")
++}
++
++fn open_details(state: &mut ClientShellState, pane_id: &str) {
++    let rect = state
++        .hits
++        .agents
++        .iter()
++        .find(|(_, id)| id == pane_id)
++        .map(|(rect, _)| *rect)
++        .expect("agent row");
++    let outcome = mouse(state, MouseEventKind::Down(MouseButton::Right), rect);
++    assert!(outcome.requests.is_empty() && outcome.actions.is_empty());
++    let index = match &state.overlay {
++        Some(ClientShellOverlay::ContextMenu(menu)) => {
++            assert!(
++                matches!(&menu.target, ClientContextMenuTarget::Pane { pane_id: target, .. } if target == pane_id)
++            );
++            menu.items()
++                .iter()
++                .position(|item| item.action == ClientContextMenuAction::AwDetails)
++                .expect("AW details action")
++        }
++        _ => panic!("pane menu from agent row"),
++    };
++    state.compose(106, 30).expect("agent context menu");
++    let row = state.hits.context_menu_rows[index].0;
++    let outcome = mouse(state, MouseEventKind::Down(MouseButton::Left), row);
++    assert!(outcome.requests.is_empty() && outcome.actions.is_empty());
++}
++
++#[test]
++fn aw_details_right_click_uses_nonfocused_agent_pane() {
++    let mut state = state_with_aw_agents();
++    open_details(&mut state, "pane_2");
++    let frame = state.compose(106, 30).expect("AW details");
++    let rendered = text(&frame);
++    assert!(rendered.contains("Pane: pane_2"));
++    assert!(rendered.contains("Agent: qodercli / working"));
++    assert!(rendered.contains("tool.before: pane-2 / pass 0 deny 2"));
++    assert!(!rendered.contains("tool.before: pane-1"));
++    assert!(rendered.contains("security.violation: unavailable"));
++    assert!(rendered.contains("coverage.changed: unavailable"));
++    assert_eq!(
++        state.snapshot.as_ref().unwrap().focused_pane_id.as_deref(),
++        Some("pane_1")
++    );
++    let outcome = state.handle_input_bytes(b"\x1b");
++    assert!(state.overlay.is_none());
++    assert!(outcome.requests.is_empty() && outcome.actions.is_empty());
++}
++
++#[test]
++fn aw_details_live_expiry_does_not_retain_success() {
++    let mut state = state_with_aw_agents();
++    open_details(&mut state, "pane_2");
++    let mut update = state.snapshot.as_deref().unwrap().clone();
++    update.revision += 1;
++    update.agents[1].tokens.clear();
++    let mut updated_surface = surface();
++    updated_surface.projection_revision = update.revision;
++    state.set_snapshot(Box::new(update));
++    state.set_pane_surface(updated_surface);
++    let frame = state.compose(106, 30).expect("expired AW details");
++    let rendered = text(&frame);
++    assert!(rendered.contains("tool.before: unavailable"));
++    assert!(!rendered.contains("deny 2"));
++    let mut update = state.snapshot.as_deref().unwrap().clone();
++    update.revision += 1;
++    update.agents.retain(|agent| agent.pane_id != "pane_2");
++    let mut updated_surface = surface();
++    updated_surface.projection_revision = update.revision;
++    state.set_snapshot(Box::new(update));
++    state.set_pane_surface(updated_surface);
++    let rendered = text(&state.compose(106, 30).expect("removed agent"));
++    assert!(rendered.contains("Agent: unavailable"));
++    assert!(rendered.contains("Pane: pane_2"));
++}
++
++#[test]
++fn aw_details_scrolls_and_closes_with_mouse() {
++    let mut state = state_with_aw_agents();
++    open_details(&mut state, "pane_2");
++    state.compose(62, 15).expect("narrow details");
++    assert!(state.hits.aw_details_max_scroll > 0);
++    let popup = state.hits.aw_details_popup;
++    mouse(&mut state, MouseEventKind::ScrollDown, popup);
++    assert!(
++        matches!(&state.overlay, Some(ClientShellOverlay::AwDetails(details)) if details.scroll == 3)
++    );
++    let mut outcome = ClientShellInput::default();
++    state.route_overlay_key(
++        &crate::input::TerminalKey::new(KeyCode::End, KeyModifiers::empty()),
++        &mut outcome,
++    );
++    let rendered = text(&state.compose(62, 15).expect("last detail row"));
++    assert!(rendered.contains("coverage.changed: unavailable"));
++    state.compose(106, 30).expect("resized details");
++    let close = state.hits.overlay_cancel;
++    let outcome = mouse(&mut state, MouseEventKind::Down(MouseButton::Left), close);
++    assert!(state.overlay.is_none());
++    assert!(outcome.requests.is_empty() && outcome.actions.is_empty());
++}
++
++#[test]
++fn aw_details_remote_row_does_not_bind_local_same_id() {
++    let mut state = state_with_aw_agents();
++    let row = state.hits.agents[0].0;
++    state.hits.endpoint_agents.push((
++        row,
++        ClientEndpointId::Ssh(
++            crate::client::endpoint::ProfileId::parse("0123456789abcdef0123456789abcdef").unwrap(),
++        ),
++        "pane_1".into(),
++    ));
++    let outcome = mouse(&mut state, MouseEventKind::Down(MouseButton::Right), row);
++    assert!(state.overlay.is_none());
++    assert!(outcome.requests.is_empty() && outcome.actions.is_empty());
++}

@@ -34,6 +34,7 @@ pub(super) fn callback(
     if state.notification_sequence >= 1024 {
         return Err(Error::Profile("notification capacity reached"));
     }
+    let previous_attachment = state.attachment;
     if name == EventName::SessionStart {
         if let Err(error) = hooks::start(&mut state, session, payload) {
             state.gap = true;
@@ -57,6 +58,9 @@ pub(super) fn callback(
         state.attachment = 1;
     } else if state.session_id.as_deref() != Some(session) || !state.attached {
         return Err(Error::Profile("callback belongs to an inactive attachment"));
+    }
+    if previous_attachment != state.attachment || state.notification_sequence == 0 {
+        state.event_counts = Some(Default::default());
     }
     state.notification_sequence += 1;
     let tool = payload["tool_use_id"].as_str().map(str::to_owned);
@@ -97,7 +101,6 @@ pub(super) fn callback(
     if name == EventName::SessionEnd {
         state.attached = false;
     }
-    storage::replace(&root.join("state.json"), &state)?;
     let event = Notification {
         format: 1,
         event: name,
@@ -116,6 +119,14 @@ pub(super) fn callback(
         payload: payload.clone(),
     };
     event.validate().map_err(evidence)?;
+    if let Some(counts) = &mut state.event_counts {
+        *counts.entry(name).or_default() += 1;
+    }
+    state
+        .activity
+        .observe(name, binding.prepared.config.stop_response.is_some());
+    storage::replace(&root.join("state.json"), &state)?;
+
     let routes = binding
         .prepared
         .config
@@ -350,6 +361,7 @@ pub(super) fn query(root: &Path, binding: &Binding, state: &State) -> Result<Val
     } else {
         json!({"status":"not_configured"})
     };
+    let mut event_handlers = std::collections::BTreeMap::new();
     for (index, entry) in fs::read_dir(root.join("notifications"))?.enumerate() {
         if index >= 1024 {
             return Err(Error::Evidence);
@@ -358,6 +370,12 @@ pub(super) fn query(root: &Path, binding: &Binding, state: &State) -> Result<Val
         if value["event"]["session_epoch"] != state.attachment {
             continue;
         }
+        let event: EventName =
+            serde_json::from_value(value["event"]["event"].clone()).map_err(evidence)?;
+        let handlers = event_handlers
+            .entry(event)
+            .or_insert_with(super::event_view::Handlers::default);
+        handlers.record(value["status"].as_str())?;
         match value["status"].as_str() {
             Some("completed") => completed += 1,
             Some("failed") => failed += 1,
@@ -367,7 +385,7 @@ pub(super) fn query(root: &Path, binding: &Binding, state: &State) -> Result<Val
     }
     Ok(
         json!({"format":2,"profile":"qoder-1.1.47/lifecycle-notify-v1",
-        "runtime_id":binding.runtime_id,"runtime_generation":1,"agent_pid":binding.agent_pid,
+        "runtime_id":binding.runtime_id,"runtime_generation":1,"agent_pid":binding.agent_pid,"agent_start_ticks":binding.agent_ticks,
         "runtime_alive":alive,"runtime_status":if alive {"observed_running"} else {"exited_or_unavailable"},
         "exit_status":null,"owner_observation":runtime,"runtime_observer":owner,
         "session_id":state.session_id,"attachment":state.attachment,
@@ -376,12 +394,15 @@ pub(super) fn query(root: &Path, binding: &Binding, state: &State) -> Result<Val
         "bridge_status":if state.attachment == 0 {"awaiting_native_callback"} else {"callback_observed"},
         "calls":completed+failed+pending,"observed":completed,"failed":failed,"pending":pending,
         "callbacks_in_runtime":state.notification_sequence,
+        "activity":if alive && state.attached && !state.gap {state.activity} else {super::activity::Activity::Unknown},
+        "activity_source":"native_callback_hint",
         "observation_gap":state.gap,"effect":if binding.prepared.config.tool_guard.is_some() {"experimental_native_bash_guard"} else if binding.prepared.config.input_response.is_some() {"experimental_native_input_response"} else if binding.prepared.config.stop_response.is_some() {"experimental_native_stop_response"} else if binding.prepared.config.tool_response.is_some() {"experimental_native_tool_response"} else {"notify_only"},
         "tool_guard":if binding.prepared.config.tool_guard.is_some() {"configured_not_certified"} else {"not_configured"},
         "input_response":if binding.prepared.config.input_response.is_some() {"experimental_native_response"} else {"not_configured"},
         "stop_response":if binding.prepared.config.stop_response.is_some() {"experimental_native_response"} else {"not_configured"},
         "tool_response":if binding.prepared.config.tool_response.is_some() {"experimental_bash_result_response"} else {"not_configured"},
         "replacement":if binding.prepared.config.tool_response.is_some() {"experimental_bash_success_text"} else {"unsupported"},
+        "events":super::event_view::snapshot(binding,state,&event_handlers),
         "effects":super::effects::snapshot(root,binding,state),
         "adoption":"unsupported","os_coverage":"not_attached",
         "required_safety":"unsupported"}),

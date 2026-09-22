@@ -277,12 +277,25 @@ fn missing_herdr_socket_has_bounded_drop_and_no_handler_calls() {
 
 #[test]
 fn herdr_publishes_only_verified_pane_observation_counters() {
+    assert_herdr_projection(false);
+}
+
+#[test]
+fn herdr_publishes_sixteen_event_rows_without_native_payloads() {
+    assert_herdr_projection(true);
+}
+
+fn assert_herdr_projection(event_rows: bool) {
     use std::{
         io::{BufRead, BufReader, Write},
         os::unix::net::UnixListener,
         sync::mpsc,
     };
-    let dir = fixture(OBSERVER);
+    let dir = if event_rows {
+        tool_guard::fixture_guard(None, tool_guard::SCANNER)
+    } else {
+        fixture(OBSERVER)
+    };
     callback(&dir.0, event(&dir, "SessionStart", "s1", "t1")).unwrap();
     callback(&dir.0, event(&dir, "PreToolUse", "s1", "t1")).unwrap();
     callback(&dir.0, event(&dir, "PostToolUse", "s1", "t1")).unwrap();
@@ -291,13 +304,18 @@ fn herdr_publishes_only_verified_pane_observation_counters() {
     for name in ["binding.json", "state.json", "state.lock", "calls"] {
         fs::rename(dir.0.join(name), run.join(name)).unwrap();
     }
+    if event_rows {
+        for name in ["notifications", "tool-check-journal"] {
+            fs::rename(dir.0.join(name), run.join(name)).unwrap();
+        }
+    }
     let socket = fs::canonicalize(&dir.0).unwrap().join("herdr.sock");
     let listener = UnixListener::bind(&socket).unwrap();
     listener.set_nonblocking(true).unwrap();
     let (sender, receiver) = mpsc::channel();
     let server = thread::spawn(move || {
         let deadline = Instant::now() + Duration::from_secs(3);
-        for _ in 0..4 {
+        for _ in 0..if event_rows { 5 } else { 4 } {
             let mut connection = loop {
                 match listener.accept() {
                     Ok((connection, _)) => break connection,
@@ -321,16 +339,21 @@ fn herdr_publishes_only_verified_pane_observation_counters() {
                     assert_eq!(request["params"]["pane_id"], "test-pane");
                     json!({"process_info":{"shell_pid":std::process::id()}})
                 }
-                "pane.report_metadata" => {
-                    assert_eq!(request["params"]["pane_id"], "test-pane");
-                    sender.send(request["params"].clone()).unwrap();
+                "pane.clear_agent_authority" => {
+                    assert_eq!(request["params"]["source"], "anolisa.aw");
+                    assert!(request["params"]["seq"].as_u64().is_some());
                     json!({})
                 }
-                "pane.list" => {
-                    json!({"panes":[{"pane_id":"test-pane","workspace_id":"workspace-one"}]})
+                "pane.report_agent" => {
+                    assert!(event_rows);
+                    assert_eq!(request["params"]["pane_id"], "test-pane");
+                    assert_eq!(request["params"]["agent"], "qodercli");
+                    assert_eq!(request["params"]["source"], "anolisa.aw");
+                    assert_eq!(request["params"]["state"], "working");
+                    json!({})
                 }
-                "workspace.report_metadata" => {
-                    assert_eq!(request["params"]["workspace_id"], "workspace-one");
+                "pane.report_metadata" => {
+                    assert_eq!(request["params"]["pane_id"], "test-pane");
                     sender.send(request["params"].clone()).unwrap();
                     json!({})
                 }
@@ -346,18 +369,36 @@ fn herdr_publishes_only_verified_pane_observation_counters() {
     });
     let bridge = HerdrBridge::start(dir.0.join("scope"), socket, "test-pane".into()).unwrap();
     let report = receiver.recv_timeout(Duration::from_secs(3)).unwrap();
-    assert_eq!(
-        report["tokens"]["aw_observation"],
-        "1 observed / 0 failed / 0 pending"
-    );
+    if event_rows {
+        let tokens = report["tokens"].as_object().unwrap();
+        assert_eq!(tokens.len(), 16);
+        assert!(tokens
+            .values()
+            .all(|v| v.as_str().unwrap().chars().count() <= 80));
+        assert_eq!(tokens["aw_event_01"], "session.start: seen 1");
+        assert_eq!(tokens["aw_event_03"], "tool.before: seen 1 / pass 1 deny 0");
+        assert_eq!(tokens["aw_event_12"], "model.before_request: not wired");
+        assert!(!report.to_string().contains("private"));
+    } else {
+        assert_eq!(
+            report["tokens"]["aw_observation"],
+            "1 observed / 0 failed / 0 pending"
+        );
+    }
     assert_eq!(report["ttl_ms"], 3000);
-    let workspace = receiver.recv_timeout(Duration::from_secs(3)).unwrap();
-    assert_eq!(workspace["tokens"], report["tokens"]);
-    assert_eq!(workspace["seq"], report["seq"]);
-    assert_eq!(workspace["ttl_ms"], report["ttl_ms"]);
+    let snapshot: Value =
+        serde_json::from_slice(&fs::read(dir.0.join("scope/viewer-snapshot.json")).unwrap())
+            .unwrap();
+    assert_eq!(snapshot["pane_id"], "test-pane");
+    assert_eq!(snapshot["owner_pid"], std::process::id());
+    assert_eq!(snapshot["observed_at_ms"], report["seq"]);
+    assert_eq!(snapshot["view"]["format"], if event_rows { 2 } else { 1 });
+    assert!(snapshot["view"]["agent_start_ticks"].as_u64().is_some());
     drop(bridge);
     server.join().unwrap();
-    assert_eq!(fs::read_to_string(dir.0.join("called")).unwrap(), "s1");
+    if !event_rows {
+        assert_eq!(fs::read_to_string(dir.0.join("called")).unwrap(), "s1");
+    }
 }
 
 #[path = "interactive/lifecycle.rs"]

@@ -5,7 +5,33 @@
   "license": "Apache-2.0",
   "license_sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
   "assets": {
-    "aarch64": {"name": "herdr-linux-aarch64", "sha256": "9c8db20fb7e7427b138d5367113f1621ffd319f2f65d6f009e2594029115f0d2"},
-    "x86_64": {"name": "herdr-linux-x86_64", "sha256": "4fa1a01158dd8043da92d31b270780b0dcc10603038d9b61cac4d81ab63fb71f"}
+    "aarch64": {
+      "name": "herdr-linux-aarch64",
+      "sha256": "9c8db20fb7e7427b138d5367113f1621ffd319f2f65d6f009e2594029115f0d2"
+    },
+    "x86_64": {
+      "name": "herdr-linux-x86_64",
+      "sha256": "4fa1a01158dd8043da92d31b270780b0dcc10603038d9b61cac4d81ab63fb71f"
+    }
+  },
+  "patches": [
+    {
+      "path": "patches/0001-aw-agent-details.patch",
+      "sha256": "de38b33fd7397a6db8339e4b5389c9f56c45b9906f9273a5a0df3986221417d5",
+      "purpose": "Read-only per-pane AW details from existing metadata in the native client",
+      "upstream_status": "local integration patch; not submitted upstream",
+      "removal_condition": "A pinned upstream build provides equivalent per-pane AW details and passes the integration tests"
+    }
+  ],
+  "patched_assets": {
+    "aarch64": {
+      "name": "herdr-aw",
+      "sha256": "9f5262a6097205a7bc3bffb80a84f96277ed6992324c04533403ef1ca81fccb3",
+      "base_commit": "b99002ac99b09e00b4ca692436cb15a6b0d676f1",
+      "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+      "zig": "0.15.2",
+      "command": "cargo build --release --locked",
+      "source_patch_sha256": "de38b33fd7397a6db8339e4b5389c9f56c45b9906f9273a5a0df3986221417d5"
+    }
   }
 }

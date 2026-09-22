@@ -312,14 +312,22 @@ Bash 等待 helper exec 成 Qoder。pane 只承载原生终端，不选择另一
 完成结果，Herdr 重启 shell 不能覆盖 Agent 退出码。内层 AW/shell 临时文件归入该会话目录，
 便于异常收尾。pane 恢复原 XDG 环境，不改写用户 Hook 或原生配置；固定 cwd 准入保持不变。
 
-启动器为启动、RPC、会话时长和 owned child 清理设置边界。先请求 Herdr 关闭 workspace，
+启动器为启动、RPC、会话时长和 owned child 清理设置边界。Herdr 关闭其他 pane 时，
+RPC 单次读取可能暂时超时；此时仅在原两秒期限内继续等同一响应，不重发请求。
+先请求 Herdr 关闭 workspace，
 再检查已登记后代身份，对剩余对象通过 pidfd 发信号。正常 Qoder 仍由原生 Bash 回收；
 这不是任意脱离进程的隔离，也不构成 final/protected。SIGHUP 取消启动器；内层 Bash 的
 一次性 INT trap 在 Agent 被 SIGINT 终止时保证返回外层 shell。shell 就绪失败时回收 Bash，
-不向启动脚本读者注入 Agent 命令。当前只支持单 pane 自动启动，多 pane 未认证。
+不向启动脚本读者注入 Agent 命令。仅首个 pane owner 可认领自动启动并发布完成结果。
+拆分/新 tab 的 shell 通过自己的 `pane.process_info` 绑定，建立独立 AW scope，先进入
+普通 cosh；其 `qoder` shim 在该 pane 内执行。完成判断检查受管 workspace 当前剩余的
+pane，不使用历史多 pane 标记；Herdr 自动创建的替代 workspace 不属于此前台调用。
+可选 AW 详情客户端补丁仅读取被点击 Agent 的 metadata 快照，不新增 wire 字段、外部命令
+或执行权限。
 
-显式 ignored 的 shell_host 测试使用官方固定 Herdr 和合成 Qoder，核对 metadata、归属、
-参数、退出码和清理；登录回归额外验证 pane 不重放外层 profile。真实 Qoder 1.1.47
+显式 ignored 的 shell_host 测试使用固定 Herdr 制品和合成 Qoder，核对 metadata、归属、
+参数、退出码和清理；登录回归额外验证 pane 不重放外层 profile。多 pane fixture 核对
+拆分/新 tab 归属、不重放参数、事件隔离、两种 pane 关闭顺序和返回原 shell。真实 Qoder 1.1.47
 已从此入口运行，后续回答的投影标记采用由 Stop 回调核实；不将该证据等同于
 终端渲染、排他脱敏或单次完整产品演示。组合产品视觉验收仍独立记录。
 Rust 运行入口不依赖外部 Python/shell 启动脚本；安装期获取和测试驱动仍单独管理。
@@ -329,8 +337,18 @@ Rust 运行入口不依赖外部 Python/shell 启动脚本；安装期获取和�
 `aw-hook-cli configure` 接纳仓库内默认策略，核对安装版本/pin 后生成私有格式 2 profile。
 用户 `[aw]` 引用通过 ShellHost 的环境覆盖到达 Bash/pane，不修改进程全局环境，
 也不在日常启动时更新信任摘要。Qoder 在 cosh 内层 PTY 中运行，Herdr 外层 pane 的进程检测
-不一定能把它识别为 Agent。bridge 核实 pane 归属，且 workspace 只有该 pane 时，才把相同
-只读 tokens 发布到 workspace；工作区行展示真实事实，不注入 Agent 身份/状态。pane metadata
+不一定能把它识别为 Agent。每个 bridge 核实 pane 归属后，在私有 scope 中原子写入
+`viewer-snapshot.json`，包含结构化 query 与 owner 身份；格式 2 query 在 `agent_pid`
+之外提供 `agent_start_ticks`。受管 session launcher 每秒统一发布一次工作区汇总：
+按当前 pane 核对 scope、owner PID/启动时间与 server 父进程，拒绝未来或超过三秒的
+快照，并排除已退出 runtime。缺报显示 partial，不算零值。工作区发布 15 个 token
+（两行总览、13 行成对事件），TTL 三秒；静态项目名不随 metadata 过期消失。
+计数覆盖当前存活 runtime 的 attachment，不是历史审计；焦点不改变汇总范围。
+普通 shell 的 view 为 null，metadata 只包含计数和固定标签，不带提示、命令或原始载荷。
+pane token 与详情仍独立。format-2 同时通过
+`pane.report_agent` 上报已验证的存活 Qoder 绑定，source 为 `anolisa.aw`；活动状态
+仅是原生回调的展示提示，不授予执行/安全权限，缺失证据保持 unknown。观察结束时重新
+核对 pane owner，仅清除自身来源的 Agent 状态。pane metadata
 继续供已有消费者使用。生成的侧栏配置显式设置最大宽度和隐藏折叠模式；metadata 本身不证明
 真实画面可见。
 
@@ -342,3 +360,24 @@ journal 和 attachment 隔离，不补造 Turn 或历史采用回执。
 原样保留。默认没有 observer 命令，因此存在回调但通知命令计数为零是合法状态。
 产品 metadata 的原生采用仍未确认；外部验收可另外绑定精确原生历史结果摘要。
 见[验收流程](../../../../docs/developer-guide/zh/aw/qoder-acceptance.md)。
+
+
+### 本地 Herdr 客户端补丁
+
+`integrations/herdr/upstream.json` 保留官方 v0.9.0 制品 pin，并登记
+`patches/0001-aw-agent-details.patch` 及其摘要。补丁只增加客户端展示和测试，不改
+server/wire 行为。`patched_assets` 单独固定本地已验证的 aarch64 可执行文件和构建工具链。
+它不是官方 Herdr 发行版，尚无已认证的 x86_64 补丁制品。固定上游版本提供等价详情功能
+并通过所列集成测试后移除补丁；当前未向上游提交。
+
+重新构建时，在独立源码目录检出清单的准确上游 commit，用 `git apply` 应用登记补丁，
+选择 Zig 0.15.2，再运行 `cargo build --release --locked`。若源码嵌套在 ANOLISA Cargo
+workspace 下，还需在本地 Cargo.toml 加空 `[workspace]`；此构建隔离修改不属于客户端补丁。
+分发二进制时一并保留上游 Apache-2.0 许可证。此次构建所用 Rust 版本记录在清单中。
+不同路径/工具链的重建可能产生不同摘要，需要明确验证并评审更新清单；运行时不会接受
+任意传入的摘要。
+
+验证包括 Herdr 的 `aw_details`、`context_menus_capture_stable_targets_and_route_actions`
+测试，以及 cosh 的 `aw_herdr` ignored shell-host 测试，后者通过 `COSH_TEST_HERDR` 指向
+已核实制品。这些测试覆盖合成 Qoder PTY 和原生客户端渲染/输入；真实模型与人工视觉验收
+仍单独记录。标准产品入口仍只使用编译后的 cosh 与 Herdr 可执行文件。
