@@ -112,6 +112,7 @@ class GateTests(unittest.TestCase):
             "valid", "empty", "ignored", "missing",
             "contract-empty-canonical", "contract-empty-schemas",
             "contract-empty-contracts", "contract-empty-orchestration",
+            "contract-empty-configuration",
         ):
             with self.subTest(mode=mode), patch.dict(
                 os.environ,

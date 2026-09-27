@@ -2,7 +2,7 @@
 
 [中文版](README_zh.md)
 
-AW provides versioned JSON Schemas and offline validators for capability calls and their records. The Rust library checks payload shapes and relationships between invocations, results and observations. It has no service process and does not execute providers or control agents.
+AW provides versioned schemas and offline validators for unified configuration, capability calls and their records. The Rust libraries check configuration references, payload shapes and relationships between invocations, results and observations. They have no service process and do not execute providers or control agents.
 
 The interfaces are experimental. Tests use synthetic records and do not certify runtime integration.
 
@@ -40,6 +40,11 @@ the pinned Rust toolchain. Local validation also uses Linux ARM64.
 
 ## Source reference
 
+- [User guide and availability](../../docs/user-guide/en/user-entrypoint/aw.md),
+  [configuration reference](../../docs/developer-guide/en/aw/configuration.md),
+  [starter configuration](crates/aw-config/examples/aw.minimal.yaml),
+  [full example](crates/aw-config/examples/aw.yaml) and
+  [configuration API](crates/aw-config/src/lib.rs)
 - [Registered schemas](schemas/) and [synthetic payload examples](tests/fixtures/contracts.json)
 - [Public API](src/lib.rs), [record validation](src/validation.rs) and [plan validation](src/orchestration.rs)
 - [Encoding tests](tests/canonical.rs), [schema tests](tests/schemas.rs),
@@ -47,4 +52,14 @@ the pinned Rust toolchain. Local validation also uses Linux ARM64.
 
 The Registry includes 21 schema resources. The eight v1 resources in `crates/aw-contracts/schemas/` are reference copies and are not registered. Callers must use matching schema IDs and digests; no automatic version conversion is provided.
 
-Parse incoming bytes with `canonical::parse` before schema validation. Shape checks alone do not validate record relationships or grant authorization. Follow the public API documentation for plan-level checks; callers remain responsible for authenticating evidence and enforcing actions.
+Parse incoming wire records with `canonical::parse` before schema validation. Shape checks alone do not validate record relationships or grant authorization. Follow the public API documentation for plan-level checks; callers remain responsible for authenticating evidence and enforcing actions.
+
+User configuration uses the separate `aw-config` crate and its bundled
+`aw/v1alpha1` schema. It accepts one `AWConfiguration` object with
+`apiVersion`, `kind`, `metadata` and `spec`; Provider instances are named objects
+under `spec.providers`. The schema recognizes QwenPaw, Qoder CLI, OpenClaw,
+Hermes and all 16 event names, without claiming adapters are implemented.
+Configuration has no runtime `status`. Provider discovery, operation/private
+config validation and native capability admission remain subsequent work.
+See the [configuration design](docs/design/configuration.md) for the separation
+from the existing wire contracts.
