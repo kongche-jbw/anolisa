@@ -1,0 +1,19 @@
+[package]
+name = "aw-cli"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Experimental standalone AW native-hook launcher and daemon"
+publish = false
+
+[[bin]]
+name = "aw"
+path = "src/main.rs"
+
+[dependencies]
+aw-config = { path = "../aw-config" }
+libc = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml_ng = { workspace = true }
+sha2 = { workspace = true }

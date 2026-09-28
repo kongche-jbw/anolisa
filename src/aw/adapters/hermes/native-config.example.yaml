@@ -1,0 +1,11 @@
+# Native Hermes shell hooks, in Hermes registration order.
+# Replace the example absolute paths and provider identifiers before use.
+# Consent remains native: pass --accept-hooks for known, authored hook commands.
+hooks:
+  pre_tool_call:
+    - command: '/absolute/path/aw hook --socket /absolute/path/aw.sock --agent hermes --event tool.before --provider before-command'
+      timeout: 30
+      fail_closed: true
+  post_tool_call:
+    - command: '/absolute/path/aw hook --socket /absolute/path/aw.sock --agent hermes --event tool.after --provider after-command'
+      timeout: 30

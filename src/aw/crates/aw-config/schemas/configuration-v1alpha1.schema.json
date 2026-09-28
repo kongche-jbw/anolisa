@@ -263,7 +263,10 @@
       ],
       "properties": {
         "protocol": {
-          "const": "aw-provider/v1alpha1"
+          "enum": [
+            "aw-provider/v1alpha1",
+            "native-hook/v1alpha1"
+          ]
         },
         "transport": {
           "$ref": "#/$defs/transport"
@@ -296,6 +299,21 @@
         },
         "location": {
           "const": "agent"
+        },
+        "env": {
+          "type": "object",
+          "maxProperties": 128,
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 4096,
+            "not": {
+              "pattern": "\u0000"
+            }
+          }
         }
       }
     },
@@ -427,6 +445,54 @@
       }
     },
     "step": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/providerStep"
+        },
+        {
+          "$ref": "#/$defs/nativeStep"
+        }
+      ]
+    },
+    "nativeStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "provider",
+        "native"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/name"
+        },
+        "provider": {
+          "$ref": "#/$defs/name"
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "native": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "priority": {
+              "type": "integer",
+              "minimum": -10000,
+              "maximum": 10000
+            },
+            "point": {
+              "$ref": "#/$defs/name"
+            },
+            "sequential": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    "providerStep": {
       "type": "object",
       "additionalProperties": false,
       "required": [

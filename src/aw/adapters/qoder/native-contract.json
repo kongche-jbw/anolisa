@@ -1,0 +1,32 @@
+{
+  "adapter": "qoder",
+  "verified_version": "1.1.64",
+  "sources": [
+    "https://docs.qoder.com/cli/hooks",
+    "https://docs.qoder.com/cli/permissions",
+    "https://docs.qoder.com/cli/custom-models"
+  ],
+  "settings_argument": "--settings",
+  "settings_format": "JSON file or inline JSON",
+  "incompatible_arguments": ["--setting-sources"],
+  "incompatibility_reason": "1.1.64 filters flag hooks out when setting-sources is supplied; its parser does not accept flag as a source.",
+  "events": {"tool.before": "PreToolUse", "tool.after": "PostToolUse"},
+  "command_entry": {"type": "command", "command": "executable", "args": ["literal", "arguments"], "timeout": 5},
+  "stdin": "Native event JSON",
+  "stdout": "Native hook response JSON, unchanged by AW",
+  "exit_codes": {"0": "Parse stdout", "2": "Block where supported", "other": "Non-blocking native hook error"},
+  "scheduling": {
+    "default": "parallel",
+    "sequential_field": "hooks.EVENT[].sequential",
+    "scope": "Any matching sequential group serializes every matching synchronous hook for the event",
+    "pretool_sequential": "updatedInput is merged into the next hook's tool_input",
+    "posttool_sequential": "updatedToolOutput is not propagated to later hook input",
+    "async": "Native asynchronous hooks run separately"
+  },
+  "ask": {
+    "native_output": {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask"}},
+    "meaning": "A native permission request, not approval",
+    "headless": "Final ask decisions are denied without an interactive permission consumer",
+    "evidence": "1.1.64 real AW callback returned ask; native hook.pre_tool_use.ask resolved to headless deny. PostToolUse model adoption remains unverified."
+  }
+}

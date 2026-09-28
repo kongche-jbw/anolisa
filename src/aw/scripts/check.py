@@ -133,7 +133,9 @@ def check_inventory() -> None:
     targets = [
         ("aw-contracts", target)
         for target in ("canonical", "schemas", "contracts", "orchestration")
-    ] + [("aw-config", "configuration")]
+    ] + [("aw-config", "configuration")] + [
+        ("aw-cli", target) for target in ("native", "lifecycle", "launch", "signals")
+    ]
     for package, target in targets:
         command = ["cargo", "test", "--locked", "-p", package, "--test", target, "--", "--list"]
         tests = inventory(run(command, AW, capture=True))

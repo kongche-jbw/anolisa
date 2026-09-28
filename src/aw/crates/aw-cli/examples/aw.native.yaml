@@ -1,0 +1,76 @@
+# Experimental native hooks; install and configure each Agent separately.
+# Commands are direct argv; a shell runs only when explicitly selected here.
+apiVersion: aw/v1alpha1
+kind: AWConfiguration
+metadata:
+  name: native-tool-hooks
+spec:
+  daemon:
+    startup: on_demand
+    endpoint: auto
+    state_dir: auto
+  execution:
+    guarantee: native_hook
+    default_event_budget_ms: 5000
+  audit:
+    enabled: true
+    payload: metadata_only
+  agents:
+    qoder:
+      adapter: qoder
+      argv:
+      - qodercli
+    openclaw:
+      adapter: openclaw
+      argv:
+      - openclaw
+      - gateway
+      - run
+    hermes:
+      adapter: hermes
+      argv:
+      - hermes
+    qwenpaw:
+      adapter: qwenpaw
+      argv:
+      - qwenpaw
+  providers:
+    before-command:
+      protocol: native-hook/v1alpha1
+      transport:
+        type: stdio
+        location: agent
+        argv:
+        - /bin/sh
+        - -c
+        - cat >/dev/null; printf "AW native tool hook\n" >&2
+      timeout_ms: 5000
+      max_output_bytes: 1048576
+      config: {}
+    after-command:
+      protocol: native-hook/v1alpha1
+      transport:
+        type: stdio
+        location: agent
+        argv:
+        - /bin/sh
+        - -c
+        - cat >/dev/null; printf "AW native tool hook\n" >&2
+      timeout_ms: 5000
+      max_output_bytes: 1048576
+      config: {}
+  events:
+    tool.before:
+      enabled: true
+      required: true
+      steps:
+      - id: tool-before
+        provider: before-command
+        native: {}
+    tool.after:
+      enabled: true
+      required: true
+      steps:
+      - id: tool-after
+        provider: after-command
+        native: {}

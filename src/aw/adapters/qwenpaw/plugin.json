@@ -1,0 +1,10 @@
+{
+  "id": "aw-native",
+  "name": "AW native tool middleware",
+  "version": "0.1.0",
+  "type": "general",
+  "description": "Run configured AW commands at QwenPaw native tool boundaries.",
+  "entry": {"backend": "plugin.py"},
+  "dependencies": [],
+  "qwenpaw_version": {"min": "2.2.2b4"}
+}

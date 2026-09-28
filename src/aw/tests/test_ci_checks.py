@@ -113,6 +113,10 @@ class GateTests(unittest.TestCase):
             "contract-empty-canonical", "contract-empty-schemas",
             "contract-empty-contracts", "contract-empty-orchestration",
             "contract-empty-configuration",
+            "contract-empty-native",
+            "contract-empty-lifecycle",
+            "contract-empty-launch",
+            "contract-empty-signals",
         ):
             with self.subTest(mode=mode), patch.dict(
                 os.environ,

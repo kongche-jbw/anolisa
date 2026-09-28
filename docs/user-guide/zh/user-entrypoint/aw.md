@@ -1,141 +1,164 @@
-# AW 使用指南
+# AW 用户指南
 
 [English](../../en/user-entrypoint/aw.md)
 
-AW 的目标是让一份策略配置用于不同的 Agent。用户继续使用 Agent 原有的交互界面，
-AW 将它的工具 Hook 接到选定的规则和处理程序。首批面向 QwenPaw、Qoder CLI、
-OpenClaw 和 Hermes。
+AW 用一份配置管理不同 Agent 的工具 Hook。这个实验分支为 QwenPaw、Qoder CLI、
+OpenClaw、Hermes 提供独立服务和启动器。用户继续使用 Agent 的原生界面，AW 在原生
+工具前后点位运行配置中的命令，并记录调用元数据。
 
-计划中的交付物是 AW 安装包和一份 `aw.yaml`。切换 Agent 时复用这份策略，部署状态
-和审计记录由同一个服务管理。当前版本已经可以准备配置并检查文件，Agent 启动和
-策略执行仍在开发中。
+统一配置和命令传输已经可以运行。命令若要返回控制决策，仍需遵循所选 Agent 的原生
+响应格式。跨框架的安全策略接口、sec-core 联合交付及一致的动作语义仍待完成。
+当前是 Linux 开发版本，尚无安装器或服务发行包。
 
-## 当前可用范围
+## 当前分支的可用范围
 
-✅ 表示当前版本已提供。❌ 表示计划交付，尚不能通过这份配置使用。早期实验中的
-效果不计入当前版本的支持范围。
+✅ 表示已在所列范围演示；❌ 表示未实现或未验证。首批交付仍包含全部四个框架。
 
-| 希望完成的操作 | 状态 | 当前可以得到什么 |
-| --- | --- | --- |
-| 从模板开始写配置 | ✅ 已支持 | 提供起步模板和完整示例 |
-| 检查字段、类型与 Provider 引用 | ✅ 已支持 | 离线校验器报告配置错误 |
-| 声明全部 16 个事件名 | ✅ 已支持 | 识别名称，不代表原生 Hook 已接通 |
-| 通过 AW 启动或接入 Agent | ❌ 待交付 | 独立服务和产品 CLI 尚未提供 |
-| 在原生工具执行前后调用 Provider | ❌ 待交付 | 各框架还需完成适配和效果验证 |
-| 用 sec-core 规则阻断工具或隐藏敏感结果 | ❌ 待交付 | 需要执行 Provider，并验证 Agent 确实采用响应 |
-| 查看已应用策略与持久审计记录 | ❌ 待交付 | 由后续服务保存和查询 |
-| 安装 AW 并生成默认配置 | ❌ 待交付 | 当前手动复制起步模板 |
-| 主动请求人工审批或在原生 Hook 之外强制执行策略 | ❌ 后续范围 | 当前拒绝启用的 ask 步骤，尚不提供 OS 层执行约束 |
+| 能力 | 状态 |
+| --- | --- |
+| 一份 `aw.yaml`、命名 Provider、四个 Agent 目标 | ✅ |
+| 独立 daemon、命令执行、元数据审计 | ✅ 实验能力 |
+| 原生工具前后绑定与既有 Hook 共存 | ✅ 适配器和原生测试；真实模型范围见下表 |
+| 声明全部 16 个事件名 | ✅ 静态校验；运行时目前只绑定 `tool.before`、`tool.after` |
+| 所有框架共用一种 Provider 响应 | ❌ 结构化 Provider 执行留待下一阶段 |
+| AW 管理审批、末尾安全检查、OS 防护 | ❌ |
+| 接入既有 Gateway、发行包安装、策略热更新 | ❌ |
 
-四个首批 Agent 的标识都能写入配置，当前版本对它们的运行接入均为 ❌。QwenPaw
-与 Qwen Code 分别识别。适配交付后，再按 Agent 版本和具体操作公布实际支持情况。
+| 受测框架 | 原生调度 | 真实模型证据 | 审批边界 |
+| --- | --- | --- | --- |
+| Qoder CLI 1.1.64 | 默认并行；匹配组的 `sequential: true` 使匹配的同步 Hook 串行 | before 并行重叠、串行参数修改和 headless ask 已观察；❌ 原生权限拒绝了工具，真实 after 采用待补 | 原生 ask 进入权限流程；headless 拒绝，交互批准未验证 |
+| OpenClaw 2026.9.6、Node 24.16.0 | before 按优先级串行；after 并发；结果 middleware 按注册顺序串行 | ✅ AW 启动隔离 Gateway，参数修改及替换结果被模型采用 | 原生 `requireApproval`；无模型测试覆盖 deny/report，交互批准未验证 |
+| QwenPaw 2.2.2b4、AgentScope 2.0.8 | middleware 嵌套：before A/B，after B/A | ✅ 经 AW 启动公开 `QwenPawAgent` 运行时，验证允许与拒绝；完整 CLI/TUI 未认证 | ❌ 此 middleware 点位没有命令 ask 桥；显式 ask 明确报错 |
+| Hermes 源码 `952c941e741e922a9be8fc403c8944c6e96318bb` | shell 回调按注册顺序；工具自身调度不变 | ✅ 经 AW 启动真实 CLI，验证允许、阻断及非交互审批拒绝 | 原生 `approve` 在无交互审批桥时拒绝；交互批准未验证 |
 
-## 从起步模板开始
+这些结果不代表所有工具类型、失败响应和交互模式都已通过。QwenPaw 与 Qwen Code 是不同框架。
 
-把[起步文件](https://github.com/agentic-os-org/ANOLISA/blob/main/src/aw/crates/aw-config/examples/aw.minimal.yaml)
-复制到选定的 `aw.yaml` 位置。它声明 Qoder 和工具前后两个事件，没有配置策略程序，
-也没有启用安全规则。
+## 构建并准备配置
 
-```yaml
-# Starter configuration for offline validation.
-# No policy program is configured; runtime integration is still being built.
-apiVersion: aw/v1alpha1
-kind: AWConfiguration
-metadata:
-  name: local-agent
-spec:
-  daemon:
-    startup: on_demand
-    endpoint: auto
-    state_dir: auto
-  execution:
-    guarantee: native_hook
-    default_event_budget_ms: 5000
-  audit:
-    enabled: true
-    payload: metadata_only
-  agents:
-    qoder:
-      adapter: qoder
-      argv: [qodercli]
-  providers: {}
-  events:
-    tool.before:
-      enabled: true
-      required: true
-      steps: []
-    tool.after:
-      enabled: true
-      required: true
-      steps: []
-```
-
-熟悉 Kubernetes 的用户可以沿用对资源配置的理解。`apiVersion` 选择文件格式，
-`kind` 表示 AW 配置类型，`metadata.name` 为这份配置命名。期望使用的内容写在
-`spec` 中。AW 按独立组件设计，检查这份文件不需要 Kubernetes 集群或 CRD。
-
-`agents` 中的 `qoder` 是用户为目标选择的名字，`adapter` 指定框架，`argv` 指定
-程序和参数。增加另一个 Agent 对象，就能声明它与现有目标共用 Provider 和事件
-配置。完整示例列出了 Qoder 与 OpenClaw，QwenPaw、Hermes 的启动细节会随适配核实。
-
-空的 `providers` 表示尚未配置策略程序，空的 `steps` 不调用 Provider。两个事件
-都设置了 `required: true`，要求后续运行时在目标无法提供这些事件时拒绝接入。
-
-其余设置选择产品默认的本地服务位置，并声明只记录审计元数据。事件预算为
-5,000 毫秒。这些值在模板里显式写出，校验器不会启动服务、写审计或执行计时限制，
-也不会自动寻找默认文件或替用户补写缺失字段。
-
-## 现在可以执行的检查
-
-当前校验器从源码运行。安装 rustup 后，进入 `src/aw` 会选中仓库固定的 Rust
-工具链。从仓库根目录依次执行下列命令，即可检查起步模板。准备好自己的
-`aw.yaml` 后，替换命令最后的文件路径；相对路径以 `src/aw` 为起点。
+先单独安装和配置所选 Agent，包括模型访问。这个 fork 分支使用固定 Rust 工具链从源码
+构建。在仓库根目录执行：
 
 ```bash
 cd src/aw
-cargo run --locked -p aw-config --example validate -- \
-  crates/aw-config/examples/aw.minimal.yaml
+cargo build --locked -p aw-cli
+cp crates/aw-cli/examples/aw.native.yaml ./target/aw.yaml
+./target/debug/aw validate --config ./target/aw.yaml
+./target/debug/aw plan qoder --config ./target/aw.yaml
 ```
 
-检查成功后会输出以下内容。
+[原生示例](https://github.com/kongche-jbw/anolisa/blob/feat/aw/native-hook-lab/src/aw/crates/aw-cli/examples/aw.native.yaml)
+包含四个 Agent 和两个无副作用的命令 Provider。可执行文件不在 `PATH` 时，修改对应
+`agents.<id>.argv`。`validate` 只检查语法与引用，不运行命令；`plan` 另检查适配器的
+原生注册限制。两者都不能证明模型已经采用某种效果。
 
-```text
-Configuration is statically valid; runtime admission has not run.
+`apiVersion`、`kind`、`metadata`、`spec` 借鉴 Kubernetes 的命名；AW 不需要集群或
+CRD。`spec.providers` 是命名对象，事件步骤通过名字引用。例如：
+
+```yaml
+providers:
+  my-hook:
+    protocol: native-hook/v1alpha1
+    transport:
+      type: stdio
+      location: agent
+      argv: [/usr/local/bin/my-hook, --mode, inspect]
+      env:
+        POLICY_MODE: observe
+    timeout_ms: 5000
+    max_output_bytes: 1048576
+    config: {}
+events:
+  tool.before:
+    enabled: true
+    required: true
+    steps:
+      - id: inspect-tool
+        provider: my-hook
+        native: {}
 ```
 
-这表示字段结构和静态引用通过检查。校验器不要求本机已安装 Qoder，也不执行配置
-里的命令。策略生效前，服务还需要检查已安装 Agent 和 Provider 的实际能力。
+这段配置放在 `spec` 内。命令从 stdin 接收适配器事件，AW 将 stdout、stderr 和退出码
+返回适配器。参数按字面传递；需要 shell 语法时显式选择 `/bin/sh -c`。环境值同样按
+字面传递，不展开 `$NAME`。命令继承 Hook 回调进程的环境和工作目录，再应用配置中的
+`env` 覆盖值。
 
-## 加入自己的策略程序
+仅观察的命令可以返回空 stdout 和退出码零。阻断或修改响应必须符合框架的原生合同。
+原生步骤没有 `operation`、`effects` 或私有 `config`，Provider 的 `config` 必须为 `{}`。
+另一份 `aw-provider/v1alpha1` 示例描述后续结构化执行，当前原生启动器不能执行它。
 
-Provider 是检查或处理事件的程序，可以是安全引擎，也可以是团队自己的工具结果
-处理程序。在 `spec.providers` 中为每个实例命名，填写入口命令，并把它自己的
-设置放进 `config`。
+## 启动 Agent
 
-事件步骤通过 `provider` 引用这个名字，再用 `operation` 选择操作。
-[完整示例](https://github.com/agentic-os-org/ANOLISA/blob/main/src/aw/crates/aw-config/examples/aw.yaml)
-中的 `business-before` 引用了 `business`，工具前末尾检查引用了 `security`。
-执行服务交付后，步骤按配置顺序运行；当前版本的 Provider 调用仍标为 ❌。
-
-完整示例列出全部 16 个事件，另有一个默认关闭的结果隐藏步骤。其中的业务程序
-路径和 sec-core 命令仅作示意，待 Provider 协议与运行时交付后换成真实实现。
-当前修改 `enabled` 只会改变待校验的配置，不会安装 Hook 或开启防护。
-
-## 使用配置启动 Agent
-
-计划中的流程从 AW 读取配置开始。服务先检查选定的 Agent 是否能执行所需动作，
-再安装属于 AW 的原生 Hook 或插件配置，打开 Agent 原有的交互界面。Provider
-在受支持的点位执行规则，AW 服务记录部署状态与处理结果。
-
-完整示例中的 Qoder 和 OpenClaw 目标拟通过下列命令使用。这两个命令仍为 ❌
-待交付接口，当前版本无法执行。
+在 `src/aw` 下，准备好复制的文件及已安装、认证的 Qoder CLI：
 
 ```bash
-aw run qoder --config ./aw.yaml
-aw run openclaw --config ./aw.yaml
+./target/debug/aw run qoder --config ./target/aw.yaml
 ```
 
-Agent 无法执行必需的安全动作时，应拒绝绑定；可选观察来源缺失时，应明确展示。
-服务计划在一次 Agent 交互结束后继续运行，供其他会话复用配置与记录。
+AW 检查注册项，生成私有原生 Hook 设置，启动或复用相同配置版本的 daemon，再启动
+Qoder 并继承终端输入输出。Agent 退出后，AW 将其退出码返回 shell，并删除生成的设置。
+Ctrl-C 和终止信号会转发到所属 Agent 进程组；shell 任务挂起/恢复（Ctrl-Z）尚未实现。
+既有 Hook 仍按 Qoder 自身规则调度。Qoder 1.1.64 的 `--setting-sources` 会排除生成的
+`--settings` Hook，因此该组合会被拒绝，包括 `--` 后传入的参数。`--settings`
+也由 AW 管理；原有 Qoder 设置通过 `--native-config` 提供，不重复传入此原生参数。
 
-字段限制、省略字段的处理方式及完整事件词汇见[配置参考](../../../developer-guide/zh/aw/configuration.md)。
+OpenClaw 和 Hermes 需要显式原生基础配置。这些文件保存 Agent 的模型和运行设置，
+不替代公共 AW 策略。AW 将其复制到私有启动配置，再添加自己的注册项：
+
+```bash
+./target/debug/aw run openclaw --config ./target/aw.yaml --native-config /absolute/path/openclaw.json
+./target/debug/aw run hermes --config ./target/aw.yaml --native-config /absolute/path/hermes.yaml
+```
+
+OpenClaw 示例启动新的 Gateway，通过其原生客户端交互。基础配置中的工作目录及文件
+引用应使用绝对路径。已有插件 allowlist 会保留。受测版本的 `agent exec` 会遗漏 Hook
+插件，因此拒绝此入口。停止本次启动的 Gateway 后，AW run 随之结束。
+
+Hermes 保留原生 shell Hook 授权流程。确认生成的命令设置后再授权；AW 不会自动加上
+`--accept-hooks`。
+
+QwenPaw 使用独立、已初始化的工作目录。启动时安装原生插件，Agent 正常退出后删除：
+
+```bash
+QWENPAW_WORKING_DIR=/absolute/path/isolated-qwenpaw ./target/debug/aw run qwenpaw --config ./target/aw.yaml
+```
+
+如果已有 `plugins/aw-native`，启动器会拒绝覆盖。真实模型验收使用公开运行时 harness，
+原生 CLI 启动仍需单独验收。此适配器不支持 `--native-config`。
+
+## 服务生命周期与记录
+
+`--state-dir`、`--socket` 分别覆盖 `spec.daemon.state_dir`、`endpoint`。使用 `auto`
+时，AW 在 `XDG_RUNTIME_DIR` 下按配置版本建立目录，socket 为其中的 `aw.sock`。
+显式 endpoint 是绝对 Unix socket 路径，可带 `unix://` 前缀。目录仅当前用户可访问。
+
+需要显式管理服务时，准备私有绝对路径，在两个终端中执行：
+
+```bash
+./target/debug/aw serve --config ./target/aw.yaml --socket /absolute/private/aw.sock --idle-timeout 300
+./target/debug/aw status --socket /absolute/private/aw.sock
+./target/debug/aw stop --socket /absolute/private/aw.sock
+```
+
+设置 `daemon.startup: external` 后，`run` 必须找到已有服务；否则按需启动。活跃启动器
+租约和回调会阻止空闲退出。最后一个会话结束后，按需服务最多再保留 300 秒。
+`status` 报告服务身份、活跃回调及租约，不代表策略效果或 Agent 健康认证。
+
+socket 同目录的 `audit.jsonl` 记录配置版本、Agent、事件、Provider、时长、字节数和
+退出结果，不记录事件正文、参数和环境。Agent 和 Provider 日志独立管理，可能包含它们
+自己的数据。该审计是本地元数据记录，并非不可篡改的安全日志。删除状态目录前先停止
+自己启动的服务。强制终止启动器可能留下生成配置，应在所属 Agent 停止后清理。
+
+## 原生限制与下一阶段
+
+每条命令受 Provider 超时和输出大小限制，宿主自身的回调预算也生效。原生 Hook 保留
+原来的顺序、错误处理与决策聚合，AW 不施加整事件的共享期限。必填字段
+`default_event_budget_ms` 在原生模式中保留但不执行；显式事件 `budget_ms` 会被拒绝。
+`required` 不会增强宿主的控制保证。
+
+当前只绑定通配工具匹配。启用未支持事件、结构化步骤或 guard 都会拒绝接入，不会暗中
+启用 `security.violation` 末尾检查或 sec-core 规则。交互 ask 和跨框架安全响应需要
+独立实现与验收。
+
+字段限制及 16 事件词汇见[配置参考](../../../developer-guide/zh/aw/configuration.md)。
+下一阶段应补齐 Qoder 真实 after 缺口，并以已核实的原生差异为约束，确定结构化
+Provider 请求和响应。

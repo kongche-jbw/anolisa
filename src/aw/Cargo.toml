@@ -1,8 +1,9 @@
 [workspace]
-members = [".", "crates/aw-config"]
+members = [".", "crates/aw-config", "crates/aw-cli"]
 resolver = "2"
 
 [workspace.dependencies]
+libc = "0.2"
 jsonschema = { version = "0.53", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -2,6 +2,9 @@
 
 [English](configuration.md)
 
+原生运行时增量见[原生 Hook 接入实验](native-hooks_zh.md)。显式 native 步骤保留宿主
+调度；下述结构化 Provider 合同仍是独立的执行路径。
+
 `aw-config` 负责期望配置解析；`aw-contracts` 继续负责能力 wire Schema、canonical
 编码和记录约束。用户配置不修改已有 Schema，也不能让现有 Registry 将任意
 Provider JSON 当作 canonical wire 元数据接受。

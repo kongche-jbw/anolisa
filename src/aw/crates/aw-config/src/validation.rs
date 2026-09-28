@@ -72,6 +72,36 @@ pub(super) fn validate(document: &Value) -> Result<(), Error> {
                 &format!("{path}/provider"),
                 "unknown Provider reference",
             )?;
+            if step.get("native").is_some() {
+                require(
+                    matches!(name.as_str(), "tool.before" | "tool.after"),
+                    &path,
+                    "native steps are limited to tool.before and tool.after",
+                )?;
+                require(
+                    providers[provider]["protocol"] == "native-hook/v1alpha1",
+                    &path,
+                    "native step requires the native-hook protocol",
+                )?;
+                require(
+                    providers[provider]["config"]
+                        .as_object()
+                        .is_some_and(|c| c.is_empty()),
+                    &path,
+                    "native commands receive native stdin; configure arguments or transport.env",
+                )?;
+                require(
+                    event.get("guard").is_none(),
+                    &path,
+                    "native host scheduling cannot promise an AW final guard",
+                )?;
+                continue;
+            }
+            require(
+                providers[provider]["protocol"] == "aw-provider/v1alpha1",
+                &path,
+                "structured steps require the AW Provider protocol",
+            )?;
             let active = enabled && step["enabled"] != false;
             for (index, effect) in step["effects"]
                 .as_array()

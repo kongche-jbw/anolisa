@@ -2,6 +2,10 @@
 
 [中文版](configuration_zh.md)
 
+The native runtime increment is documented in [Native Hook integration](native-hooks.md).
+Its explicit native steps keep host scheduling; the structured Provider contract
+below remains a separate execution path.
+
 `aw-config` owns desired configuration parsing. `aw-contracts` continues to own
 capability wire schemas, canonical encodings and record invariants. Configuration
 must not change those schemas or make the existing registry accept arbitrary

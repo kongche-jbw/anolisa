@@ -2,9 +2,13 @@
 
 [中文版](README_zh.md)
 
-AW provides versioned schemas and offline validators for unified configuration, capability calls and their records. The Rust libraries check configuration references, payload shapes and relationships between invocations, results and observations. They have no service process and do not execute providers or control agents.
+AW provides unified configuration, native Agent Hook execution and contract validators. This experimental fork adds a Linux daemon and `aw` launcher for QwenPaw, Qoder CLI, OpenClaw and Hermes. Native command callbacks preserve host scheduling; framework-neutral Provider effects remain subsequent work.
 
-The interfaces are experimental. Tests use synthetic records and do not certify runtime integration.
+Build from `src/aw` with `cargo build --locked -p aw-cli`, then use
+`target/debug/aw plan qoder --config crates/aw-cli/examples/aw.native.yaml`.
+There is no packaged installation yet. See the user guide for native profiles,
+real-model evidence and explicit gaps; Qoder real after adoption and interactive
+approval remain unverified.
 
 ## Run the checks
 
@@ -58,8 +62,10 @@ User configuration uses the separate `aw-config` crate and its bundled
 `aw/v1alpha1` schema. It accepts one `AWConfiguration` object with
 `apiVersion`, `kind`, `metadata` and `spec`; Provider instances are named objects
 under `spec.providers`. The schema recognizes QwenPaw, Qoder CLI, OpenClaw,
-Hermes and all 16 event names, without claiming adapters are implemented.
-Configuration has no runtime `status`. Provider discovery, operation/private
-config validation and native capability admission remain subsequent work.
+Hermes and all 16 event names, with native-mode adapters in this fork.
+Configuration has no runtime `status`. Structured Provider discovery and operation/private config validation remain
+subsequent work. Native admission checks native registration shapes and limits.
+See the [native integration design](docs/design/native-hooks.md) and
+[native example](crates/aw-cli/examples/aw.native.yaml).
 See the [configuration design](docs/design/configuration.md) for the separation
 from the existing wire contracts.

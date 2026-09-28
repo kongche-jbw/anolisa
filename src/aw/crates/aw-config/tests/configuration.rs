@@ -333,3 +333,26 @@ fn document_depth_size_and_alias_expansion_are_bounded() {
         Err(Error::Document { .. })
     ));
 }
+
+#[test]
+fn native_commands_are_explicit_and_do_not_acquire_structured_effects() {
+    let mut value = example();
+    value["spec"]["providers"]["business"]["protocol"] = json!("native-hook/v1alpha1");
+    value["spec"]["providers"]["business"]["config"] = json!({});
+    value["spec"]["providers"]["business"]["transport"]["env"] =
+        json!({"CUSTOM_CONTEXT":"literal ${not-expanded}"});
+    value["spec"]["events"] = json!({"tool.before":{"enabled":true,"steps":[{"id":"native","provider":"business","native":{"sequential":true}}]}});
+    assert!(parse(&value).is_ok());
+    let valid = value.clone();
+    value["spec"]["events"]["tool.before"]["steps"][0]["effects"] = json!(["ask"]);
+    assert!(parse(&value).is_err());
+    value = valid.clone();
+    value["spec"]["providers"]["business"]["protocol"] = json!("aw-provider/v1alpha1");
+    assert!(parse(&value).is_err());
+    value = valid.clone();
+    value["spec"]["providers"]["business"]["config"] = json!({"ignored":true});
+    assert!(parse(&value).is_err());
+    value = valid;
+    value["spec"]["providers"]["business"]["transport"]["env"] = json!({"BAD=NAME":"x"});
+    assert!(parse(&value).is_err());
+}
