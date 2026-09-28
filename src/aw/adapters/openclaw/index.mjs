@@ -1,4 +1,24 @@
 import { execFile, spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { renameSync, rmSync, writeFileSync } from 'node:fs';
+
+function registerReadyReceipt(api, hooks) {
+  const file = process.env.AW_READY_FILE;
+  const token = process.env.AW_READY_TOKEN;
+  if (file === undefined && token === undefined) return;
+  if (!file || !token) throw new Error('AW requires both readiness file and token');
+  // Discovery can register callbacks without activating their registry. Only the
+  // Gateway startup callback attests that this registry reached the live host.
+  api.on('gateway_start', () => {
+    const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
+    try {
+      writeFileSync(temporary, JSON.stringify({ version: 1, adapter: 'openclaw', pid: process.pid, token, hooks }) + '\n', { mode: 0o600, flag: 'wx' });
+      renameSync(temporary, file);
+    } finally {
+      rmSync(temporary, { force: true });
+    }
+  });
+}
 
 function request(api, handler, hook, event, context) {
   const socket = api.pluginConfig?.socket ?? process.env.AW_SOCKET;
@@ -58,12 +78,14 @@ export default {
   name: 'AW native tool hooks',
   register(api) {
     const hooks = api.pluginConfig?.hooks ?? {};
+    let registered = 0;
     for (const [group, hook] of [['before', 'before_tool_call'], ['after', 'after_tool_call']]) {
       for (const handler of hooks[group] ?? []) {
         api.on(hook, (event, context) => invoke(api, handler, hook, event, context), {
           priority: handler.priority ?? 100,
           ...(handler.matcher ? { matcher: handler.matcher } : {}),
         });
+        registered += 1;
       }
     }
     for (const handler of hooks.result ?? []) {
@@ -71,12 +93,15 @@ export default {
         (event, context) => invoke(api, handler, 'agent_tool_result', event, context),
         { runtimes: ['openclaw'], ...(handler.matcher ? { matcher: handler.matcher } : {}) },
       );
+      registered += 1;
     }
     // Persistence is a distinct synchronous native boundary, not after_tool_call.
     for (const handler of hooks.persist ?? []) {
       api.on('tool_result_persist', (event, context) => invokeSync(api, handler, 'tool_result_persist', event, context), {
         priority: handler.priority ?? 100,
       });
+      registered += 1;
     }
+    registerReadyReceipt(api, registered);
   },
 };

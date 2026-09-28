@@ -14,6 +14,22 @@ environment to the private Unix socket. The daemon runs one configured argv,
 bounds its pipes and lifetime, records metadata, and returns stdout/stderr/status.
 The native framework decides callback ordering and interprets the response.
 
+OpenClaw's optional `--native-state-dir` retains its native state while keeping
+the generated configuration transient. A profile lock prevents concurrent AW
+owners; it does not attach an already-running native Gateway. Native home and cwd
+are inherited in this mode. Config-relative `$include` is rejected rather than
+silently resolved from the temporary directory. Hermes has no supported transient
+config overlay at the pinned revision and still requires an isolated home.
+
+For OpenClaw and QwenPaw, the generated binding includes a private registration
+receipt path and a token tied to the configuration revision and launch PID.
+OpenClaw writes it on `gateway_start`; QwenPaw writes it after registering all
+middleware factories. The launcher checks version, adapter, token, Hook count
+and the reporting PID's process group within 30 seconds. Failure cleans up the
+owned Agent group. These receipts establish registration at the stated boundary,
+not continuing enforcement. QwenPaw's HTTP listener is not gated by this check;
+acceptance waits for native plugin status and then checks tool effects separately.
+
 The launcher is Rust. OpenClaw's JavaScript plugin and QwenPaw's Python plugin are
 host-loaded adapters, not external product launch scripts. Hermes and Qoder use
 their existing command Hook support. Python scripts under `tests/native` are
@@ -70,8 +86,8 @@ Permanent user installations and services were not replaced.
 | Acceptance | Outcome |
 | --- | --- |
 | Qoder before scheduling, input rewrite, native ask | Real print parallel/serial and natural TUI after replacement reached the model; native Hooks coexisted. Headless ask denied; AW allow did not override separate file-write permission |
-| OpenClaw Gateway through `aw run` | Tool input changed; raw text value 52 became 73 through result middleware; model answered 73. History and after observation also recorded 73 |
-| QwenPaw public runtime through `aw run` | Allow wrote 42; deny did not write; explicit ask errored without writing. Before A/B and after B/A observed; official App entrypoint additionally passed common Provider allow/block/after with a local model fixture; ACP/TUI skip plugin loading and are rejected |
+| OpenClaw Gateway through `aw run` | Tool input changed; raw text value 52 became 73 through result middleware; model answered 73. History and after observation recorded 73. A persistent-profile test reused native authentication, continued the same SQLite session over two launches and rediscovered existing plugins |
+| QwenPaw public runtime through `aw run` | Allow wrote 42; deny did not write; explicit ask errored without writing. Before A/B and after B/A observed; official App additionally passed common Provider allow/block/after and existing-plugin coexistence with a real Token Plan model; ACP/TUI skip plugin loading and are rejected |
 | Hermes actual CLI through `aw run` | Allow wrote 42; block and noninteractive approve did not write. Before A/B and after A/B observed |
 | Native coexistence | Installed framework runners and plugin loading tested; OpenClaw absent/empty allowlists preserve native plugin admission |
 | Interactive user approval | Not validated for any framework; no AW approval UI |
@@ -80,6 +96,10 @@ Permanent user installations and services were not replaced.
 Qoder after acceptance used harmless read-only printing after write permission was
 independently denied. Common Provider allow/after/block also passed in real print.
 BYOK setup did not save; its cause remains unproven.
+The common Provider also passed real-model Hermes CLI and OpenClaw Gateway
+coexistence checks. Both hosts and QwenPaw can observe denied attempts in their
+after callbacks. Inspect the native result disposition instead of treating every
+after event as proof of execution.
 
 Real-model tests are opt-in and excluded from CI. Their bounded runners record
 owned PIDs, commands, deadlines and cleanup. Local evidence remains in the ignored
@@ -114,8 +134,8 @@ groups, not processes that deliberately escape with a new session.
 
 ## Subsequent delivery
 
-1. Close QwenPaw ACP/TUI registration and host-loaded readiness gaps; expand
-   all-four common-policy runtime acceptance;
+1. Close QwenPaw ACP/TUI registration and ingress-readiness gaps; add Hermes
+   persistent-profile integration and extend all-four common-policy coverage;
    retain interactive ask as a separate acceptance dimension.
 2. Extend the [implemented common protocol](provider-protocol.md), integrate Core
    and validate actual adoption for additional effects.

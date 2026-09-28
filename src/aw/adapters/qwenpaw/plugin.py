@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import signal
+import tempfile
 from pathlib import Path
 from typing import Any, AsyncGenerator, Callable
 
@@ -103,6 +104,12 @@ class AwPlugin:
     """Load launcher-generated registrations through QwenPaw's plugin API."""
 
     def register(self, api: Any) -> None:
+        receipt_path = os.environ.get("AW_READY_FILE")
+        receipt_token = os.environ.get("AW_READY_TOKEN")
+        if (receipt_path is None) != (receipt_token is None):
+            raise ValueError("AW registration receipt requires both path and token")
+        if receipt_path is not None and (not receipt_path or not receipt_token):
+            raise ValueError("AW registration receipt path and token must be nonempty")
         config = json.loads(Path(os.environ["AW_NATIVE_CONFIG"]).read_text())
         hooks = config["hooks"]
         for hook in hooks:
@@ -118,6 +125,37 @@ class AwPlugin:
                 return AwToolMiddleware(hook["event"], hook["provider"], hook.get("on_error"))
 
             api.register_middleware(factory, priority=hook.get("priority", 100))
+        if receipt_path is not None:
+            self._write_registration_receipt(Path(receipt_path), receipt_token, len(hooks))
+
+    @staticmethod
+    def _write_registration_receipt(path: Path, token: str, hooks: int) -> None:
+        """Confirm factory registration, not HTTP readiness or future invocation."""
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=path.parent,
+                prefix=".aw-register-",
+                delete=False,
+            ) as output:
+                temporary = Path(output.name)
+                json.dump(
+                    {
+                        "version": 1,
+                        "adapter": "qwenpaw",
+                        "pid": os.getpid(),
+                        "token": token,
+                        "hooks": hooks,
+                    },
+                    output,
+                )
+                output.write("\n")
+            os.replace(temporary, path)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
 
 
 plugin = AwPlugin()

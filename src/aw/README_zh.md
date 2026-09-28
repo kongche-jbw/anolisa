@@ -8,6 +8,9 @@ AW 提供统一配置、Agent 原生 Hook 执行及合同校验。这个实验�
 `target/debug/aw plan qoder --config crates/aw-cli/examples/aw.native.yaml`。
 尚无安装发行包。原生配置、真实模型证据和明确缺口见用户指南；Qoder print/TUI
 after 采用已验证，交互审批仍待验证。
+OpenClaw 可通过 `aw run ... --native-state-dir DIR` 保留原生状态。
+OpenClaw、QwenPaw 启动增加有界插件注册确认；Hermes 仍使用隔离 profile。
+各框架支持的路径见用户指南。
 
 ## 运行检查
 

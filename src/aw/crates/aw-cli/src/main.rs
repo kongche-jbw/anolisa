@@ -12,7 +12,7 @@ use std::{
     path::{Path, PathBuf},
 };
 type Error = Box<dyn std::error::Error + Send + Sync>;
-const HELP:&str="aw native-hook lab (Linux)\n  aw validate --config FILE\n  aw plan AGENT --config FILE\n  aw check AGENT --config FILE\n  aw serve --config FILE --socket PATH [--idle-timeout SECONDS]\n  aw hook --socket PATH --agent ID --event tool.before|tool.after --provider ID\n  aw run AGENT --config FILE [--native-config FILE] [--state-dir DIR] [--socket PATH] [-- AGENT_ARGS...]\n  aw status|stop --socket PATH\nNative hook scheduling and ask decisions belong to each framework.\n";
+const HELP:&str="aw native-hook lab (Linux)\n  aw validate --config FILE\n  aw plan AGENT --config FILE\n  aw check AGENT --config FILE\n  aw serve --config FILE --socket PATH [--idle-timeout SECONDS]\n  aw hook --socket PATH --agent ID --event tool.before|tool.after --provider ID\n  aw run AGENT --config FILE [--native-config FILE] [--native-state-dir DIR] [--state-dir DIR] [--socket PATH] [-- AGENT_ARGS...]\n  aw status|stop --socket PATH\n--native-state-dir preserves OpenClaw state; --state-dir stores AW service state.\nNative hook scheduling and ask decisions belong to each framework.\n";
 fn execute() -> Result<i32, Error> {
     let mut args = std::env::args().skip(1);
     let operation = args.next().unwrap_or_else(|| "--help".into());
@@ -35,7 +35,13 @@ fn execute() -> Result<i32, Error> {
             "--adapter",
             "--on-error",
         ],
-        "run" => vec!["--config", "--native-config", "--state-dir", "--socket"],
+        "run" => vec![
+            "--config",
+            "--native-config",
+            "--native-state-dir",
+            "--state-dir",
+            "--socket",
+        ],
         "status" | "stop" => vec!["--socket"],
         _ => return Err("unknown command; use aw --help".into()),
     };
@@ -135,6 +141,10 @@ fn execute() -> Result<i32, Error> {
     }
     let agent = agent.ok_or("missing Agent ID")?;
     let hooks = config.hooks(&agent)?;
+    if options.contains_key("--native-state-dir") && config.agent(&agent)?["adapter"] != "openclaw"
+    {
+        return Err("--native-state-dir is supported only for OpenClaw; Hermes requires an isolated profile and QwenPaw uses QWENPAW_WORKING_DIR".into());
+    }
     if config.agent(&agent)?["adapter"] == "qoder" {
         let native_argv = model::strings(&config.agent(&agent)?["argv"])?;
         if native_argv
@@ -159,6 +169,41 @@ fn execute() -> Result<i32, Error> {
     if config.agent(&agent)?["adapter"] == "openclaw" {
         let mut effective = model::strings(&config.agent(&agent)?["argv"])?;
         effective.extend(extra.iter().cloned());
+        for flag in ["--profile", "--dev", "--reset", "--container", "--force"] {
+            if effective
+                .iter()
+                .any(|arg| arg == flag || arg.starts_with(&format!("{flag}=")))
+            {
+                return Err(format!("OpenClaw {flag} conflicts with AW-owned launch state or process ownership; select --native-state-dir explicitly").into());
+            }
+        }
+        if operation == "run"
+            && std::env::var("OPENCLAW_CONTAINER")
+                .ok()
+                .is_some_and(|value| !value.trim().is_empty())
+        {
+            return Err(
+                "OPENCLAW_CONTAINER bypasses the local AW binding; launch a local Gateway".into(),
+            );
+        }
+        if operation == "run"
+            && std::env::var("OPENCLAW_SERVICE_MANAGED_ENV_KEYS")
+                .ok()
+                .is_some_and(|keys| {
+                    keys.split(',').any(|key| {
+                        matches!(
+                            key.trim(),
+                            "OPENCLAW_CONFIG_PATH"
+                                | "OPENCLAW_STATE_DIR"
+                                | "OPENCLAW_HOME"
+                                | "AW_READY_FILE"
+                                | "AW_READY_TOKEN"
+                        )
+                    })
+                })
+        {
+            return Err("OpenClaw inherited service environment ownership can replace the AW binding; launch outside that service environment".into());
+        }
         if effective
             .windows(2)
             .any(|pair| pair[0] == "agent" && pair[1] == "exec")
@@ -231,7 +276,8 @@ fn execute() -> Result<i32, Error> {
         return Err("launch directory already exists".into());
     }
     let native = options.get("--native-config").map(Path::new);
-    let prepared = match launch::prepare(&config, &agent, &socket, &binding, native) {
+    let native_state = options.get("--native-state-dir").map(Path::new);
+    let prepared = match launch::prepare(&config, &agent, &socket, &binding, native, native_state) {
         Ok(prepared) => prepared,
         Err(error) => {
             if binding.exists() {

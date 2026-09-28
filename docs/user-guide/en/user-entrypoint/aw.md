@@ -24,19 +24,22 @@ The first-release scope continues to include all four frameworks.
 | Native before/after bindings and existing Hook coexistence | ✅ Adapters and native tests; real-model scope below |
 | Declare all 16 event names | ✅ Static validation; runtime currently binds only `tool.before` and `tool.after` |
 | One portable Provider response for every framework | ✅ Before observe/block, after observe; native scheduling retained |
+| Reuse a persistent Agent profile | ✅ OpenClaw with `--native-state-dir`; QwenPaw working directory; Qoder native profile. ❌ Hermes existing-profile attachment |
+| Confirm plugin loading during launch | ✅ OpenClaw Gateway startup and QwenPaw middleware registration; individual effects still need tool receipts |
 | AW-managed approval, final security guard, OS enforcement | ❌ |
 | Attach an existing Gateway, package installation, policy hot reload | ❌ |
 
 | Framework tested | Native scheduling | Execution evidence | Approval boundary |
 | --- | --- | --- | --- |
 | Qoder CLI 1.1.64 | Parallel by default; a matching `sequential: true` group serializes matching synchronous Hooks | ✅ Before overlap and serial input changes; print/TUI model adoption of native-mode after replacement; headless ask denied | Native ask reaches the permission path; headless denies; interactive approval unverified |
-| OpenClaw 2026.9.6, Node 24.16.0 | Before serial by priority; after concurrent; result middleware serial by registration order | ✅ Isolated Gateway launched through AW; changed tool input and replacement result consumed by the model | Native `requireApproval`; deny/report behavior tested without a model, interactive approval unverified |
-| QwenPaw 2.2.2b4, AgentScope 2.0.8 | Middleware onion: before A/B, after B/A | ✅ Earlier public runtime with a real model; official App entrypoint allow/block/after with a local model fixture; ❌ ACP/TUI plugin loading | ❌ No command-ask bridge at this middleware point; explicit ask fails visibly |
+| OpenClaw 2026.9.6, Node 24.16.0 | Before serial by priority; after concurrent; result middleware serial by registration order | ✅ Gateway through AW; model adoption of changed input/results; repeated launches retain native authentication, sessions and existing plugins | Native `requireApproval`; deny/report behavior tested without a model, interactive approval unverified |
+| QwenPaw 2.2.2b4, AgentScope 2.0.8 | Middleware onion: before A/B, after B/A | ✅ Official App/API with a real model: common-policy allow/block/after, existing-plugin coexistence and preserved working-directory files; ❌ ACP/TUI plugin loading | ❌ No command-ask bridge at this middleware point; explicit ask fails visibly |
 | Hermes source `952c941e741e922a9be8fc403c8944c6e96318bb` | Shell callbacks in registration order; native tool scheduling unchanged | ✅ Actual CLI through AW; allow, block and noninteractive approval denial | Native `approve` is denied without an interactive approval bridge; interactive approval unverified |
 
-The common Provider passed live Qoder allow/block/after, official QwenPaw App
-with a local model fixture, and installed Hermes/OpenClaw native dispatchers.
-The latter two common-protocol checks do not make new model requests.
+The common Provider passed real-model allow/block/after checks through Qoder,
+the official QwenPaw App, Hermes CLI and OpenClaw Gateway, with existing Hooks.
+OpenClaw, Hermes and QwenPaw can emit after callbacks for blocked attempts;
+an after callback alone does not prove that the tool executed.
 A separate real Qoder run adopted decisions from installed sec-core V1 0.8.0.
 These results do not certify every tool type, failure response or interactive mode.
 QwenPaw is a separate framework from Qwen Code.
@@ -44,6 +47,8 @@ QwenPaw is a separate framework from Qwen Code.
 ## Build and prepare a configuration
 
 Install and configure the chosen Agent separately, including its model access.
+The same model-service credential can be used where that framework supports it;
+native model and workspace settings are separate from the shared AW policy.
 For this fork, build from source with the pinned Rust toolchain. Run from the
 repository root:
 
@@ -160,13 +165,38 @@ AW copies them into private launch profiles and adds its registrations:
 ```
 
 The OpenClaw example starts a new Gateway; interact through its native clients.
-Keep workspace and other file references in the base profile absolute. Existing
-plugin allowlists are preserved. `agent exec` in the tested version omits the
-Hook-only plugin and is rejected. Stopping this launched Gateway ends the AW run.
+By default its native state is temporary. To retain authentication, sessions and
+installed plugins across runs, select the existing OpenClaw state directory:
+
+```bash
+./target/debug/aw run openclaw --config ./target/aw.yaml --native-config /absolute/path/openclaw.json --native-state-dir /absolute/path/openclaw-state
+```
+
+Stop the original Gateway before using this directory. AW starts a new process;
+it does not attach to an existing Gateway. The original configuration and selected
+state remain in place; only the generated configuration and AW bridge are removed
+on exit. The profile's `.aw-launch.lock` prevents concurrent AW launches, and stays
+as an unlocked file after exit. Native home and cwd are preserved in this mode,
+including their path-resolution semantics. Provide expanded JSON without
+`$include`; relocating native include paths is not supported.
+
+AW waits up to 30 seconds for the OpenClaw plugin's `gateway_start` receipt.
+Missing or invalid confirmation fails the launch and cleans up its Agent group.
+Global plugin disablement or an AW deny entry is rejected. Existing allowlists and
+plugin entries are retained; existing Hook code is not converted into Providers.
+`agent exec`, `--profile`, `--dev`, `--reset`, `--container` and `--force` are
+rejected because they skip the supported binding or conflict with launch ownership.
+Container or service-managed environment overrides of the binding are also rejected.
+Stopping this launched Gateway ends the AW run.
 
 Hermes retains its native shell-Hook consent. AW rejects `HERMES_SAFE_MODE` (`1/true/yes/on`),
 which disables Hook registration. Review generated command settings
 before granting consent; AW does not silently add `--accept-hooks`.
+This Hermes version reads both configuration and persistent state from
+`HERMES_HOME`; it has no supported `HERMES_CONFIG_PATH` overlay. AW still uses an
+isolated Hermes home, so existing authentication/session state is not reused.
+`--native-state-dir` is rejected for Hermes. Existing-profile support needs a
+native plugin installation or an upstream configuration-overlay interface.
 
 QwenPaw requires the `qwenpaw app` server entrypoint and a separate, initialized
 working directory. Bare `qwenpaw`, project-directory, TUI and ACP entrypoints skip
@@ -178,12 +208,14 @@ QWENPAW_WORKING_DIR=/absolute/path/isolated-qwenpaw ./target/debug/aw run qwenpa
 ```
 
 An existing `plugins/aw-native` directory is rejected rather than overwritten.
-The earlier real-model acceptance used a public runtime harness with explicit
-plugin loading; that evidence does not establish TUI/ACP support. `--native-config` is not supported
-for this adapter. App acceptance waits for `aw-native` to be loaded in the native
-plugin status before sending requests. A listening port alone is not Hook readiness;
-AW does not yet attest that host-loading state. A denied QwenPaw tool may still
-produce an observed after response under its native middleware nesting.
+Other plugins and persistent files in the selected working directory remain.
+`--native-config` and `--native-state-dir` are not supported for this adapter.
+AW waits up to 30 seconds for confirmation that all middleware factories were
+registered; this does not gate the App's HTTP listener or prove future adoption.
+Before sending requests, check that native plugin status reports `aw-native` as
+loaded. Real-model acceptance checks this status and the actual tool receipts.
+A denied QwenPaw tool may still produce an observed after response under its
+native middleware nesting.
 
 ## Service lifecycle and records
 

@@ -2,9 +2,13 @@
 
 import asyncio
 import importlib.util
+import json
+import os
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from agentscope.agent import Agent
 from agentscope.message import TextBlock, ToolCallBlock, ToolResultState
@@ -103,6 +107,80 @@ class NativeMiddlewareTests(unittest.IsolatedAsyncioTestCase):
         probe = Probe("tool.before", "overlap")
         await asyncio.gather(probe._run({}), probe._run({}))
         self.assertEqual(started, 2)
+
+
+class RegistrationReceiptTests(unittest.TestCase):
+    def setUp(self) -> None:
+        root = Path(__file__).resolve().parents[5] / "target/profile-lab/qwenpaw/receipt-tests"
+        root.mkdir(parents=True, exist_ok=True)
+        self.directory = tempfile.TemporaryDirectory(dir=root)
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        self.config = self.root / "hooks.json"
+        self.config.write_text(
+            json.dumps(
+                {
+                    "hooks": [
+                        {"event": "tool.before", "provider": "policy"},
+                        {"event": "tool.after", "provider": "policy"},
+                    ]
+                }
+            )
+        )
+        self.receipt = self.root / "registered.json"
+
+    def environment(self, **values):
+        environment = {
+            key: value
+            for key, value in os.environ.items()
+            if key not in {"AW_READY_FILE", "AW_READY_TOKEN"}
+        }
+        return patch.dict(
+            os.environ,
+            {**environment, "AW_NATIVE_CONFIG": str(self.config), **values},
+            clear=True,
+        )
+
+    def test_receipt_is_private_complete_and_refreshable(self) -> None:
+        registered = []
+        api = SimpleNamespace(register_middleware=lambda factory, **kw: registered.append(factory))
+        with self.environment(AW_READY_FILE=str(self.receipt), AW_READY_TOKEN="first-token"):
+            MODULE.AwPlugin().register(api)
+        self.assertEqual(len(registered), 2)
+        self.assertEqual(
+            json.loads(self.receipt.read_text()),
+            {
+                "version": 1,
+                "adapter": "qwenpaw",
+                "pid": os.getpid(),
+                "token": "first-token",
+                "hooks": 2,
+            },
+        )
+        self.assertEqual(self.receipt.stat().st_mode & 0o777, 0o600)
+        with self.environment(AW_READY_FILE=str(self.receipt), AW_READY_TOKEN="next-token"):
+            MODULE.AwPlugin().register(api)
+        self.assertEqual(json.loads(self.receipt.read_text())["token"], "next-token")
+        self.assertEqual(list(self.root.glob(".aw-register-*")), [])
+
+    def test_missing_receipt_partner_fails_before_registration(self) -> None:
+        for settings in (
+            {"AW_READY_FILE": str(self.receipt)},
+            {"AW_READY_TOKEN": "token"},
+        ):
+            with self.environment(**settings), self.assertRaisesRegex(ValueError, "both"):
+                MODULE.AwPlugin().register(SimpleNamespace())
+        self.assertFalse(self.receipt.exists())
+
+    def test_no_receipt_without_environment_or_after_registration_failure(self) -> None:
+        api = SimpleNamespace(register_middleware=lambda *args, **kw: None)
+        with self.environment():
+            MODULE.AwPlugin().register(api)
+        self.assertFalse(self.receipt.exists())
+        with self.environment(AW_READY_FILE=str(self.receipt), AW_READY_TOKEN="token"):
+            with self.assertRaises(AttributeError):
+                MODULE.AwPlugin().register(SimpleNamespace())
+        self.assertFalse(self.receipt.exists())
 
 
 if __name__ == "__main__":

@@ -289,3 +289,62 @@ test('adapter accepts admitted output larger than one MiB in async and sync hook
     }
   } finally { rmSync(fixtureDir, { recursive: true }); }
 });
+
+test('adapter publishes a private receipt only when the registered Gateway starts', async () => {
+  const { default: plugin } = await import('../../../adapters/openclaw/index.mjs');
+  const { existsSync, mkdtempSync, rmSync, statSync } = await import('node:fs');
+  const fixtureDir = mkdtempSync(resolve('target/native-lab/openclaw/ready-adapter-'));
+  const file = resolve(fixtureDir, 'ready.json');
+  const previous = { file: process.env.AW_READY_FILE, token: process.env.AW_READY_TOKEN };
+  const hooks = { before: [{ provider: 'before' }], after: [{ provider: 'after' }], persist: [{ provider: 'persist' }], result: [{ provider: 'result' }] };
+  try {
+    process.env.AW_READY_FILE = file;
+    process.env.AW_READY_TOKEN = 'fixture-ready-token';
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      rmSync(file, { force: true });
+      const typedHooks = [];
+      const middleware = [];
+      plugin.register({ pluginConfig: { hooks },
+        on(hookName, handler, options) { typedHooks.push({ pluginId: plugin.id, hookName, handler, ...options }); },
+        registerAgentToolResultMiddleware(handler) { middleware.push(handler); },
+      });
+      assert.equal(existsSync(file), false, 'Registration alone must not report an active Gateway');
+      assert.equal(middleware.length, 1);
+      assert.equal(typedHooks.filter(item => item.hookName === 'gateway_start').length, 1);
+      const run = runner(typedHooks);
+      for (let repeat = 0; repeat < 2; repeat += 1) {
+        await run.runGatewayStart({ port: 0 }, {});
+        assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), {
+          version: 1, adapter: 'openclaw', pid: process.pid, token: 'fixture-ready-token', hooks: 4,
+        });
+        assert.equal(statSync(file).mode & 0o777, 0o600);
+        assert.deepEqual(readdirSync(fixtureDir), ['ready.json']);
+      }
+    }
+
+    rmSync(file);
+    assert.throws(() => plugin.register({ pluginConfig: { hooks }, on() { throw new Error('registration failed'); } }), /registration failed/);
+    assert.equal(existsSync(file), false);
+    for (const missing of ['AW_READY_FILE', 'AW_READY_TOKEN']) {
+      process.env.AW_READY_FILE = file;
+      process.env.AW_READY_TOKEN = 'fixture-ready-token';
+      delete process.env[missing];
+      assert.throws(() => plugin.register({ on() {} }), /both readiness file and token/);
+      assert.equal(existsSync(file), false);
+    }
+
+    process.env.AW_READY_FILE = file;
+    process.env.AW_READY_TOKEN = 'fixture-ready-token';
+    mkdirSync(file);
+    let failedWrite;
+    plugin.register({ on(name, handler) { assert.equal(name, 'gateway_start'); failedWrite = handler; } });
+    assert.throws(() => failedWrite(), /EISDIR|EPERM|EEXIST/);
+    assert.deepEqual(readdirSync(fixtureDir), ['ready.json'], 'Failed publication must remove its temporary file');
+  } finally {
+    if (previous.file === undefined) delete process.env.AW_READY_FILE;
+    else process.env.AW_READY_FILE = previous.file;
+    if (previous.token === undefined) delete process.env.AW_READY_TOKEN;
+    else process.env.AW_READY_TOKEN = previous.token;
+    rmSync(fixtureDir, { recursive: true, force: true });
+  }
+});

@@ -21,24 +21,28 @@ OpenClaw、Hermes 提供独立服务和启动器。用户继续使用 Agent 的�
 | 原生工具前后绑定与既有 Hook 共存 | ✅ 适配器和原生测试；真实模型范围见下表 |
 | 声明全部 16 个事件名 | ✅ 静态校验；运行时目前只绑定 `tool.before`、`tool.after` |
 | 所有框架共用一种 Provider 响应 | ✅ 工具前观察/阻断、工具后观察；保留原生调度 |
+| 复用持久 Agent profile | ✅ OpenClaw 的 `--native-state-dir`、QwenPaw 工作目录、Qoder 原生 profile；❌ Hermes 既有 profile 接入 |
+| 启动时确认插件加载 | ✅ OpenClaw Gateway 启动回执、QwenPaw middleware 注册回执；单次效果仍需工具回执证明 |
 | AW 管理审批、末尾安全检查、OS 防护 | ❌ |
 | 接入既有 Gateway、发行包安装、策略热更新 | ❌ |
 
 | 受测框架 | 原生调度 | 执行证据 | 审批边界 |
 | --- | --- | --- | --- |
 | Qoder CLI 1.1.64 | 默认并行；匹配组的 `sequential: true` 使匹配的同步 Hook 串行 | ✅ before 并行重叠和串行参数修改；print/TUI 模型采用原生模式 after 替换结果；headless ask 拒绝 | 原生 ask 进入权限流程；headless 拒绝，交互批准未验证 |
-| OpenClaw 2026.9.6、Node 24.16.0 | before 按优先级串行；after 并发；结果 middleware 按注册顺序串行 | ✅ AW 启动隔离 Gateway，参数修改及替换结果被模型采用 | 原生 `requireApproval`；无模型测试覆盖 deny/report，交互批准未验证 |
-| QwenPaw 2.2.2b4、AgentScope 2.0.8 | middleware 嵌套：before A/B，after B/A | ✅ 此前公开运行时有真模型证据；官方 App 入口用本地模型 fixture 验证允许/阻断/after；❌ ACP/TUI 插件未加载 | ❌ 此 middleware 点位没有命令 ask 桥；显式 ask 明确报错 |
+| OpenClaw 2026.9.6、Node 24.16.0 | before 按优先级串行；after 并发；结果 middleware 按注册顺序串行 | ✅ AW 启动 Gateway，参数修改及替换结果被模型采用；连续启动保留原生认证、会话和既有插件 | 原生 `requireApproval`；无模型测试覆盖 deny/report，交互批准未验证 |
+| QwenPaw 2.2.2b4、AgentScope 2.0.8 | middleware 嵌套：before A/B，after B/A | ✅ 官方 App/API 加真模型验证公共策略允许/阻断/after、既有插件共存及工作目录文件保留；❌ ACP/TUI 插件未加载 | ❌ 此 middleware 点位没有命令 ask 桥；显式 ask 明确报错 |
 | Hermes 源码 `952c941e741e922a9be8fc403c8944c6e96318bb` | shell 回调按注册顺序；工具自身调度不变 | ✅ 经 AW 启动真实 CLI，验证允许、阻断及非交互审批拒绝 | 原生 `approve` 在无交互审批桥时拒绝；交互批准未验证 |
 
-通用 Provider 已通过真实 Qoder 允许/阻断/after、官方 QwenPaw App 加本地模型 fixture，
-以及已安装 Hermes/OpenClaw 原生 dispatcher；后两项公共协议测试没有新模型请求。
+通用 Provider 已在 Qoder、官方 QwenPaw App、Hermes CLI 和 OpenClaw Gateway 中
+通过真模型允许/阻断/after 验证，并与既有 Hook 共存。OpenClaw、Hermes、QwenPaw
+都可能对被阻断的尝试发送 after，出现 after 不等于工具已经执行。
 另有真实 Qoder 采用本机 sec-core V1 0.8.0 判断的联合证据。
 这些结果不代表所有工具类型、失败响应和交互模式都已通过。QwenPaw 与 Qwen Code 是不同框架。
 
 ## 构建并准备配置
 
-先单独安装和配置所选 Agent，包括模型访问。这个 fork 分支使用固定 Rust 工具链从源码
+先单独安装和配置所选 Agent，包括模型访问。框架支持时可以复用同一模型服务凭据；
+原生模型与工作目录设置独立于公共 AW 策略。这个 fork 分支使用固定 Rust 工具链从源码
 构建。在仓库根目录执行：
 
 ```bash
@@ -141,12 +145,31 @@ OpenClaw 和 Hermes 需要显式原生基础配置。这些文件保存 Agent �
 ./target/debug/aw run hermes --config ./target/aw.yaml --native-config /absolute/path/hermes.yaml
 ```
 
-OpenClaw 示例启动新的 Gateway，通过其原生客户端交互。基础配置中的工作目录及文件
-引用应使用绝对路径。已有插件 allowlist 会保留。受测版本的 `agent exec` 会遗漏 Hook
-插件，因此拒绝此入口。停止本次启动的 Gateway 后，AW run 随之结束。
+OpenClaw 示例启动新的 Gateway，通过其原生客户端交互，默认使用临时原生状态。
+需要跨次启动保留认证、会话和已安装插件时，指定原有 OpenClaw 状态目录：
+
+```bash
+./target/debug/aw run openclaw --config ./target/aw.yaml --native-config /absolute/path/openclaw.json --native-state-dir /absolute/path/openclaw-state
+```
+
+使用该目录前先停止原来的 Gateway。AW 启动新进程，不接管已运行的 Gateway。
+原配置和选定状态目录保留，退出时只删除生成配置和 AW 桥。profile 下的
+`.aw-launch.lock` 防止多个 AW 同时使用该目录，退出后保留未加锁文件。此模式保留原生
+home 和 cwd 及其路径解析语义。请提供不含 `$include` 的展开 JSON；当前不重定位原生
+include 引用。
+
+AW 最多等待 30 秒，确认 OpenClaw 插件发出 `gateway_start` 回执。回执缺失或无效时，
+启动失败并回收本次 Agent 进程组。全局关闭插件或 deny AW 会被拒绝。原 allowlist 和
+插件条目保留，既有 Hook 代码不会自动转换为 Provider。`agent exec`、`--profile`、
+`--dev`、`--reset`、`--container`、`--force` 会遗漏受支持的接线或与进程管理冲突，
+因此拒绝；容器或服务管理环境覆盖接线的情况同样拒绝。停止本次 Gateway 后 AW run 结束。
 
 Hermes 保留原生 shell Hook 授权流程。AW 拒绝会关闭 Hook 注册的 `HERMES_SAFE_MODE` (`1/true/yes/on`)。确认生成的命令设置后再授权；AW 不会自动加上
 `--accept-hooks`。
+该 Hermes 版本从 `HERMES_HOME` 同时读取配置和持久状态，没有可用的
+`HERMES_CONFIG_PATH` 覆盖接口。AW 仍使用隔离 Hermes home，不复用原有认证和会话；
+Hermes 的 `--native-state-dir` 会明确拒绝。已有 profile 接入需要安装原生插件，
+或由上游增加配置覆盖接口。
 
 QwenPaw 使用 `qwenpaw app` 服务入口及独立、已初始化的工作目录。受测版本的裸
 `qwenpaw`、项目目录、TUI 和 ACP 入口会遗漏外部 Hook 插件，AW 拒绝这些入口。
@@ -156,10 +179,12 @@ QwenPaw 使用 `qwenpaw app` 服务入口及独立、已初始化的工作目录
 QWENPAW_WORKING_DIR=/absolute/path/isolated-qwenpaw ./target/debug/aw run qwenpaw --config ./target/aw.yaml
 ```
 
-如果已有 `plugins/aw-native`，启动器会拒绝覆盖。此前真实模型验收使用显式加载插件的
-公开运行时 harness，该证据不表示 TUI/ACP 已支持。此适配器不支持 `--native-config`。App 验收在原生插件状态确认 `aw-native` 已加载
-后发送请求；端口开始监听不代表 Hook 就绪，AW 尚未提供该宿主加载状态的证明。
-按原生 middleware 嵌套语义，QwenPaw 被拒绝的工具仍可能产生可观察的 after 响应。
+如果已有 `plugins/aw-native`，启动器会拒绝覆盖；选定工作目录内其他插件和持久文件
+保留。此适配器不支持 `--native-config`、`--native-state-dir`。AW 最多等待 30 秒，
+确认全部 middleware 工厂完成注册；该检查不控制 App HTTP 端口开放时机，也不证明后续
+每次调用采用策略。发送请求前，确认原生插件状态中 `aw-native` 已 loaded；真模型验收
+同时核对该状态和实际工具回执。按原生 middleware 嵌套语义，被拒绝的工具仍可能产生
+可观察的 after 响应。
 
 ## 服务生命周期与记录
 

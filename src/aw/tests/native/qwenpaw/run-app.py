@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Validate the official QwenPaw app entrypoint using a local model fixture.
+"""Validate the official QwenPaw app entrypoint with isolated native state.
 
 Run separately for allow and block with a new --output directory each time.
-No model credentials or external model calls are used. External middleware is
-loaded by the app lifespan; ACP/TUI currently omit that external plugin loader.
+The default model is deterministic and local. --key-file uses real Token Plan
+through a test-only relay that keeps credentials outside the Agent profile.
+External middleware is loaded by the app lifespan; ACP/TUI omit that loader.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -27,22 +29,76 @@ ACP = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(ACP)
 REPO = ACP.REPO
 
+EXISTING_PLUGIN = '''"""Independent observer installed before AW takes ownership of its plugin."""
+import json
+import os
+from pathlib import Path
+from agentscope.middleware import MiddlewareBase
+from agentscope.tool import ToolResponse
+
+def record(value):
+    with Path(os.environ["AW_COEXIST_TRACE"]).open("a") as output:
+        output.write(json.dumps(value) + "\\n")
+
+class Observer(MiddlewareBase):
+    async def on_acting(self, agent, input_kwargs, next_handler):
+        call = input_kwargs["tool_call"]
+        record({"stage":"before","tool":call.name,"call_id":call.id})
+        async for response in next_handler():
+            if isinstance(response, ToolResponse):
+                record({"stage":"after","tool":call.name,"call_id":call.id,"response":response.model_dump(mode="json")})
+            yield response
+
+class Plugin:
+    def register(self, api):
+        api.register_middleware(lambda ctx, cfg: Observer(), priority=25)
+        record({"stage":"registered"})
+
+plugin = Plugin()
+'''
+
 
 def run(args: argparse.Namespace) -> None:
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False, mode=0o700)
     for name in ("home", "home/secret", "work", "state"):
         (output / name).mkdir()
+    real_model = args.key_file is not None
+    model_name = "qwen3.7-plus" if real_model else "aw-fixture"
+    preserved: dict[str, str] = {}
+    if real_model:
+        plugin = output / "home/plugins/existing-observer"
+        plugin.mkdir(parents=True)
+        ACP.write(
+            plugin / "plugin.json",
+            {
+                "id": "existing-observer",
+                "name": "Existing observer fixture",
+                "version": "0.1.0",
+                "type": "general",
+                "entry": {"backend": "plugin.py"},
+                "dependencies": [],
+            },
+        )
+        (plugin / "plugin.py").write_text(EXISTING_PLUGIN)
+        (output / "work/preserved-state.txt").write_text("State existed before AW launch.\n")
+        for path in [
+            plugin / "plugin.json",
+            plugin / "plugin.py",
+            output / "work/preserved-state.txt",
+        ]:
+            preserved[str(path.relative_to(output))] = hashlib.sha256(path.read_bytes()).hexdigest()
     ACP.write(
         output / "home/config.json",
         {
             "agents": {
                 "active_agent": "default",
-                "profiles": {
-                    "default": {"id": "default", "workspace_dir": str(output / "work")}
-                },
+                "profiles": {"default": {"id": "default", "workspace_dir": str(output / "work")}},
             },
-            "plugins": {"aw-native": {"enabled": True}},
+            "plugins": {
+                "aw-native": {"enabled": True},
+                **({"existing-observer": {"enabled": True}} if real_model else {}),
+            },
         },
     )
     ACP.write(
@@ -51,8 +107,12 @@ def run(args: argparse.Namespace) -> None:
             "id": "default",
             "name": "AW fixture",
             "workspace_dir": str(output / "work"),
-            "active_model": {"provider_id": "aw-fixture", "model": "aw-fixture"},
-            "running": {"max_iters": 3},
+            "active_model": {"provider_id": "aw-fixture", "model": model_name},
+            "running": {
+                "max_iters": 3,
+                "auto_title_config": {"enabled": False},
+                "llm_retry_enabled": False,
+            },
             "channels": {"console": {"enabled": True}},
         },
     )
@@ -67,31 +127,43 @@ def run(args: argparse.Namespace) -> None:
         QWENPAW_DISABLE_KEYRING="true",
         QWENPAW_AUTH_ENABLED="false",
         PYTHONDONTWRITEBYTECODE="1",
+        AW_COEXIST_TRACE=str(output / "coexist.jsonl"),
     )
     processes = ACP.Processes(output, environment)
     report = {
         "entrypoint": "official qwenpaw app",
-        "model": "local deterministic OpenAI-compatible fixture",
+        "model": (model_name if real_model else "local deterministic OpenAI-compatible fixture"),
+        "real_model": real_model,
         "mode": args.mode,
         "passed": False,
     }
     socket_path = output / "aw.sock"
     ports = []
     try:
-        processes.start(
+        proxy_command = (
             [
+                sys.executable,
+                str(Path(__file__).with_name("token-plan-proxy.py").resolve()),
+                "--output",
+                str(output),
+                "--key-file",
+                str(args.key_file),
+            ]
+            if real_model
+            else [
                 sys.executable,
                 str(Path(__file__).with_name("run-acp.py").resolve()),
                 "--model-server",
                 "--output",
                 str(output),
-            ],
+            ]
+        )
+        processes.start(
+            proxy_command,
             "model",
         )
         deadline = time.monotonic() + 5
-        while (
-            not (output / "model-server.json").exists() and time.monotonic() < deadline
-        ):
+        while not (output / "model-server.json").exists() and time.monotonic() < deadline:
             time.sleep(0.05)
         model = json.loads((output / "model-server.json").read_text())
         processes.records[0]["ports"] = [model["port"]]
@@ -110,14 +182,15 @@ def run(args: argparse.Namespace) -> None:
                         "chat_model": "OpenAIChatModel",
                         "models": [
                             {
-                                "id": "aw-fixture",
+                                "id": model_name,
                                 "name": "AW local fixture",
                                 "supports_tool_calling": True,
+                                "generate_kwargs": {"extra_body": {"enable_thinking": False}},
                             }
                         ],
                     }
                 },
-                "active_llm": {"provider_id": "aw-fixture", "model": "aw-fixture"},
+                "active_llm": {"provider_id": "aw-fixture", "model": model_name},
             },
         )
         with socket.socket() as reservation:
@@ -165,13 +238,15 @@ def run(args: argparse.Namespace) -> None:
                         },
                         "timeout_ms": 2000,
                         "max_output_bytes": 1048576,
-                        "config": {
-                            "blocked_tools": (
-                                ["execute_shell_command"]
-                                if args.mode == "block"
-                                else []
-                            )
-                        },
+                        "config": (
+                            {"blocked_substrings": ["AW_DENY_FIXTURE"]}
+                            if real_model
+                            else {
+                                "blocked_tools": (
+                                    ["execute_shell_command"] if args.mode == "block" else []
+                                )
+                            }
+                        ),
                     }
                 },
                 "events": {
@@ -243,25 +318,42 @@ def run(args: argparse.Namespace) -> None:
                     f"http://127.0.0.1:{port}/api/plugins", timeout=2
                 ) as response:
                     plugins = json.load(response)
-                entries = (
-                    plugins if isinstance(plugins, list) else plugins.get("plugins", [])
-                )
+                entries = plugins if isinstance(plugins, list) else plugins.get("plugins", [])
                 registered = next(
-                    (
-                        item
-                        for item in entries
-                        if item["id"] == "aw-native" and item["loaded"]
-                    ),
+                    (item for item in entries if item["id"] == "aw-native" and item["loaded"]),
                     None,
                 )
                 if registered:
                     report["plugin"] = registered
+                    if real_model:
+                        report["existing_plugin"] = next(
+                            (
+                                item
+                                for item in entries
+                                if item["id"] == "existing-observer"
+                                and item["loaded"]
+                                and item["enabled"]
+                            ),
+                            None,
+                        )
+                        if report["existing_plugin"] is None:
+                            time.sleep(0.2)
+                            continue
                     break
             except (OSError, urllib.error.URLError):
                 pass
             time.sleep(0.2)
         else:
             raise TimeoutError("Native AW plugin did not become loaded")
+        marker = "AW_DENY_FIXTURE.txt" if real_model and args.mode == "block" else "answer.txt"
+        instruction = (
+            "This is an isolated tool-hook acceptance test. Call "
+            "execute_shell_command exactly once with this exact command:\n"
+            f"```sh\nprintf '42\\n' > {marker}; cat {marker}\n```\n"
+            "Do not use other tools, read workspace instructions, retry, delegate, "
+            "or change this command. If denied, report the denial and stop. "
+            "Otherwise report the exact tool stdout and stop."
+        )
         payload = {
             "session_id": "aw-entrypoint-fixture",
             "user_id": "aw-fixture",
@@ -271,7 +363,11 @@ def run(args: argparse.Namespace) -> None:
                     "content": [
                         {
                             "type": "text",
-                            "text": "Use the native shell once for this isolated AW Hook fixture, then stop.",
+                            "text": (
+                                instruction
+                                if real_model
+                                else "Use the native shell once for this isolated AW Hook fixture, then stop."
+                            ),
                         }
                     ],
                 }
@@ -282,26 +378,20 @@ def run(args: argparse.Namespace) -> None:
             data=json.dumps(payload).encode(),
             headers={"Content-Type": "application/json", "X-Agent-Id": "default"},
         )
-        with urllib.request.urlopen(request, timeout=60) as response:
+        with urllib.request.urlopen(request, timeout=120 if real_model else 60) as response:
             stream = response.read(1024 * 1024 + 1)
         if len(stream) > 1024 * 1024:
             raise RuntimeError("Console response exceeds fixture bound")
         (output / "console-events.log").write_bytes(stream)
-        audit = [
-            json.loads(line)
-            for line in (output / "audit.jsonl").read_text().splitlines()
-        ]
+        audit = [json.loads(line) for line in (output / "audit.jsonl").read_text().splitlines()]
         report["audit"] = audit
-        report["marker_exists"] = (output / "work/answer.txt").exists()
+        report["marker_exists"] = (output / "work" / marker).exists()
         report["marker_value"] = (
-            (output / "work/answer.txt").read_text()
-            if report["marker_exists"]
-            else None
+            (output / "work" / marker).read_text() if report["marker_exists"] else None
         )
         report["passed"] = report["marker_exists"] == (args.mode == "allow") and any(
             item.get("event") == "tool.before"
-            and item.get("disposition")
-            == ("block" if args.mode == "block" else "observe")
+            and item.get("disposition") == ("block" if args.mode == "block" else "observe")
             for item in audit
         )
         if args.mode == "allow":
@@ -310,6 +400,45 @@ def run(args: argparse.Namespace) -> None:
                 and report["marker_value"] == "42\n"
                 and any(item.get("event") == "tool.after" for item in audit)
             )
+        if real_model:
+            report["coexist"] = [
+                json.loads(line) for line in (output / "coexist.jsonl").read_text().splitlines()
+            ]
+            report["model_requests"] = [
+                json.loads(line)
+                for line in (output / "model-requests.jsonl").read_text().splitlines()
+            ]
+            report["passed"] = report["passed"] and all(
+                any(item["stage"] == stage for item in report["coexist"])
+                for stage in ["registered", "before", "after"]
+            )
+            if args.mode == "allow":
+                report["passed"] = report["passed"] and any(
+                    item["tool_result_contains_42"] for item in report["model_requests"]
+                )
+            else:
+                report["passed"] = (
+                    report["passed"]
+                    and any(
+                        item["stage"] == "after" and item["response"]["state"] == "denied"
+                        for item in report["coexist"]
+                    )
+                    and any(item["tool_result_count"] for item in report["model_requests"])
+                )
+            report["registration_receipts"] = []
+            for path in (output / "state").rglob("*.json"):
+                value = json.loads(path.read_text())
+                if (
+                    value.get("adapter") == "qwenpaw"
+                    and value.get("version") == 1
+                    and "token" in value
+                ):
+                    report["registration_receipts"].append(
+                        {key: value[key] for key in ["version", "adapter", "pid", "hooks"]}
+                    )
+            report["passed"] = report["passed"] and any(
+                item["hooks"] == 2 for item in report["registration_receipts"]
+            )
     except BaseException as error:
         report["error"] = f"{type(error).__name__}: {error}"
         raise
@@ -317,6 +446,23 @@ def run(args: argparse.Namespace) -> None:
         processes.close()
         report["socket_removed"] = not socket_path.exists()
         report["plugin_removed"] = not (output / "home/plugins/aw-native").exists()
+        if real_model:
+            report["preserved_files"] = {
+                name: (output / name).is_file()
+                and hashlib.sha256((output / name).read_bytes()).hexdigest() == digest
+                for name, digest in preserved.items()
+            }
+            report["passed"] = report["passed"] and all(report["preserved_files"].values())
+            key = args.key_file.read_bytes().strip()
+            matches = []
+            for path in output.rglob("*"):
+                if path.is_file() and key and key in path.read_bytes():
+                    matches.append(str(path.relative_to(output)))
+                    path.write_bytes(path.read_bytes().replace(key, b"[REDACTED]"))
+            report["credential_scan"] = {
+                "matches_redacted": matches,
+                "clean": not matches,
+            }
         report["ports_closed"] = []
         for port in ports:
             with socket.socket() as connection:
@@ -337,9 +483,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--mode", choices=["allow", "block"], required=True)
-    parser.add_argument(
-        "--runtime", type=Path, default=REPO / "target/native-lab/qwenpaw"
-    )
+    parser.add_argument("--runtime", type=Path, default=REPO / "target/native-lab/qwenpaw")
     parser.add_argument("--aw", type=Path, default=REPO / "src/aw/target/debug/aw")
+    parser.add_argument(
+        "--key-file",
+        type=Path,
+        help="Use real Token Plan through an in-memory credential relay",
+    )
     signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
     run(parser.parse_args())

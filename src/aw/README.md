@@ -9,6 +9,9 @@ Build from `src/aw` with `cargo build --locked -p aw-cli`, then use
 There is no packaged installation yet. See the user guide for native profiles,
 real-model evidence and explicit gaps. Qoder print/TUI after adoption is verified;
 interactive approval remains unverified.
+OpenClaw can retain its native state with `aw run ... --native-state-dir DIR`.
+OpenClaw and QwenPaw launches now require bounded plugin registration confirmation;
+Hermes still uses an isolated profile. See the guide for the supported paths.
 
 ## Run the checks
 

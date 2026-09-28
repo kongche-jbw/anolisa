@@ -7,10 +7,10 @@ use crate::{
 use serde_json::{json, Value};
 use std::{
     collections::BTreeMap,
-    fs::{self, OpenOptions},
+    fs::{self, File, OpenOptions},
     io::{Read, Write},
     os::unix::{
-        fs::{OpenOptionsExt, PermissionsExt},
+        fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
         process::{CommandExt, ExitStatusExt},
     },
     path::{Path, PathBuf},
@@ -93,9 +93,61 @@ fn base(path: Option<&Path>) -> Result<Value, Error> {
         None => Ok(json!({})),
     }
 }
+fn contains_include(value: &Value) -> bool {
+    match value {
+        Value::Object(fields) => {
+            fields.contains_key("$include") || fields.values().any(contains_include)
+        }
+        Value::Array(items) => items.iter().any(contains_include),
+        _ => false,
+    }
+}
 pub(crate) struct Prepared {
     pub argv: Vec<String>,
     pub env: BTreeMap<String, String>,
+    registration: Option<Registration>,
+    // Keep the selected native profile exclusive until its Agent group is gone.
+    _profile_lock: Option<File>,
+}
+
+struct Registration {
+    path: PathBuf,
+    token: String,
+    adapter: String,
+    hooks: usize,
+}
+
+fn native_profile(path: &Path) -> Result<(PathBuf, File), Error> {
+    use std::os::fd::AsRawFd;
+    if !path.is_absolute() {
+        return Err("--native-state-dir must be absolute".into());
+    }
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(path)?;
+    let path = path.canonicalize()?;
+    let metadata = fs::metadata(&path)?;
+    if !metadata.is_dir() || metadata.uid() != unsafe { libc::getuid() } {
+        return Err("native state directory must belong to the current user".into());
+    }
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path.join(".aw-launch.lock"))?;
+    // The descriptor stays open for the full native process lifetime.
+    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        return Err(format!(
+            "native profile is already in use or cannot be locked: {}: {}",
+            path.display(),
+            std::io::Error::last_os_error()
+        )
+        .into());
+    }
+    Ok((path, lock))
 }
 pub(crate) fn prepare(
     config: &Configuration,
@@ -103,6 +155,7 @@ pub(crate) fn prepare(
     socket: &Path,
     dir: &Path,
     native: Option<&Path>,
+    native_state: Option<&Path>,
 ) -> Result<Prepared, Error> {
     let agent_config = config.agent(agent)?;
     let adapter = agent_config["adapter"].as_str().ok_or("missing adapter")?;
@@ -116,6 +169,20 @@ pub(crate) fn prepare(
         ("AW_AGENT".into(), agent.into()),
     ]);
     let mut value = base(native)?;
+    let registration = matches!(adapter, "openclaw" | "qwenpaw").then(|| Registration {
+        path: dir.join("registration.json"),
+        token: format!("{}:{}", config.revision, std::process::id()),
+        adapter: adapter.into(),
+        hooks: hooks.len(),
+    });
+    if let Some(receipt) = &registration {
+        env.insert(
+            "AW_READY_FILE".into(),
+            receipt.path.to_string_lossy().into(),
+        );
+        env.insert("AW_READY_TOKEN".into(), receipt.token.clone());
+    }
+    let mut profile_lock = None;
     match adapter {
         "qoder" => {
             object(&mut value, "hooks")?;
@@ -198,6 +265,9 @@ pub(crate) fn prepare(
             env.insert("HERMES_HOME".into(), dir.to_string_lossy().into());
         }
         "openclaw" => {
+            if contains_include(&value) {
+                return Err("OpenClaw $include is relative to its original config; provide an expanded native JSON configuration".into());
+            }
             if argv
                 .windows(2)
                 .any(|pair| pair[0] == "agent" && pair[1] == "exec")
@@ -222,6 +292,14 @@ pub(crate) fn prepare(
                 include_str!("../../../adapters/openclaw/openclaw.plugin.json"),
             )?;
             object(&mut value, "plugins")?;
+            if value["plugins"]["enabled"] == false
+                || value["plugins"]["deny"].as_array().is_some_and(|deny| {
+                    deny.iter()
+                        .any(|id| id.as_str().is_some_and(|id| id.trim() == "aw-native-hooks"))
+                })
+            {
+                return Err("OpenClaw native configuration disables the AW plugin".into());
+            }
             object(&mut value["plugins"], "load")?;
             object(&mut value["plugins"], "entries")?;
             append(&mut value["plugins"]["load"], "paths", json!(plugin))?;
@@ -263,8 +341,22 @@ pub(crate) fn prepare(
             let path = dir.join("openclaw.json");
             write_private(&path, &value)?;
             env.insert("OPENCLAW_CONFIG_PATH".into(), path.to_string_lossy().into());
-            env.insert("OPENCLAW_STATE_DIR".into(), dir.to_string_lossy().into());
-            env.insert("OPENCLAW_HOME".into(), dir.to_string_lossy().into());
+            if let Some(selected) = native_state {
+                let (profile, lock) = native_profile(selected)?;
+                if profile.starts_with(dir) {
+                    return Err(
+                        "native state cannot be inside the temporary AW launch directory".into(),
+                    );
+                }
+                env.insert(
+                    "OPENCLAW_STATE_DIR".into(),
+                    profile.to_string_lossy().into(),
+                );
+                profile_lock = Some(lock);
+            } else {
+                env.insert("OPENCLAW_STATE_DIR".into(), dir.to_string_lossy().into());
+                env.insert("OPENCLAW_HOME".into(), dir.to_string_lossy().into());
+            }
         }
         "qwenpaw" => {
             if native.is_some() {
@@ -304,7 +396,12 @@ pub(crate) fn prepare(
         }
         _ => return Err("unknown adapter".into()),
     }
-    Ok(Prepared { argv, env })
+    Ok(Prepared {
+        argv,
+        env,
+        registration,
+        _profile_lock: profile_lock,
+    })
 }
 pub(crate) fn request(op: &str) -> Request {
     Request {
@@ -531,6 +628,71 @@ impl AgentChild {
         }
     }
 }
+
+impl Registration {
+    fn loaded(&self, group: u32) -> Result<bool, Error> {
+        let file = match OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&self.path)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error.into()),
+        };
+        let mut bytes = Vec::new();
+        file.take(4097).read_to_end(&mut bytes)?;
+        if bytes.len() > 4096 {
+            return Err("native registration receipt exceeds 4 KiB".into());
+        }
+        let receipt: Value = serde_json::from_slice(&bytes)?;
+        let pid = receipt["pid"]
+            .as_u64()
+            .and_then(|pid| i32::try_from(pid).ok())
+            .filter(|pid| *pid > 0)
+            .ok_or("native registration has no valid PID")?;
+        if receipt["version"] != 1
+            || receipt["adapter"] != self.adapter
+            || receipt["token"] != self.token
+            || receipt["hooks"] != self.hooks
+            || unsafe { libc::getpgid(pid) } != group as i32
+        {
+            return Err("native registration receipt does not match this launch".into());
+        }
+        Ok(true)
+    }
+
+    fn wait(&self, child: &AgentChild) -> Result<(), Error> {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if AGENT_SIGNAL.load(std::sync::atomic::Ordering::Relaxed) != 0 {
+                return Err("native registration wait interrupted".into());
+            }
+            if child.exited()? {
+                return Err(format!(
+                    "{} exited before AW Hook registration was confirmed",
+                    self.adapter
+                )
+                .into());
+            }
+            if self.loaded(child.child.id())? {
+                eprintln!(
+                    "AW: {} Hook registrations confirmed ({})",
+                    self.adapter, self.hooks
+                );
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(format!(
+                    "{} did not confirm AW Hook registration within 30 seconds",
+                    self.adapter
+                )
+                .into());
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
 impl Drop for AgentChild {
     fn drop(&mut self) {
         if !self.reaped {
@@ -547,7 +709,7 @@ pub(crate) fn run(prepared: Prepared, extra: Vec<String>) -> Result<i32, Error> 
         child: Command::new(&prepared.argv[0])
             .args(&prepared.argv[1..])
             .args(extra)
-            .envs(prepared.env)
+            .envs(&prepared.env)
             .process_group(0)
             .spawn()?,
         reaped: false,
@@ -565,7 +727,12 @@ pub(crate) fn run(prepared: Prepared, extra: Vec<String>) -> Result<i32, Error> 
     if pending != 0 {
         child.signal(pending)?;
     }
-    let waited = child.wait_native();
+    let waited = (|| {
+        if let Some(registration) = &prepared.registration {
+            registration.wait(&child)?;
+        }
+        child.wait_native()
+    })();
     let cleaned = child.cleanup();
     terminal.restore()?;
     waited?;

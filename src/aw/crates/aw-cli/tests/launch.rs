@@ -138,7 +138,31 @@ impl Lab {
         let agent = directory.0.join("agent.sh");
         fs::write(
             &agent,
-            "#!/bin/sh\nset -eu\nif [ -n \"${OPENCLAW_CONFIG_PATH:-}\" ]; then\n  cat \"$OPENCLAW_CONFIG_PATH\" > \"$AW_TEST_CAPTURE\"\nelif [ -n \"${HERMES_HOME:-}\" ]; then\n  cat \"$HERMES_HOME/config.yaml\" > \"$AW_TEST_CAPTURE\"\nelse\n  printf '{}' > \"$AW_TEST_CAPTURE\"\nfi\n",
+            r#"#!/bin/sh
+set -eu
+if [ -n "${OPENCLAW_CONFIG_PATH:-}" ]; then
+  cat "$OPENCLAW_CONFIG_PATH" > "$AW_TEST_CAPTURE"
+  python3 - <<'PY'
+import json, os
+from pathlib import Path
+env = {name: os.environ.get(name) for name in ('OPENCLAW_HOME', 'OPENCLAW_STATE_DIR', 'OPENCLAW_CONFIG_PATH')}
+Path(os.environ['AW_TEST_CAPTURE'] + '.env').write_text(json.dumps(env))
+profile = Path(os.environ['OPENCLAW_STATE_DIR'])
+with (profile / 'session-marker').open('a') as f:
+    f.write('session\n')
+config = json.loads(Path(os.environ['OPENCLAW_CONFIG_PATH']).read_text())
+hooks = config['plugins']['entries']['aw-native-hooks']['config']['hooks']
+Path(os.environ['AW_READY_FILE']).write_text(json.dumps({
+    'version': 1, 'adapter': 'openclaw', 'pid': os.getppid(),
+    'token': os.environ['AW_READY_TOKEN'], 'hooks': sum(map(len, hooks.values()))}))
+PY
+  sleep 0.15
+elif [ -n "${HERMES_HOME:-}" ]; then
+  cat "$HERMES_HOME/config.yaml" > "$AW_TEST_CAPTURE"
+else
+  printf '{}' > "$AW_TEST_CAPTURE"
+fi
+"#,
         )
         .unwrap();
         let mut argv = vec!["/bin/sh".to_owned(), agent.to_string_lossy().into_owned()];
@@ -177,6 +201,15 @@ impl Lab {
     }
 
     fn run_with_safe_mode(&self, extra: &[&str], safe_mode: Option<&str>) -> (ExitStatus, String) {
+        self.run_with_profile(extra, safe_mode, None)
+    }
+
+    fn run_with_profile(
+        &self,
+        extra: &[&str],
+        safe_mode: Option<&str>,
+        profile: Option<&Path>,
+    ) -> (ExitStatus, String) {
         let original = fs::read(&self.native).unwrap();
         let mut command = Command::new(AW);
         command
@@ -187,10 +220,16 @@ impl Lab {
             .arg("--state-dir")
             .arg(&self.state)
             .arg("--socket")
-            .arg(&self.socket)
+            .arg(&self.socket);
+        if let Some(profile) = profile {
+            command.arg("--native-state-dir").arg(profile);
+        }
+        command
             .arg("--")
             .args(extra)
             .env("AW_TEST_CAPTURE", &self.capture)
+            .env("OPENCLAW_HOME", self.directory.0.join("original-home"))
+            .env_remove("OPENCLAW_CONTAINER")
             .env_remove("OPENCLAW_CONFIG_PATH")
             .env_remove("HERMES_HOME");
         if let Some(value) = safe_mode {
@@ -209,6 +248,16 @@ impl Lab {
     }
 
     fn capture(&self) -> Value {
+        self.capture_with_profile(None)
+    }
+
+    fn capture_with_profile(&self, profile: Option<&Path>) -> Value {
+        let (status, stderr) = self.with_daemon(profile);
+        assert!(status.success(), "launcher failed: {stderr}");
+        serde_json::from_slice(&fs::read(&self.capture).unwrap()).unwrap()
+    }
+
+    fn with_daemon(&self, profile: Option<&Path>) -> (ExitStatus, String) {
         let mut command = Command::new(AW);
         command
             .args(["serve", "--config"])
@@ -223,12 +272,10 @@ impl Lab {
             assert!(daemon.child.try_wait().unwrap().is_none(), "daemon exited");
             thread::sleep(Duration::from_millis(10));
         }
-        let (status, stderr) = self.run(&[]);
-        assert!(status.success(), "launcher failed: {stderr}");
-        let value = serde_json::from_slice(&fs::read(&self.capture).unwrap()).unwrap();
+        let (status, stderr) = self.run_with_profile(&[], None, profile);
         daemon.stop();
         assert!(!self.socket.exists());
-        value
+        (status, stderr)
     }
 
     fn rejects(&self, extra: &[&str], reason: &str) {
@@ -386,4 +433,128 @@ fn qoder_settings_rejected_in_forwarded_arguments() {
     for arguments in [vec!["--settings", "{}"], vec!["--settings={}"]] {
         Lab::new("qoder", json!({}), 1000, &[]).rejects(&arguments, "--native-config");
     }
+}
+
+#[test]
+fn openclaw_state_and_native_home_survive_repeated_launches() {
+    let lab = Lab::new(
+        "openclaw",
+        json!({"plugins":{"load":{"paths":["./existing-plugin"]}}}),
+        1000,
+        &[],
+    );
+    let profile = lab.directory.0.join("native-profile");
+    fs::create_dir(&profile).unwrap();
+    let auth = profile.join("auth.json");
+    fs::write(&auth, "native-auth-sentinel").unwrap();
+    for _ in 0..2 {
+        let value = lab.capture_with_profile(Some(&profile));
+        assert_eq!(value["plugins"]["load"]["paths"][0], "./existing-plugin");
+        let env: Value =
+            serde_json::from_slice(&fs::read(format!("{}.env", lab.capture.display())).unwrap())
+                .unwrap();
+        assert_eq!(
+            env["OPENCLAW_STATE_DIR"],
+            profile.to_string_lossy().as_ref()
+        );
+        assert_eq!(
+            env["OPENCLAW_HOME"],
+            lab.directory
+                .0
+                .join("original-home")
+                .to_string_lossy()
+                .as_ref()
+        );
+        assert_eq!(fs::read_to_string(&auth).unwrap(), "native-auth-sentinel");
+    }
+    assert_eq!(
+        fs::read_to_string(profile.join("session-marker")).unwrap(),
+        "session\nsession\n"
+    );
+}
+
+#[test]
+fn openclaw_rejects_disabled_plugins_and_unresolved_includes() {
+    for value in [
+        json!({"plugins":{"enabled":false}}),
+        json!({"plugins":{"deny":[" aw-native-hooks "]}}),
+    ] {
+        Lab::new("openclaw", value, 1000, &[]).rejects(&[], "disables the AW plugin");
+    }
+    for value in [
+        json!({"$include":"./base.json"}),
+        json!({"agents":{"defaults":{"$include":"./agent.json"}}}),
+    ] {
+        Lab::new("openclaw", value, 1000, &[]).rejects(&[], "$include");
+    }
+}
+
+#[test]
+fn openclaw_rejects_native_ownership_overrides() {
+    for flag in [
+        "--profile",
+        "--profile=dev",
+        "--dev",
+        "--reset",
+        "--container=test",
+        "--force",
+    ] {
+        Lab::new("openclaw", json!({}), 1000, &[flag]).rejects(&[], "conflicts with AW-owned");
+        Lab::new("openclaw", json!({}), 1000, &[]).rejects(&[flag], "conflicts with AW-owned");
+    }
+}
+
+#[test]
+fn native_state_override_is_not_silently_ignored() {
+    for adapter in ["qoder", "hermes", "qwenpaw"] {
+        let lab = Lab::new(adapter, json!({}), 1000, &[]);
+        let (status, stderr) =
+            lab.run_with_profile(&[], None, Some(&lab.directory.0.join("profile")));
+        assert_eq!(status.code(), Some(125));
+        assert!(stderr.contains("supported only for OpenClaw"), "{stderr}");
+        assert!(!lab.capture.exists());
+    }
+}
+
+#[test]
+fn openclaw_missing_or_invalid_registration_cannot_report_success() {
+    for replacement in [
+        "raise SystemExit(0)",
+        "os.environ['AW_READY_TOKEN'] = 'stale-token'",
+        "os.getppid = lambda: 1",
+    ] {
+        let lab = Lab::new("openclaw", json!({}), 1000, &[]);
+        let script = lab.directory.0.join("agent.sh");
+        let source = fs::read_to_string(&script).unwrap();
+        fs::write(
+            &script,
+            source.replace(
+                "hooks = config[",
+                &format!("{replacement}\nhooks = config["),
+            ),
+        )
+        .unwrap();
+        let (status, stderr) = lab.with_daemon(None);
+        assert_eq!(status.code(), Some(125), "{stderr}");
+        assert!(stderr.contains("registration"), "{stderr}");
+    }
+}
+
+#[test]
+fn openclaw_profile_lock_prevents_concurrent_aw_ownership() {
+    use std::os::fd::AsRawFd;
+    let lab = Lab::new("openclaw", json!({}), 1000, &[]);
+    let profile = lab.directory.0.join("profile");
+    fs::create_dir(&profile).unwrap();
+    let lock = File::create(profile.join(".aw-launch.lock")).unwrap();
+    assert_eq!(
+        unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+        0
+    );
+    let (status, stderr) = lab.run_with_profile(&[], None, Some(&profile));
+    assert_eq!(status.code(), Some(125));
+    assert!(stderr.contains("already in use"), "{stderr}");
+    assert!(!lab.socket.exists());
+    drop(lock);
+    lab.capture_with_profile(Some(&profile));
 }
