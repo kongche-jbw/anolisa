@@ -22,9 +22,10 @@ class AwToolMiddleware(MiddlewareBase):
     Approval is outside on_acting and is deliberately unsupported here.
     """
 
-    def __init__(self, event: str, provider: str) -> None:
+    def __init__(self, event: str, provider: str, on_error: str | None = None) -> None:
         self.event = event
         self.provider = provider
+        self.on_error = on_error
 
     async def _invoke(self, payload: dict[str, Any]) -> tuple[int, bytes, bytes]:
         proc = await asyncio.create_subprocess_exec(
@@ -38,6 +39,7 @@ class AwToolMiddleware(MiddlewareBase):
             self.event,
             "--provider",
             self.provider,
+            *(["--adapter", "qwenpaw", "--on-error", self.on_error] if self.on_error else []),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -113,7 +115,7 @@ class AwPlugin:
         for hook in hooks:
 
             def factory(ctx: Any, agent_config: Any, hook: dict = hook) -> AwToolMiddleware:
-                return AwToolMiddleware(hook["event"], hook["provider"])
+                return AwToolMiddleware(hook["event"], hook["provider"], hook.get("on_error"))
 
             api.register_middleware(factory, priority=hook.get("priority", 100))
 

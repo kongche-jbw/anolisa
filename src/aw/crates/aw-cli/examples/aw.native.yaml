@@ -34,6 +34,9 @@ spec:
       adapter: qwenpaw
       argv:
       - qwenpaw
+      - app
+      - --host
+      - 127.0.0.1
   providers:
     before-command:
       protocol: native-hook/v1alpha1

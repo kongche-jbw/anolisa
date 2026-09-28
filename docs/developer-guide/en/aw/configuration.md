@@ -11,8 +11,9 @@ The [bundled schema](https://github.com/kongche-jbw/anolisa/blob/feat/aw/native-
 defines the public shape; Rust validation also checks references and relationships.
 `aw validate` performs these static checks. `aw plan AGENT` additionally checks the
 native subset for that Agent; `aw run AGENT` prepares its host bindings and starts
-the configured command. Static validity does not imply runtime support. Structured
-Provider execution, discovery and capability admission remain unimplemented.
+the configured command. Static validity does not imply runtime support. `aw check AGENT` executes
+structured Provider discovery/private-config validation; `aw run` performs it
+automatically. Common effects are limited to before observe/block and after observe.
 
 ## Document fields
 
@@ -32,12 +33,12 @@ All fields below are inside `spec` unless stated otherwise.
 | `audit.enabled`, `audit.payload` | Required `true` and `metadata_only`; the daemon appends invocation metadata to `audit.jsonl` beside its socket |
 | `agents.<id>.adapter` | `qwenpaw`, `qoder`, `openclaw` or `hermes`; recognition is not runtime certification |
 | `agents.<id>.argv` | Nonempty executable/argument array; first element must be nonempty; no implicit shell or interpolation |
-| `providers.<id>.protocol` | `native-hook/v1alpha1` for native commands; `aw-provider/v1alpha1` for the separate, unimplemented structured Provider runtime |
+| `providers.<id>.protocol` | `native-hook/v1alpha1` for native commands; `aw-provider/v1alpha1` for common structured tool effects |
 | `providers.<id>.transport` | `{type: stdio, location: agent, argv: [...], env: {...}}`; `env` is optional. Native execution runs one fixed argv per callback at its working directory |
 | `providers.<id>.transport.env` | Literal string overrides of the callback environment; no interpolation. At most 128 keys matching `[A-Za-z_][A-Za-z0-9_]*`, each value at most 4096 characters and without NUL |
 | `providers.<id>.timeout_ms` | Positive per-invocation ceiling; native admission caps it at 300,000 ms and applies the host limits below |
 | `providers.<id>.max_output_bytes` | Positive output ceiling; native execution limits stdout and stderr independently to this value, at most 4 MiB each |
-| `providers.<id>.config` | Required object; native steps require `{}`. Structured Providers may retain opaque private JSON, including Unicode keys and finite decimals; private-schema validation remains unimplemented |
+| `providers.<id>.config` | Required object; native steps require `{}`. Structured Providers may retain opaque private JSON, including Unicode keys and finite decimals; the Provider validates its private schema |
 | `events.<name>.enabled` | Required boolean for a declared event; omitted events are disabled |
 | `events.<name>.required` | Defaults to `false`; a disabled event cannot be required. Reserved for capability admission; native bindings do not gain additional enforcement from this flag |
 | `events.<name>.budget_ms` | Optional structured override of the default event budget; a nested guard shares its parent's remaining budget. Rejected on enabled native events |
@@ -47,7 +48,7 @@ All fields below are inside `spec` unless stated otherwise.
 | `steps[].id`, `steps[].enabled` | ID unique within its event; enabled defaults to `true` |
 | `steps[].provider` | Declared Provider ID with a protocol matching the step kind |
 | `steps[].native` | Native registration options: `{}` or the supported `priority`, `point` and `sequential` fields below |
-| `steps[].operation` | Structured-only nonempty operation name; operation discovery remains unimplemented |
+| `steps[].operation` | Structured-only nonempty operation name; checked against Provider discovery |
 | `steps[].effects` | Structured-only nonempty unique effect list; requested upper bounds, not a permission grant |
 | `steps[].on_error` | Structured-only `report`, `block` or `withhold_result`, constrained by event timing |
 
@@ -62,6 +63,29 @@ Public objects reject unknown fields. Provider `config` alone accepts private
 fields. Missing Provider references and duplicate step IDs are errors even in
 disabled steps, so enabling a step does not uncover a hidden reference typo.
 Defaults are documented behavior, not values inserted into the parsed document.
+
+## Common Provider runtime
+
+Use [aw.provider.yaml](https://github.com/kongche-jbw/anolisa/blob/feat/aw/native-hook-lab/src/aw/crates/aw-cli/examples/aw.provider.yaml)
+for one policy across the four Agent targets. A step has `id`, `provider`,
+`operation`, `effects`, `on_error` and optional `enabled`, without `native`.
+`tool.before` accepts `observe/block` with `report/block`; `tool.after` accepts
+`observe` with `report`. Unsupported effects, guards and explicit event budgets
+fail admission even when the static schema permits them.
+
+The [protocol reference](https://github.com/kongche-jbw/anolisa/blob/feat/aw/native-hook-lab/src/aw/docs/design/provider-protocol.md)
+defines `describe`, `validate_config` and `invoke`. Each callback runs those three
+methods under one Provider timeout and validates the request ID, digest and
+returned effects. Provider stdout is protocol JSON; native results are produced
+by AW. Empty effects do not approve native permissions. Host callback ordering
+remains unchanged. Discovery/config validation also run before Agent launch.
+
+`on_error` covers protocol errors and daemon failures while the callback client
+is alive. A missing or killed host helper remains a native coverage gap.
+Generated client bindings include `--adapter` and `--on-error`; they are internal
+hook invocation options, not a way to strengthen the configured enforcement level.
+Audit adds `protocol` and `disposition`; it records the returned decision, not
+proof that the native host applied it.
 
 ## Native hook runtime
 
@@ -84,7 +108,7 @@ explicit ask as unsupported. There is no shared AW approval UI; AW does not turn
 an ask response into automatic approval.
 
 The [runtime admission code](https://github.com/kongche-jbw/anolisa/blob/feat/aw/native-hook-lab/src/aw/crates/aw-cli/src/model.rs)
-allows only enabled `tool.before` and `tool.after` events, native steps, and an
+allows only enabled `tool.before` and `tool.after` events, supported steps, and an
 omitted tool selector or exactly `['*']`. Other enabled events, exact selectors,
 event `budget_ms` and guards are rejected. Disabled entries can retain structured
 configuration, subject to static validation. The same Provider cannot be registered
@@ -144,9 +168,9 @@ a production deployment or an available `anolisa install aw` package.
 
 ## Structured schema events, effects and tool selection
 
-The schema recognizes these 16 names. The structured `aw-provider/v1alpha1`
-execution model below remains unimplemented; only the two tool events are admitted
-by the native runtime described above.
+The schema recognizes these 16 names. The common `aw-provider/v1alpha1` runtime
+admits only the two tool events with observe/block before and observe after.
+The wider static effect vocabulary below does not imply runtime implementation.
 
 | Event | Meaning |
 | --- | --- |
@@ -185,7 +209,8 @@ acquiring approval capability. Native host approval is unaffected.
 `withhold_result` is valid only after a tool. `report` records a failure and
 continues. Withholding requires a verified model-consumption boundary; replacing
 a history entry is insufficient. Required redaction must not use `report`.
-The service must enforce these requirements at admission and execution.
+The current runtime rejects unimplemented withhold_result and guards rather than
+automatically weakening their requirements.
 
 Selectors are `*`, `bash`, `file_read`, `file_write`, or
 `native:<adapter>:<exact-name>` for any of the four adapter IDs. Native selectors
@@ -194,8 +219,8 @@ other than the single `*`. All-tools routing includes native custom tools and
 preserves their input; it does not make every Provider understand every tool.
 
 `required: false` cannot authorize dropping an active control effect or its
-failure action. Future runtime admission must check every enabled step against
-Provider declarations, implementation and native capabilities, and reject
+failure action. Runtime admission checks every enabled step against
+Provider declarations, implementation and native capabilities, and rejects
 unsupported required controls. Optional unavailable observation sources must be
 reported explicitly. Parsing alone does not perform that admission.
 

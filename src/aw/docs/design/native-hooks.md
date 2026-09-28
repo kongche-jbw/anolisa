@@ -2,8 +2,7 @@
 
 [中文版](native-hooks_zh.md)
 
-This fork delivers a runnable slice before the structured Provider protocol is
-implemented: one configuration, an independent daemon, a Rust launcher, and native
+This native-mode slice provides: one configuration, an independent daemon, a Rust launcher, and native
 tool callbacks for four Agent frameworks. It has no cosh or Herdr dependency.
 
 ## Execution boundary
@@ -57,7 +56,8 @@ Give each registration its own Provider instance name.
 Qoder's `native.sequential` is an explicit host option. OpenClaw and QwenPaw use
 `native.priority`. Unsupported extensions fail target admission. Common empty
 `native: {}` steps can be shared by all four targets, but control scripts need
-framework-specific decoding until structured Providers are implemented.
+framework-specific decoding. The separate [common Provider path](provider-protocol.md)
+now handles portable observe/block responses.
 
 ## Evidence and remaining gaps
 
@@ -69,18 +69,17 @@ Permanent user installations and services were not replaced.
 
 | Acceptance | Outcome |
 | --- | --- |
-| Qoder before scheduling, input rewrite, native ask | Real AW callbacks observed. Headless ask denied. Native write permission prevented tool execution; real PostToolUse adoption remains open |
+| Qoder before scheduling, input rewrite, native ask | Real print parallel/serial and natural TUI after replacement reached the model; native Hooks coexisted. Headless ask denied; AW allow did not override separate file-write permission |
 | OpenClaw Gateway through `aw run` | Tool input changed; raw text value 52 became 73 through result middleware; model answered 73. History and after observation also recorded 73 |
-| QwenPaw public runtime through `aw run` | Allow wrote 42; deny did not write; explicit ask errored without writing. Before A/B and after B/A observed; complete CLI/TUI remains open |
+| QwenPaw public runtime through `aw run` | Allow wrote 42; deny did not write; explicit ask errored without writing. Before A/B and after B/A observed; official App entrypoint additionally passed common Provider allow/block/after with a local model fixture; ACP/TUI skip plugin loading and are rejected |
 | Hermes actual CLI through `aw run` | Allow wrote 42; block and noninteractive approve did not write. Before A/B and after A/B observed |
 | Native coexistence | Installed framework runners and plugin loading tested; OpenClaw absent/empty allowlists preserve native plugin admission |
 | Interactive user approval | Not validated for any framework; no AW approval UI |
 | sec-core policy, all tool/result classes, OS/final/protected | Not certified by these command fixtures |
 
-The Qoder run budget was capped at three short scenarios, including an earlier
-startup probe. The fixture was corrected to supply explicit tool permission, but
-was not rerun after the cap. BYOK setup failed to save; the cause was not proven.
-No further Qoder credits should be used without renewed authorization.
+Qoder after acceptance used harmless read-only printing after write permission was
+independently denied. Common Provider allow/after/block also passed in real print.
+BYOK setup did not save; its cause remains unproven.
 
 Real-model tests are opt-in and excluded from CI. Their bounded runners record
 owned PIDs, commands, deadlines and cleanup. Local evidence remains in the ignored
@@ -115,11 +114,11 @@ groups, not processes that deliberately escape with a new session.
 
 ## Subsequent delivery
 
-1. Close Qoder real after and QwenPaw full entrypoint acceptance with explicit
-   native permissions and isolated profiles; retain interactive ask as a separate
-   acceptance dimension.
-2. Define normalized events, `describe/validate_config/invoke`, supported effects
-   and errors using this matrix. Integrate Core and validate actual native adoption.
+1. Close QwenPaw ACP/TUI registration and host-loaded readiness gaps; expand
+   all-four common-policy runtime acceptance;
+   retain interactive ask as a separate acceptance dimension.
+2. Extend the [implemented common protocol](provider-protocol.md), integrate Core
+   and validate actual adoption for additional effects.
 3. Work with sec-core on rule configuration, built-in/custom policy aggregation,
    explicit unsupported actions and real security cases. A final AW check requires
    a controlled chain and cannot be inferred from this host-scheduled mode.

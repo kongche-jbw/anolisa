@@ -1,8 +1,10 @@
 //! Experimental native-hook service and launcher; no cosh or Herdr dependency.
 mod ipc;
 mod launch;
+mod mapping;
 mod model;
 mod process;
+mod provider;
 mod server;
 use std::{
     collections::BTreeMap,
@@ -10,7 +12,7 @@ use std::{
     path::{Path, PathBuf},
 };
 type Error = Box<dyn std::error::Error + Send + Sync>;
-const HELP:&str="aw native-hook lab (Linux)\n  aw validate --config FILE\n  aw plan AGENT --config FILE\n  aw serve --config FILE --socket PATH [--idle-timeout SECONDS]\n  aw hook --socket PATH --agent ID --event tool.before|tool.after --provider ID\n  aw run AGENT --config FILE [--native-config FILE] [--state-dir DIR] [--socket PATH] [-- AGENT_ARGS...]\n  aw status|stop --socket PATH\nNative hook scheduling and ask decisions belong to each framework.\n";
+const HELP:&str="aw native-hook lab (Linux)\n  aw validate --config FILE\n  aw plan AGENT --config FILE\n  aw check AGENT --config FILE\n  aw serve --config FILE --socket PATH [--idle-timeout SECONDS]\n  aw hook --socket PATH --agent ID --event tool.before|tool.after --provider ID\n  aw run AGENT --config FILE [--native-config FILE] [--state-dir DIR] [--socket PATH] [-- AGENT_ARGS...]\n  aw status|stop --socket PATH\nNative hook scheduling and ask decisions belong to each framework.\n";
 fn execute() -> Result<i32, Error> {
     let mut args = std::env::args().skip(1);
     let operation = args.next().unwrap_or_else(|| "--help".into());
@@ -23,9 +25,16 @@ fn execute() -> Result<i32, Error> {
         return Ok(0);
     }
     let allowed = match operation.as_str() {
-        "validate" | "plan" => vec!["--config"],
+        "validate" | "plan" | "check" => vec!["--config"],
         "serve" => vec!["--config", "--socket", "--idle-timeout"],
-        "hook" => vec!["--socket", "--agent", "--event", "--provider"],
+        "hook" => vec![
+            "--socket",
+            "--agent",
+            "--event",
+            "--provider",
+            "--adapter",
+            "--on-error",
+        ],
         "run" => vec!["--config", "--native-config", "--state-dir", "--socket"],
         "status" | "stop" => vec!["--socket"],
         _ => return Err("unknown command; use aw --help".into()),
@@ -43,7 +52,7 @@ fn execute() -> Result<i32, Error> {
             if options.insert(arg, value).is_some() {
                 return Err("duplicate CLI option".into());
             }
-        } else if matches!(operation.as_str(), "run" | "plan")
+        } else if matches!(operation.as_str(), "run" | "plan" | "check")
             && !arg.starts_with('-')
             && agent.is_none()
         {
@@ -59,25 +68,46 @@ fn execute() -> Result<i32, Error> {
             .ok_or_else(|| format!("missing {name}").into())
     };
     if matches!(operation.as_str(), "status" | "stop" | "hook") {
-        let mut request = launch::request(if operation == "hook" {
-            "invoke"
-        } else {
-            &operation
-        });
-        if operation == "hook" {
-            request.agent = option("--agent")?.into();
-            request.provider = option("--provider")?.into();
-            request.event = option("--event")?.into();
-            request.cwd = std::env::current_dir()?.to_string_lossy().into();
-            request.environment = std::env::vars().collect();
-            std::io::stdin()
-                .take((model::MAX_BYTES + 1) as u64)
-                .read_to_end(&mut request.input)?;
-            if request.input.len() > model::MAX_BYTES {
-                return Err("native input exceeds 4 MiB".into());
+        let fallback = match (options.get("--adapter"), options.get("--on-error")) {
+            (Some(adapter), Some(policy)) => {
+                Some(mapping::failure(adapter, option("--event")?, policy)?)
             }
-        }
-        let response = ipc::call(Path::new(option("--socket")?), &request)?;
+            (None, None) => None,
+            _ => return Err("--adapter and --on-error must be supplied together".into()),
+        };
+        let response = (|| -> Result<model::Response, Error> {
+            let mut request = launch::request(if operation == "hook" {
+                "invoke"
+            } else {
+                &operation
+            });
+            if operation == "hook" {
+                request.agent = option("--agent")?.into();
+                request.provider = option("--provider")?.into();
+                request.event = option("--event")?.into();
+                request.cwd = std::env::current_dir()?.to_string_lossy().into();
+                request.environment = std::env::vars().collect();
+                std::io::stdin()
+                    .take((model::MAX_BYTES + 1) as u64)
+                    .read_to_end(&mut request.input)?;
+                if request.input.len() > model::MAX_BYTES {
+                    return Err("native input exceeds 4 MiB".into());
+                }
+            }
+            ipc::call(Path::new(option("--socket")?), &request)
+        })();
+        let response = match response {
+            Ok(response) if fallback.is_none() || response.error.is_none() => response,
+            result => {
+                if let Some((code, stdout, stderr)) = fallback {
+                    std::io::stdout().write_all(&stdout)?;
+                    std::io::stderr().write_all(&stderr)?;
+                    eprintln!("AW: structured callback failed");
+                    return Ok(code);
+                }
+                result?
+            }
+        };
         std::io::stdout().write_all(&response.stdout)?;
         std::io::stderr().write_all(&response.stderr)?;
         if let Some(error) = response.error {
@@ -137,6 +167,14 @@ fn execute() -> Result<i32, Error> {
         }
     }
 
+    if config.agent(&agent)?["adapter"] == "qwenpaw" {
+        let mut effective = model::strings(&config.agent(&agent)?["argv"])?;
+        effective.extend(extra.iter().cloned());
+        if effective.get(1).map(String::as_str) != Some("app") {
+            return Err("QwenPaw 2.2.2b4 requires the app entrypoint; ACP/TUI do not load the AW Hook plugin".into());
+        }
+    }
+
     if operation == "plan" {
         println!(
             "{}",
@@ -144,6 +182,11 @@ fn execute() -> Result<i32, Error> {
                 &serde_json::json!({"agent":agent,"adapter":config.agent(&agent)?["adapter"],"revision":config.revision,"hooks":hooks,"scheduling":"native","ask":"native-only; see framework and mode matrix"})
             )?
         );
+        return Ok(0);
+    }
+    provider::check(&config, &agent)?;
+    if operation == "check" {
+        println!("Provider operations and private configuration admitted; native installation and effect adoption require runtime evidence.");
         return Ok(0);
     }
     let runtime = std::env::var_os("XDG_RUNTIME_DIR")

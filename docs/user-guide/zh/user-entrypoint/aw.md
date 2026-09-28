@@ -6,8 +6,8 @@ AW 用一份配置管理不同 Agent 的工具 Hook。这个实验分支为 Qwen
 OpenClaw、Hermes 提供独立服务和启动器。用户继续使用 Agent 的原生界面，AW 在原生
 工具前后点位运行配置中的命令，并记录调用元数据。
 
-统一配置和命令传输已经可以运行。命令若要返回控制决策，仍需遵循所选 Agent 的原生
-响应格式。跨框架的安全策略接口、sec-core 联合交付及一致的动作语义仍待完成。
+同一个结构化 Provider 已可在四个适配器中完成工具前观察/阻断、工具后观察；
+既有原生脚本继续支持。完整 sec-core 联合交付及一致的动作语义仍待完成。
 当前是 Linux 开发版本，尚无安装器或服务发行包。
 
 ## 当前分支的可用范围
@@ -20,17 +20,20 @@ OpenClaw、Hermes 提供独立服务和启动器。用户继续使用 Agent 的�
 | 独立 daemon、命令执行、元数据审计 | ✅ 实验能力 |
 | 原生工具前后绑定与既有 Hook 共存 | ✅ 适配器和原生测试；真实模型范围见下表 |
 | 声明全部 16 个事件名 | ✅ 静态校验；运行时目前只绑定 `tool.before`、`tool.after` |
-| 所有框架共用一种 Provider 响应 | ❌ 结构化 Provider 执行留待下一阶段 |
+| 所有框架共用一种 Provider 响应 | ✅ 工具前观察/阻断、工具后观察；保留原生调度 |
 | AW 管理审批、末尾安全检查、OS 防护 | ❌ |
 | 接入既有 Gateway、发行包安装、策略热更新 | ❌ |
 
-| 受测框架 | 原生调度 | 真实模型证据 | 审批边界 |
+| 受测框架 | 原生调度 | 执行证据 | 审批边界 |
 | --- | --- | --- | --- |
-| Qoder CLI 1.1.64 | 默认并行；匹配组的 `sequential: true` 使匹配的同步 Hook 串行 | before 并行重叠、串行参数修改和 headless ask 已观察；❌ 原生权限拒绝了工具，真实 after 采用待补 | 原生 ask 进入权限流程；headless 拒绝，交互批准未验证 |
+| Qoder CLI 1.1.64 | 默认并行；匹配组的 `sequential: true` 使匹配的同步 Hook 串行 | ✅ before 并行重叠和串行参数修改；print/TUI 模型采用原生模式 after 替换结果；headless ask 拒绝 | 原生 ask 进入权限流程；headless 拒绝，交互批准未验证 |
 | OpenClaw 2026.9.6、Node 24.16.0 | before 按优先级串行；after 并发；结果 middleware 按注册顺序串行 | ✅ AW 启动隔离 Gateway，参数修改及替换结果被模型采用 | 原生 `requireApproval`；无模型测试覆盖 deny/report，交互批准未验证 |
-| QwenPaw 2.2.2b4、AgentScope 2.0.8 | middleware 嵌套：before A/B，after B/A | ✅ 经 AW 启动公开 `QwenPawAgent` 运行时，验证允许与拒绝；完整 CLI/TUI 未认证 | ❌ 此 middleware 点位没有命令 ask 桥；显式 ask 明确报错 |
+| QwenPaw 2.2.2b4、AgentScope 2.0.8 | middleware 嵌套：before A/B，after B/A | ✅ 此前公开运行时有真模型证据；官方 App 入口用本地模型 fixture 验证允许/阻断/after；❌ ACP/TUI 插件未加载 | ❌ 此 middleware 点位没有命令 ask 桥；显式 ask 明确报错 |
 | Hermes 源码 `952c941e741e922a9be8fc403c8944c6e96318bb` | shell 回调按注册顺序；工具自身调度不变 | ✅ 经 AW 启动真实 CLI，验证允许、阻断及非交互审批拒绝 | 原生 `approve` 在无交互审批桥时拒绝；交互批准未验证 |
 
+通用 Provider 已通过真实 Qoder 允许/阻断/after、官方 QwenPaw App 加本地模型 fixture，
+以及已安装 Hermes/OpenClaw 原生 dispatcher；后两项公共协议测试没有新模型请求。
+另有真实 Qoder 采用本机 sec-core V1 0.8.0 判断的联合证据。
 这些结果不代表所有工具类型、失败响应和交互模式都已通过。QwenPaw 与 Qwen Code 是不同框架。
 
 ## 构建并准备配置
@@ -84,7 +87,36 @@ events:
 
 仅观察的命令可以返回空 stdout 和退出码零。阻断或修改响应必须符合框架的原生合同。
 原生步骤没有 `operation`、`effects` 或私有 `config`，Provider 的 `config` 必须为 `{}`。
-另一份 `aw-provider/v1alpha1` 示例描述后续结构化执行，当前原生启动器不能执行它。
+跨框架观察/阻断使用下节的结构化示例。较大的静态 Schema 示例仍含本运行时拒绝的
+guard 和变换效果。
+
+## 在不同 Agent 中复用策略
+
+复制 [aw.provider.yaml](https://github.com/kongche-jbw/anolisa/blob/feat/aw/native-hook-lab/src/aw/crates/aw-cli/examples/aw.provider.yaml)，
+将 argv 中的 `examples/providers/policy.py` 改为实际绝对路径。Python 3 是这个可替换
+示例 Provider 的依赖，Rust 启动器不依赖它。示例阻断参数含 `AW_DENY_FIXTURE` 的工具，
+并观察已完成工具；可用无害打印命令试验。
+
+```bash
+cp crates/aw-cli/examples/aw.provider.yaml ./target/aw.policy.yaml
+# Edit the absolute Provider path in ./target/aw.policy.yaml.
+./target/debug/aw check qoder --config ./target/aw.policy.yaml
+./target/debug/aw run qoder --config ./target/aw.policy.yaml
+./target/debug/aw run openclaw --config ./target/aw.policy.yaml --native-config /absolute/path/openclaw.json
+```
+
+同一文件也包含 Hermes 和 QwenPaw，按下文准备原生配置即可。`check` 执行 Provider
+发现和私有配置校验，不启动 Agent；`run` 自动执行相同检查。每次回调提供公共事件，
+只接受配置允许的效果。空 effects 保留宿主权限检查。统一协议保留原生调度，不增加
+交互 ask、变换或末尾 guard。
+
+Provider 失败按 `on_error` 处理：工具前阻断，或显式 `report`。仍存活的 `aw hook`
+也会映射 daemon 失败。Qoder helper 缺失或被杀时，宿主仍可能放行，配置已安装不代表
+强制安全防护。审计区分策略阻断与 Provider 故障，实际采用仍需框架证据。
+
+自定义 Provider 遵循[协议](https://github.com/kongche-jbw/anolisa/blob/feat/aw/native-hook-lab/src/aw/docs/design/provider-protocol_zh.md)。
+可选 sec-core CLI 示例使用独立规则配置，不表示完整安全策略已交付。较大的 Schema
+示例仍用于说明规划能力，不能作为本切片的可运行策略。
 
 ## 启动 Agent
 
@@ -113,17 +145,21 @@ OpenClaw 示例启动新的 Gateway，通过其原生客户端交互。基础配
 引用应使用绝对路径。已有插件 allowlist 会保留。受测版本的 `agent exec` 会遗漏 Hook
 插件，因此拒绝此入口。停止本次启动的 Gateway 后，AW run 随之结束。
 
-Hermes 保留原生 shell Hook 授权流程。确认生成的命令设置后再授权；AW 不会自动加上
+Hermes 保留原生 shell Hook 授权流程。AW 拒绝会关闭 Hook 注册的 `HERMES_SAFE_MODE` (`1/true/yes/on`)。确认生成的命令设置后再授权；AW 不会自动加上
 `--accept-hooks`。
 
-QwenPaw 使用独立、已初始化的工作目录。启动时安装原生插件，Agent 正常退出后删除：
+QwenPaw 使用 `qwenpaw app` 服务入口及独立、已初始化的工作目录。受测版本的裸
+`qwenpaw`、项目目录、TUI 和 ACP 入口会遗漏外部 Hook 插件，AW 拒绝这些入口。
+启动时安装原生插件，Agent 正常退出后删除：
 
 ```bash
 QWENPAW_WORKING_DIR=/absolute/path/isolated-qwenpaw ./target/debug/aw run qwenpaw --config ./target/aw.yaml
 ```
 
-如果已有 `plugins/aw-native`，启动器会拒绝覆盖。真实模型验收使用公开运行时 harness，
-原生 CLI 启动仍需单独验收。此适配器不支持 `--native-config`。
+如果已有 `plugins/aw-native`，启动器会拒绝覆盖。此前真实模型验收使用显式加载插件的
+公开运行时 harness，该证据不表示 TUI/ACP 已支持。此适配器不支持 `--native-config`。App 验收在原生插件状态确认 `aw-native` 已加载
+后发送请求；端口开始监听不代表 Hook 就绪，AW 尚未提供该宿主加载状态的证明。
+按原生 middleware 嵌套语义，QwenPaw 被拒绝的工具仍可能产生可观察的 after 响应。
 
 ## 服务生命周期与记录
 
@@ -155,10 +191,10 @@ socket 同目录的 `audit.jsonl` 记录配置版本、Agent、事件、Provider
 `default_event_budget_ms` 在原生模式中保留但不执行；显式事件 `budget_ms` 会被拒绝。
 `required` 不会增强宿主的控制保证。
 
-当前只绑定通配工具匹配。启用未支持事件、结构化步骤或 guard 都会拒绝接入，不会暗中
-启用 `security.violation` 末尾检查或 sec-core 规则。交互 ask 和跨框架安全响应需要
-独立实现与验收。
+当前只绑定通配工具匹配。启用未支持事件、效果或 guard 都会拒绝接入，不会暗中
+启用 `security.violation` 末尾检查或 sec-core 规则。交互 ask、更强执行保证及完整
+安全覆盖仍需独立实现与验收。
 
 字段限制及 16 事件词汇见[配置参考](../../../developer-guide/zh/aw/configuration.md)。
-下一阶段应补齐 Qoder 真实 after 缺口，并以已核实的原生差异为约束，确定结构化
-Provider 请求和响应。
+后续补齐四框架同配置真实场景和 QwenPaw 完整入口，继续推进 sec-core 联合规则及
+发行管理。

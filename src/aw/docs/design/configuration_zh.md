@@ -23,10 +23,11 @@ Unicode 键；已有 wire 编码保持不变。本增量不定义配置 revision
 `security.violation` 沿用 POC 的主动末尾检查事件名，只能由启用的 tool-before
 guard 激活；这不保证全局 Hook 顺序。
 
-后续协议增量定义 Provider 的 `describe`、`validate_config`、`invoke`，以及
-私有 Schema 校验和效果准入。配置中的操作名不证明实现存在；控制效果及失败
+[Provider 增量](provider-protocol_zh.md) 已实现 `describe`、`validate_config`、
+`invoke`、私有配置校验，以及原生调度下的有限公共效果。配置中的操作名不证明实现存在；控制效果及失败
 处置不能通过 `required: false` 丢弃。运行时还需区分可选观察不支持与已安装、
 已连接、已触发、已采用，执行共享预算并验证实际消费。
 
-独立服务、四框架适配、sec-core 集成、安装管理和审计在这些合同之后实现。
+本 fork 已有实验性独立服务、四框架适配、sec-core CLI 样例及元数据审计；
+发行包、绑定生命周期和完整安全交付仍待实现。
 cosh、Herdr 保持为后续公共服务客户端；这里的字段及库依赖均不要求它们存在。

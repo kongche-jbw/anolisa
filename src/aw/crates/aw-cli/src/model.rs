@@ -1,4 +1,4 @@
-//! Native-mode configuration admission; structured Providers remain a separate contract.
+//! Configuration admission for native hooks and the common Provider effect subset.
 use crate::Error;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -44,6 +44,8 @@ pub(crate) struct Hook {
     pub point: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sequential: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_error: Option<String>,
 }
 impl Configuration {
     pub fn load(path: &Path) -> Result<Self, Error> {
@@ -96,9 +98,25 @@ impl Configuration {
                 if step["enabled"] == false {
                     continue;
                 }
-                let native = step
-                    .get("native")
-                    .ok_or("structured Provider execution is not implemented by native lab")?;
+                let native = &step["native"];
+                let on_error = if native.is_null() {
+                    let effects = strings(&step["effects"])?;
+                    if effects.iter().any(|effect| {
+                        effect != "observe" && !(effect == "block" && event == "tool.before")
+                    }) {
+                        return Err(
+                            "common Providers support before observe/block and after observe only"
+                                .into(),
+                        );
+                    }
+                    let policy = step["on_error"].as_str().ok_or("missing on_error")?;
+                    if policy != "report" && !(policy == "block" && event == "tool.before") {
+                        return Err("unsupported common Provider error policy".into());
+                    }
+                    Some(policy.to_owned())
+                } else {
+                    None
+                };
                 let provider = step["provider"].as_str().ok_or("missing provider")?;
                 if !providers.insert(provider) {
                     return Err("native event cannot register the same Provider twice; name separate instances".into());
@@ -156,10 +174,28 @@ impl Configuration {
                     priority,
                     point,
                     sequential,
+                    on_error,
                 });
             }
         }
         Ok(result)
+    }
+    pub fn step(&self, request: &Request) -> Result<&Value, Error> {
+        if !self
+            .hooks(&request.agent)?
+            .iter()
+            .any(|hook| hook.event == request.event && hook.provider == request.provider)
+        {
+            return Err("Provider is not bound to this Agent/event".into());
+        }
+        self.value["spec"]["events"][&request.event]["steps"]
+            .as_array()
+            .and_then(|steps| {
+                steps
+                    .iter()
+                    .find(|step| step["enabled"] != false && step["provider"] == request.provider)
+            })
+            .ok_or_else(|| "Provider is not bound to this Agent/event".into())
     }
     pub fn process(&self, request: &Request) -> Result<(ProcessConfig, u64), Error> {
         if request.input.len() > MAX_BYTES {

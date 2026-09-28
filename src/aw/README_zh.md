@@ -2,12 +2,12 @@
 
 [English](README.md)
 
-AW 提供统一配置、Agent 原生 Hook 执行及合同校验。这个实验分支新增独立 Linux daemon 与 `aw` 启动器，面向 QwenPaw、Qoder CLI、OpenClaw、Hermes。原生命令回调保留宿主调度；跨框架的 Provider 效果仍待后续实现。
+AW 提供统一配置、Agent 原生 Hook 执行及合同校验。这个实验分支新增独立 Linux daemon 与 `aw` 启动器，面向 QwenPaw、Qoder CLI、OpenClaw、Hermes。原生命令回调保留宿主调度；通用 Provider 已支持工具前观察/阻断、工具后观察。
 
 在 `src/aw` 执行 `cargo build --locked -p aw-cli`，然后使用
 `target/debug/aw plan qoder --config crates/aw-cli/examples/aw.native.yaml`。
-尚无安装发行包。原生配置、真实模型证据和明确缺口见用户指南；Qoder 真实 after
-采用及交互审批仍待验证。
+尚无安装发行包。原生配置、真实模型证据和明确缺口见用户指南；Qoder print/TUI
+after 采用已验证，交互审批仍待验证。
 
 ## 运行检查
 
@@ -56,6 +56,8 @@ Registry 包含 21 个 Schema 资源。`crates/aw-contracts/schemas/` 中的 8 �
 文件使用一个包含 `apiVersion`、`kind`、`metadata`、`spec` 的 `AWConfiguration`
 对象，Provider 实例是 `spec.providers` 中的命名对象。Schema 识别 QwenPaw、
 Qoder CLI、OpenClaw、Hermes 及全部 16 个事件名，此 fork 提供原生模式适配器。
-配置中没有运行时 `status`。结构化 Provider 发现、操作与私有配置校验仍待交付；
-原生模式检查绑定形状与限制。另见[原生接入设计](docs/design/native-hooks_zh.md)及
+配置中没有运行时 `status`。`aw check AGENT --config FILE` 执行 Provider 发现及
+私有配置校验；`aw run` 在启动前执行相同准入。见[通用 Provider 协议](docs/design/provider-protocol_zh.md)
+与[可运行公共示例](crates/aw-cli/examples/aw.provider.yaml)，使用前替换其中 Provider 的
+绝对路径。原生模式检查绑定形状与限制。另见[原生接入设计](docs/design/native-hooks_zh.md)及
 [原生示例](crates/aw-cli/examples/aw.native.yaml)。与既有 wire 合同的关系见[配置设计](docs/design/configuration_zh.md)。

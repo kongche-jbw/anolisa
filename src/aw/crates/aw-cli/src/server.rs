@@ -1,8 +1,8 @@
 //! One bounded process per native callback; host scheduling remains outside AW.
 use crate::{
-    ipc,
+    ipc, mapping,
     model::{Configuration, Request, Response},
-    process, Error,
+    process, provider, Error,
 };
 use serde_json::json;
 use std::{
@@ -170,13 +170,32 @@ pub(crate) fn serve(config: Configuration, socket: &Path, idle_seconds: u64) -> 
                             "release"=>{leases.lock().map_err(|_|"session lease lock poisoned")?.0.remove(&request.pid);}
                             "stop"=>STOP.store(true,Ordering::Relaxed),
                             "invoke"=>{
-                                match config.process(&request).and_then(|(process_config,timeout)|process::run(&process_config,&[],&request.input,timeout,&STOP)) {
+                                let structured = config.value["spec"]["providers"][&request.provider]["protocol"] == "aw-provider/v1alpha1";
+                                let mut disposition = "native";
+                                let result = if structured {
+                                    provider::invoke(&config,&request,&STOP).map(|outcome|{disposition=outcome.disposition;outcome.output})
+                                } else {
+                                    config.process(&request).and_then(|(process_config,timeout)|process::run(&process_config,&[],&request.input,timeout,&STOP))
+                                };
+                                match result {
                                     Ok(output)=>{response.code=output.exit_code;response.stdout=output.stdout;response.stderr=output.stderr;}
-                                    Err(error)=>{response.code=125;response.error=Some(error.to_string());}
+                                    Err(error)=>{
+                                        response.code=125;
+                                        response.error=Some(if structured {"structured_provider_failed".into()} else {error.to_string()});
+                                        if structured {
+                                            disposition="error";
+                                            let fallback=(||->Result<_,Error>{
+                                                let step=config.step(&request)?;
+                                                let adapter=config.agent(&request.agent)?["adapter"].as_str().ok_or("missing adapter")?;
+                                                mapping::failure(adapter,&request.event,step["on_error"].as_str().ok_or("missing error policy")?)
+                                            })();
+                                            if let Ok((code,stdout,stderr))=fallback {response.code=code;response.stdout=stdout;response.stderr=stderr;}
+                                        }
+                                    }
                                 }
                                 let entry=json!({"version":1,"request_id":id,"at_ms":SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis(),"config_revision":config.revision,
                                     "agent":request.agent,"event":request.event,"provider":request.provider,"input_bytes":request.input.len(),"stdout_bytes":response.stdout.len(),"stderr_bytes":response.stderr.len(),
-                                    "exit_code":response.code,"duration_ms":started.elapsed().as_millis(),"error":response.error});
+                                    "exit_code":response.code,"duration_ms":started.elapsed().as_millis(),"error":response.error,"protocol":if structured {"aw-provider/v1alpha1"}else{"native-hook/v1alpha1"},"disposition":disposition});
                                 let mut audit=audit.lock().map_err(|_|"audit lock poisoned")?;
                                 serde_json::to_writer(&mut *audit,&entry)?;audit.write_all(b"\n")?;audit.flush()?;
                             }

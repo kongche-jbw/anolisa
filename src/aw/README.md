@@ -2,13 +2,13 @@
 
 [中文版](README_zh.md)
 
-AW provides unified configuration, native Agent Hook execution and contract validators. This experimental fork adds a Linux daemon and `aw` launcher for QwenPaw, Qoder CLI, OpenClaw and Hermes. Native command callbacks preserve host scheduling; framework-neutral Provider effects remain subsequent work.
+AW provides unified configuration, native Agent Hook execution and contract validators. This experimental fork adds a Linux daemon and `aw` launcher for QwenPaw, Qoder CLI, OpenClaw and Hermes. Native command callbacks preserve host scheduling; common Providers now support before-tool observation/blocking and after-tool observation.
 
 Build from `src/aw` with `cargo build --locked -p aw-cli`, then use
 `target/debug/aw plan qoder --config crates/aw-cli/examples/aw.native.yaml`.
 There is no packaged installation yet. See the user guide for native profiles,
-real-model evidence and explicit gaps; Qoder real after adoption and interactive
-approval remain unverified.
+real-model evidence and explicit gaps. Qoder print/TUI after adoption is verified;
+interactive approval remains unverified.
 
 ## Run the checks
 
@@ -63,8 +63,12 @@ User configuration uses the separate `aw-config` crate and its bundled
 `apiVersion`, `kind`, `metadata` and `spec`; Provider instances are named objects
 under `spec.providers`. The schema recognizes QwenPaw, Qoder CLI, OpenClaw,
 Hermes and all 16 event names, with native-mode adapters in this fork.
-Configuration has no runtime `status`. Structured Provider discovery and operation/private config validation remain
-subsequent work. Native admission checks native registration shapes and limits.
+Configuration has no runtime `status`. `aw check AGENT --config FILE` executes
+Provider discovery and private configuration validation; `aw run` performs it
+before launch. See the [common Provider protocol](docs/design/provider-protocol.md)
+and [runnable common example](crates/aw-cli/examples/aw.provider.yaml); replace its
+absolute Provider path before checking. Native admission checks registration shapes
+and limits.
 See the [native integration design](docs/design/native-hooks.md) and
 [native example](crates/aw-cli/examples/aw.native.yaml).
 See the [configuration design](docs/design/configuration.md) for the separation

@@ -7,10 +7,9 @@ experimental fork adds a standalone service and launcher for QwenPaw, Qoder CLI,
 OpenClaw and Hermes. You keep using each Agent's interface; AW runs your commands
 at its native tool-before and tool-after points and records invocation metadata.
 
-The shared configuration and command transport work today. Commands that return
-control decisions still use the selected Agent's native response format. A
-portable security-policy interface, sec-core delivery and uniform action semantics
-remain planned. This branch is a Linux development build, with no installer or
+The same structured Provider can now observe and block before tools and observe
+after tools in all four adapters. Existing native scripts remain supported.
+Complete sec-core delivery and uniform action semantics remain planned. This branch is a Linux development build, with no installer or
 service package yet.
 
 ## Available in this branch
@@ -24,17 +23,21 @@ The first-release scope continues to include all four frameworks.
 | Independent daemon, command execution and metadata audit | ✅ Experimental |
 | Native before/after bindings and existing Hook coexistence | ✅ Adapters and native tests; real-model scope below |
 | Declare all 16 event names | ✅ Static validation; runtime currently binds only `tool.before` and `tool.after` |
-| One portable Provider response for every framework | ❌ Structured Provider execution is subsequent work |
+| One portable Provider response for every framework | ✅ Before observe/block, after observe; native scheduling retained |
 | AW-managed approval, final security guard, OS enforcement | ❌ |
 | Attach an existing Gateway, package installation, policy hot reload | ❌ |
 
-| Framework tested | Native scheduling | Real-model evidence | Approval boundary |
+| Framework tested | Native scheduling | Execution evidence | Approval boundary |
 | --- | --- | --- | --- |
-| Qoder CLI 1.1.64 | Parallel by default; a matching `sequential: true` group serializes matching synchronous Hooks | Before overlap, serial input changes and headless ask observed; ❌ real after adoption remains unverified because native permission denied the tool | Native ask reaches the permission path; headless denies; interactive approval unverified |
+| Qoder CLI 1.1.64 | Parallel by default; a matching `sequential: true` group serializes matching synchronous Hooks | ✅ Before overlap and serial input changes; print/TUI model adoption of native-mode after replacement; headless ask denied | Native ask reaches the permission path; headless denies; interactive approval unverified |
 | OpenClaw 2026.9.6, Node 24.16.0 | Before serial by priority; after concurrent; result middleware serial by registration order | ✅ Isolated Gateway launched through AW; changed tool input and replacement result consumed by the model | Native `requireApproval`; deny/report behavior tested without a model, interactive approval unverified |
-| QwenPaw 2.2.2b4, AgentScope 2.0.8 | Middleware onion: before A/B, after B/A | ✅ Public `QwenPawAgent` runtime through AW; allow and deny; full CLI/TUI not certified | ❌ No command-ask bridge at this middleware point; explicit ask fails visibly |
+| QwenPaw 2.2.2b4, AgentScope 2.0.8 | Middleware onion: before A/B, after B/A | ✅ Earlier public runtime with a real model; official App entrypoint allow/block/after with a local model fixture; ❌ ACP/TUI plugin loading | ❌ No command-ask bridge at this middleware point; explicit ask fails visibly |
 | Hermes source `952c941e741e922a9be8fc403c8944c6e96318bb` | Shell callbacks in registration order; native tool scheduling unchanged | ✅ Actual CLI through AW; allow, block and noninteractive approval denial | Native `approve` is denied without an interactive approval bridge; interactive approval unverified |
 
+The common Provider passed live Qoder allow/block/after, official QwenPaw App
+with a local model fixture, and installed Hermes/OpenClaw native dispatchers.
+The latter two common-protocol checks do not make new model requests.
+A separate real Qoder run adopted decisions from installed sec-core V1 0.8.0.
 These results do not certify every tool type, failure response or interactive mode.
 QwenPaw is a separate framework from Qwen Code.
 
@@ -93,9 +96,42 @@ caller's environment and working directory, with configured `env` overrides.
 
 Empty stdout and exit zero suit an observer. A blocking or rewriting response
 must match that framework's native contract. Native steps have no `operation`,
-`effects` or private `config`; `config: {}` on the Provider is required. The
-separate `aw-provider/v1alpha1` example describes planned structured execution
-and cannot be run by this native launcher.
+`effects` or private `config`; `config: {}` on the Provider is required. For portable observe/block effects, use the structured example below. The larger
+static schema example still includes guards and rewrites this runtime rejects.
+
+## Use one policy across Agents
+
+Copy [aw.provider.yaml](https://github.com/kongche-jbw/anolisa/blob/feat/aw/native-hook-lab/src/aw/crates/aw-cli/examples/aw.provider.yaml)
+and replace the absolute path to `examples/providers/policy.py` in its argv.
+Python 3 is a dependency of this replaceable example Provider, not the Rust
+launcher. The example denies inputs containing `AW_DENY_FIXTURE` and observes
+completed tools. Use harmless printing commands to try it.
+
+```bash
+cp crates/aw-cli/examples/aw.provider.yaml ./target/aw.policy.yaml
+# Edit the absolute Provider path in ./target/aw.policy.yaml.
+./target/debug/aw check qoder --config ./target/aw.policy.yaml
+./target/debug/aw run qoder --config ./target/aw.policy.yaml
+./target/debug/aw run openclaw --config ./target/aw.policy.yaml --native-config /absolute/path/openclaw.json
+```
+
+The same file includes Hermes and QwenPaw; apply their native setup described
+below. `check` runs Provider discovery and private-config validation without
+starting the Agent; `run` checks automatically. Each callback supplies a common
+event and accepts only configured effects. Empty effects leave native permission
+checks intact. This shared protocol preserves the host's scheduling and does not
+add interactive ask, rewrites or a final guard.
+
+Provider failures follow `on_error`: `block` before tools or explicit `report`.
+The live `aw hook` client also maps daemon failures. A missing/killed Qoder helper
+can still fail open in the host; installed configuration alone is not mandatory
+security enforcement. Audit records distinguish a policy block from a Provider
+failure, but framework evidence is needed to prove the effect was adopted.
+
+For a custom Provider, follow the [protocol](https://github.com/kongche-jbw/anolisa/blob/feat/aw/native-hook-lab/src/aw/docs/design/provider-protocol.md).
+The optional sec-core CLI example has separate rule configuration and does not
+claim complete security-policy delivery. The larger schema example remains a
+reference for planned capabilities, not a runnable policy for this slice.
 
 ## Start an Agent
 
@@ -128,10 +164,13 @@ Keep workspace and other file references in the base profile absolute. Existing
 plugin allowlists are preserved. `agent exec` in the tested version omits the
 Hook-only plugin and is rejected. Stopping this launched Gateway ends the AW run.
 
-Hermes retains its native shell-Hook consent. Review generated command settings
+Hermes retains its native shell-Hook consent. AW rejects `HERMES_SAFE_MODE` (`1/true/yes/on`),
+which disables Hook registration. Review generated command settings
 before granting consent; AW does not silently add `--accept-hooks`.
 
-QwenPaw uses a separate, initialized working directory. Its native plugin is
+QwenPaw requires the `qwenpaw app` server entrypoint and a separate, initialized
+working directory. Bare `qwenpaw`, project-directory, TUI and ACP entrypoints skip
+external Hook-plugin loading in the tested version and are rejected. Its native plugin is
 installed for the launch and removed when the Agent exits normally:
 
 ```bash
@@ -139,9 +178,12 @@ QWENPAW_WORKING_DIR=/absolute/path/isolated-qwenpaw ./target/debug/aw run qwenpa
 ```
 
 An existing `plugins/aw-native` directory is rejected rather than overwritten.
-The real-model acceptance used QwenPaw's public runtime harness, so native CLI
-startup remains a separate acceptance item. `--native-config` is not supported
-for this adapter.
+The earlier real-model acceptance used a public runtime harness with explicit
+plugin loading; that evidence does not establish TUI/ACP support. `--native-config` is not supported
+for this adapter. App acceptance waits for `aw-native` to be loaded in the native
+plugin status before sending requests. A listening port alone is not Hook readiness;
+AW does not yet attest that host-loading state. A denied QwenPaw tool may still
+produce an observed after response under its native middleware nesting.
 
 ## Service lifecycle and records
 
@@ -180,11 +222,11 @@ aggregation; AW does not add a shared event deadline. The required
 `budget_ms` is rejected. `required` does not strengthen host enforcement.
 
 Only wildcard tool matching is currently bound. Enabled unsupported events,
-structured steps and guards fail admission. No `security.violation` final check
-or sec-core policy is silently enabled. Interactive ask and a framework-neutral
-security result require their own implementation and acceptance.
+unsupported effects and guards fail admission. No `security.violation` final check
+or sec-core policy is silently enabled. Interactive ask, stronger enforcement
+and complete security coverage still require their own implementation and acceptance.
 
 See the [configuration reference](../../../developer-guide/en/aw/configuration.md)
-for field limits and the 16-event vocabulary. The next increment should close
-Qoder's real after gap and define the structured Provider request/response using
-these native differences as constraints.
+for field limits and the 16-event vocabulary. Continue with all-four common-policy
+runtime acceptance, the complete QwenPaw entrypoint, sec-core joint rules and
+service distribution.

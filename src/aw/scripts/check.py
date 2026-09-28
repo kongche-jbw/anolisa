@@ -134,7 +134,7 @@ def check_inventory() -> None:
         ("aw-contracts", target)
         for target in ("canonical", "schemas", "contracts", "orchestration")
     ] + [("aw-config", "configuration")] + [
-        ("aw-cli", target) for target in ("native", "lifecycle", "launch", "signals")
+        ("aw-cli", target) for target in ("native", "provider", "lifecycle", "launch", "signals")
     ]
     for package, target in targets:
         command = ["cargo", "test", "--locked", "-p", package, "--test", target, "--", "--list"]
@@ -177,6 +177,7 @@ def check() -> None:
     run(["cargo", "clippy", "--workspace", "--all-targets", "--locked", "--", "-D", "warnings"], AW)
     check_inventory()
     run(["cargo", "test", "--workspace", "--locked"], AW)
+    run([sys.executable, "-B", "tests/provider-example.py"], AW, timeout=60)
     run([sys.executable, "tests/check_canonical.py"], AW, timeout=30)
     run(["cargo", "doc", "--workspace", "--no-deps", "--locked"], AW)
     if candidate() != actual:

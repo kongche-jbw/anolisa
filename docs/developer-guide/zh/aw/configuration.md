@@ -10,7 +10,8 @@
 定义公共字段结构，Rust 校验器另行检查引用及字段之间的关系。`aw validate`
 执行这些静态检查；`aw plan AGENT` 进一步检查该 Agent 支持的原生配置子集；
 `aw run AGENT` 准备宿主绑定并启动配置的命令。静态有效不代表运行时支持。
-结构化 Provider 的执行、发现与能力准入仍未实现。
+`aw check AGENT` 执行结构化 Provider 发现和私有配置校验，`aw run` 自动执行相同
+检查。公共效果限工具前 observe/block、工具后 observe。
 
 ## 配置字段
 
@@ -29,12 +30,12 @@
 | `audit.enabled`、`audit.payload` | 固定为 `true`、`metadata_only`；daemon 向 socket 同目录的 `audit.jsonl` 追加调用元数据 |
 | `agents.<id>.adapter` | `qwenpaw`、`qoder`、`openclaw` 或 `hermes`；识别名称不等于运行效果已认证 |
 | `agents.<id>.argv` | 非空程序/参数数组；首项不可为空，不隐式调用 shell 或插值 |
-| `providers.<id>.protocol` | 原生命令使用 `native-hook/v1alpha1`；独立的结构化 Provider 合同使用 `aw-provider/v1alpha1`，其运行时尚未实现 |
+| `providers.<id>.protocol` | 原生命令使用 `native-hook/v1alpha1`；通用结构化工具效果使用 `aw-provider/v1alpha1` |
 | `providers.<id>.transport` | `{type: stdio, location: agent, argv: [...], env: {...}}`，`env` 可省略。每次原生回调在其工作目录执行一次固定 argv |
 | `providers.<id>.transport.env` | 以字面字符串覆盖回调环境，不插值。最多 128 个键，键匹配 `[A-Za-z_][A-Za-z0-9_]*`，每个值最多 4096 个字符且不含 NUL |
 | `providers.<id>.timeout_ms` | 单次调用上限正整数；原生准入最多允许 300,000 ms，并应用下文的宿主限制 |
 | `providers.<id>.max_output_bytes` | 输出上限正整数；原生执行对 stdout 和 stderr 分别应用该限制，每路最多 4 MiB |
-| `providers.<id>.config` | 必填对象；原生步骤要求 `{}`。结构化 Provider 可保留包含 Unicode 键与有限小数的私有 JSON，私有 Schema 校验尚未实现 |
+| `providers.<id>.config` | 必填对象；原生步骤要求 `{}`。结构化 Provider 可保留包含 Unicode 键与有限小数的私有 JSON，私有 Schema 由 Provider 校验 |
 | `events.<name>.enabled` | 已声明事件必填布尔值；省略事件等同关闭 |
 | `events.<name>.required` | 默认 `false`；关闭事件不能标为必需。为能力准入保留，不会给原生绑定增加执行保证 |
 | `events.<name>.budget_ms` | 可选的结构化默认事件预算覆盖值；嵌套 guard 共用父事件剩余预算。启用的原生事件拒绝该字段 |
@@ -44,7 +45,7 @@
 | `steps[].id`、`steps[].enabled` | ID 在事件内唯一；enabled 默认 `true` |
 | `steps[].provider` | 已声明 Provider ID，协议须与步骤类型匹配 |
 | `steps[].native` | 原生注册选项：`{}` 或下文支持的 `priority`、`point`、`sequential` 字段 |
-| `steps[].operation` | 仅供结构化步骤使用的非空操作名；操作发现尚未实现 |
+| `steps[].operation` | 仅供结构化步骤使用的非空操作名；根据 Provider 发现结果检查 |
 | `steps[].effects` | 仅供结构化步骤使用的非空、不重复效果列表；声明请求上限，不授予权限 |
 | `steps[].on_error` | 仅供结构化步骤使用的 `report`、`block` 或 `withhold_result`，受事件时机约束 |
 
@@ -56,6 +57,25 @@ Agent、Provider、每事件步骤均不超过 128 项，
 公共对象拒绝未知字段，仅 Provider `config` 接受私有字段。关闭的步骤同样检查
 Provider 引用与步骤 ID 重复，避免启用时才暴露引用拼写错误。默认值是合同语义，
 解析器不会将它们填入原始文档。
+
+## 通用 Provider 运行时
+
+[aw.provider.yaml](https://github.com/kongche-jbw/anolisa/blob/feat/aw/native-hook-lab/src/aw/crates/aw-cli/examples/aw.provider.yaml)
+为四个 Agent 目标使用同一策略。步骤包含 `id`、`provider`、`operation`、`effects`、
+`on_error` 及可选 `enabled`，不含 `native`。工具前支持 `observe/block`，失败动作
+为 `report/block`；工具后支持 `observe`，失败动作仅 `report`。其他效果、guard、
+显式事件预算即使通过静态 Schema，也会被运行准入拒绝。
+
+[协议参考](https://github.com/kongche-jbw/anolisa/blob/feat/aw/native-hook-lab/src/aw/docs/design/provider-protocol_zh.md)
+定义 `describe`、`validate_config`、`invoke`。每次回调在同一个 Provider 超时预算
+内执行三个方法，校验请求 ID、摘要和返回效果。Provider stdout 为协议 JSON，由
+AW 生成原生响应；空 effects 不批准宿主权限，宿主回调顺序保持不变。Agent 启动前
+也会执行发现和配置校验。
+
+`on_error` 覆盖协议错误及客户端仍存活时的 daemon 故障。宿主 helper 缺失或被杀
+仍是原生覆盖缺口。生成的客户端绑定含 `--adapter`、`--on-error`，这两个内部 Hook
+选项不会增强配置的执行保证。审计增加 `protocol` 和 `disposition`，记录返回的决策，
+不代表原生宿主已采用。
 
 ## 原生 Hook 运行时
 
@@ -75,7 +95,7 @@ middleware 明确拒绝不支持的 ask。AW 不提供统一审批 UI，也不�
 转为自动批准。
 
 [运行时准入代码](https://github.com/kongche-jbw/anolisa/blob/feat/aw/native-hook-lab/src/aw/crates/aw-cli/src/model.rs)
-仅允许启用 `tool.before`、`tool.after`，使用原生步骤，并省略工具选择器或精确
+仅允许启用 `tool.before`、`tool.after`，使用已支持的步骤，并省略工具选择器或精确
 填写 `['*']`。其他启用事件、精确工具选择器、事件 `budget_ms` 和 guard 均被
 拒绝。关闭的条目可以保留符合静态校验的结构化配置。同一启用事件不能重复注册
 同一个 Provider，需要重复调用时应定义不同名称的 Provider 实例。
@@ -128,8 +148,9 @@ PID/启动时间的 lease，退出时释放；daemon 自动清除已死亡属主
 
 ## 结构化 Schema 的事件、效果与工具选择
 
-Schema 识别以下 16 个名称。下述结构化 `aw-provider/v1alpha1` 执行模型尚未
-实现；上述原生运行时仅接受其中两个工具事件。
+Schema 识别以下 16 个名称。通用 `aw-provider/v1alpha1` 运行时仅准入两个工具
+事件，支持工具前 observe/block、工具后 observe。下面更广的静态效果词汇不代表
+运行时已经实现。
 
 | 事件 | 含义 |
 | --- | --- |
@@ -164,14 +185,14 @@ Hook，也不保证排在全部
 `on_error: block` 仅用于执行前的 `tool.before` 或 guard；`withhold_result`
 仅用于工具后；`report` 记录失败后继续。禁止原结果交付需要已验证的模型消费
 边界，只修改历史记录不足以满足要求。必需的安全隐藏不能使用 `report`。
-这些要求由后续服务在准入与执行时落实。
+当前运行时拒绝尚未实现的 withhold_result 和 guard，不自动降低要求。
 
 选择器为 `*`、`bash`、`file_read`、`file_write` 或四个适配器 ID 对应的
 `native:<adapter>:<精确名称>`。原生选择器依赖宿主，不是跨框架语义。除单独
 `*` 外不提供正则或 glob 匹配。全部工具路由包括原生自定义工具并保留输入，
 不表示每个 Provider 都能理解每种工具。
 
-`required: false` 不能授权丢弃启用的控制效果或失败处置。后续运行时准入必须
+`required: false` 不能授权丢弃启用的控制效果或失败处置。运行时准入会
 将启用步骤与 Provider 声明、实现及宿主能力对照，拒绝不支持的必需控制。
 可选观察来源缺失必须明确记录。配置解析本身不执行这项运行时准入。
 

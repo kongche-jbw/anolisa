@@ -2,7 +2,7 @@
 
 [English](native-hooks.md)
 
-这个 fork 在结构化 Provider 协议完成前，交付一个可运行切片：统一配置、独立 daemon、
+此原生模式切片提供统一配置、独立 daemon、
 Rust 启动器及四个 Agent 框架的工具回调。它不依赖 cosh 或 Herdr。
 
 ## 执行边界
@@ -48,7 +48,8 @@ priority 字段。每个注册项使用独立 Provider 实例名。
 
 Qoder 的 `native.sequential` 是显式宿主选项；OpenClaw、QwenPaw 使用
 `native.priority`。不支持的扩展会使目标准入失败。空 `native: {}` 步骤可在四目标
-共用，但结构化 Provider 完成前，控制脚本仍需按框架解析和返回。
+共用，控制脚本仍按框架解析和返回。另有[公共 Provider 路径](provider-protocol_zh.md)
+处理跨框架的观察/阻断响应。
 
 ## 证据与缺口
 
@@ -59,16 +60,16 @@ Hermes 源码为 `952c941e741e922a9be8fc403c8944c6e96318bb`。Python 环境独�
 
 | 验收项 | 结果 |
 | --- | --- |
-| Qoder before 调度、参数修改、原生 ask | 观察到真实 AW 回调，headless ask 拒绝；原生写入权限阻止工具执行，真实 PostToolUse 采用待补 |
+| Qoder before 调度、参数修改、原生 ask | 真实 print 并行/串行及自然 TUI 均取得模型采用 after 替换结果证据，原生 Hook 共存；headless ask 拒绝；AW allow 不覆盖独立写权限 |
 | OpenClaw Gateway 经 `aw run` | 工具参数修改生效；原始文本值 52 经结果 middleware 改为 73，模型回答 73；历史和 after 观察同样记录 73 |
-| QwenPaw 公开运行时经 `aw run` | 允许时写入 42；拒绝不写入；显式 ask 报错且不写入。观察到 before A/B、after B/A；完整 CLI/TUI 待补 |
+| QwenPaw 公开运行时经 `aw run` | 允许时写入 42；拒绝不写入；显式 ask 报错且不写入。观察到 before A/B、after B/A；官方 App 入口另以本地模型 fixture 通过公共 Provider 允许/阻断/after；ACP/TUI 漏插件已拒绝 |
 | Hermes 真实 CLI 经 `aw run` | 允许时写入 42；block 和非交互 approve 均不写入；观察到 before A/B、after A/B |
 | 原生共存 | 使用安装框架的 runner 和插件加载验证；OpenClaw 缺省或空 allowlist 保留原生插件准入 |
 | 用户交互审批 | 四框架均未认证；没有 AW 审批界面 |
 | sec-core 策略、全部工具/结果类型、OS/final/protected | 这些命令 fixture 不提供此类认证 |
 
-Qoder 授权上限为三个简短场景，计入更早的启动探测。fixture 已补上显式工具权限，
-额度用尽后未再次运行。BYOK 保存失败，原因尚未证明；未经重新授权不再使用 Qoder 额度。
+Qoder after 验收在独立写权限拒绝后改用无害只读打印。通用 Provider 的允许、
+after 观察、阻断也已通过真实 print 验证。BYOK 保存失败的原因仍未证实。
 
 真实模型测试显式运行，不进入 CI。有界 runner 记录所属 PID、命令、期限及清理。
 本地证据保留在忽略目录 `target/native-lab/<framework>`，构建和门禁材料位于
@@ -95,10 +96,9 @@ stdout、stderr、原生退出码，适配器和宿主合同决定如何消费�
 
 ## 后续交付
 
-1. 在显式原生权限和隔离配置下补齐 Qoder 真实 after、QwenPaw 完整入口；交互 ask
-   保持独立验收维度。
-2. 依据矩阵确定标准事件、`describe/validate_config/invoke`、效果与错误，接入 Core，
-   验证宿主真实采用。
+1. 补齐 QwenPaw ACP/TUI 注册与宿主加载就绪缺口，扩展四框架通用策略运行验收；
+   交互 ask 保持独立验收维度。
+2. 扩展[已实现的公共协议](provider-protocol_zh.md)、接入 Core，并验证新增效果的实际采用。
 3. 与 sec-core 协作完成规则配置、内置/自定义规则聚合、不支持动作的明确处理及真实
    安全案例。AW 末尾检查需要受控执行链，不能从本次宿主调度模式推导。
 4. 补充服务发行包、绑定/查询生命周期和四框架同策略验收。cosh、Herdr 后续作为独立

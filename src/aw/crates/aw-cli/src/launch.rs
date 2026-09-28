@@ -32,8 +32,8 @@ pub(crate) fn write_private(path: &Path, value: &Value) -> Result<(), Error> {
 pub(crate) fn quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
-fn args(binary: &Path, socket: &Path, agent: &str, hook: &Hook) -> Vec<String> {
-    vec![
+fn args(binary: &Path, socket: &Path, agent: &str, adapter: &str, hook: &Hook) -> Vec<String> {
+    let mut args = vec![
         binary.to_string_lossy().into(),
         "hook".into(),
         "--socket".into(),
@@ -44,7 +44,16 @@ fn args(binary: &Path, socket: &Path, agent: &str, hook: &Hook) -> Vec<String> {
         hook.event.clone(),
         "--provider".into(),
         hook.provider.clone(),
-    ]
+    ];
+    if let Some(policy) = &hook.on_error {
+        args.extend([
+            "--adapter".into(),
+            adapter.into(),
+            "--on-error".into(),
+            policy.clone(),
+        ]);
+    }
+    args
 }
 fn object(value: &mut Value, key: &str) -> Result<(), Error> {
     if value.get(key).is_none() {
@@ -116,7 +125,7 @@ pub(crate) fn prepare(
                 } else {
                     "PostToolUse"
                 };
-                let command = args(&binary, socket, agent, hook);
+                let command = args(&binary, socket, agent, adapter, hook);
                 let timeout = config.value["spec"]["providers"][&hook.provider]["timeout_ms"]
                     .as_u64()
                     .ok_or("missing timeout")?
@@ -133,6 +142,16 @@ pub(crate) fn prepare(
             argv.extend(["--settings".into(), path.to_string_lossy().into()]);
         }
         "hermes" => {
+            if std::env::var("HERMES_SAFE_MODE").ok().is_some_and(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            }) {
+                return Err(
+                    "HERMES_SAFE_MODE disables shell hooks; AW cannot install this binding".into(),
+                );
+            }
             if native.is_none() {
                 return Err("Hermes requires --native-config for an explicit isolated model/base configuration".into());
             }
@@ -159,7 +178,7 @@ pub(crate) fn prepare(
                 } else {
                     "post_tool_call"
                 };
-                let command = args(&binary, socket, agent, hook)
+                let command = args(&binary, socket, agent, adapter, hook)
                     .iter()
                     .map(|v| quote(v))
                     .collect::<Vec<_>>()
@@ -169,12 +188,11 @@ pub(crate) fn prepare(
                     .ok_or("missing timeout")?
                     .div_ceil(1000)
                     + 2;
-                // No fail_closed or consent override: preserve native shell-hook defaults.
-                append(
-                    &mut value["hooks"],
-                    name,
-                    json!({"command":command,"timeout":timeout.min(300)}),
-                )?;
+                let mut entry = json!({"command":command,"timeout":timeout.min(300)});
+                if hook.on_error.as_deref() == Some("block") {
+                    entry["fail_closed"] = json!(true);
+                }
+                append(&mut value["hooks"], name, entry)?;
             }
             write_private(&dir.join("config.yaml"), &value)?;
             env.insert("HERMES_HOME".into(), dir.to_string_lossy().into());
@@ -233,6 +251,9 @@ pub(crate) fn prepare(
                     "after"
                 };
                 let mut handler = json!({"provider":hook.provider});
+                if let Some(policy) = &hook.on_error {
+                    handler["onError"] = json!(policy);
+                }
                 if group != "result" {
                     handler["priority"] = json!(hook.priority.unwrap_or(100));
                 }

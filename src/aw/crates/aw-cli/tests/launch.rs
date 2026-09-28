@@ -173,6 +173,10 @@ impl Lab {
     }
 
     fn run(&self, extra: &[&str]) -> (ExitStatus, String) {
+        self.run_with_safe_mode(extra, None)
+    }
+
+    fn run_with_safe_mode(&self, extra: &[&str], safe_mode: Option<&str>) -> (ExitStatus, String) {
         let original = fs::read(&self.native).unwrap();
         let mut command = Command::new(AW);
         command
@@ -189,6 +193,11 @@ impl Lab {
             .env("AW_TEST_CAPTURE", &self.capture)
             .env_remove("OPENCLAW_CONFIG_PATH")
             .env_remove("HERMES_HOME");
+        if let Some(value) = safe_mode {
+            command.env("HERMES_SAFE_MODE", value);
+        } else {
+            command.env_remove("HERMES_SAFE_MODE");
+        }
         let mut process = OwnedProcess::spawn(&mut command, &self.directory.0, "launch");
         let status = process.wait();
         assert_eq!(fs::read(&self.native).unwrap(), original);
@@ -228,6 +237,48 @@ impl Lab {
         assert!(stderr.contains(reason), "wrong rejection: {stderr}");
         assert!(!self.capture.exists(), "fake Agent was launched");
         assert!(!self.socket.exists(), "rejected launch started a daemon");
+    }
+}
+
+#[test]
+fn hermes_safe_mode_aliases_cannot_silently_disable_hooks() {
+    for value in ["1", "true", "YES", " on ", "false", "0"] {
+        let lab = Lab::new("hermes", json!({}), 1000, &[]);
+        let (status, stderr) = lab.run_with_safe_mode(&[], Some(value));
+        assert!(!status.success());
+        assert_eq!(
+            stderr.contains("HERMES_SAFE_MODE"),
+            !matches!(value, "false" | "0"),
+            "{value}: {stderr}"
+        );
+        assert!(!lab.capture.exists());
+    }
+}
+
+#[test]
+fn qwenpaw_rejects_entrypoints_that_skip_hook_plugin_loading() {
+    for args in [
+        vec!["qwenpaw"],
+        vec!["qwenpaw", "tui"],
+        vec!["qwenpaw", "acp"],
+        vec!["qwenpaw", "/tmp/project"],
+        vec!["qwenpaw", "app"],
+    ] {
+        let lab = Lab::new("qwenpaw", json!({}), 1000, &[]);
+        let mut config: Value = serde_json::from_slice(&fs::read(&lab.config).unwrap()).unwrap();
+        config["spec"]["agents"]["test"]["argv"] = json!(args);
+        fs::write(&lab.config, serde_json::to_vec(&config).unwrap()).unwrap();
+        let mut command = Command::new(AW);
+        command.args(["plan", "test", "--config"]).arg(&lab.config);
+        let mut process = OwnedProcess::spawn(&mut command, &lab.directory.0, "qwen-entry");
+        assert_eq!(process.wait().success(), args.get(1) == Some(&"app"));
+        if args.get(1) != Some(&"app") {
+            assert!(
+                fs::read_to_string(lab.directory.0.join("qwen-entry.stderr"))
+                    .unwrap()
+                    .contains("ACP/TUI")
+            );
+        }
     }
 }
 

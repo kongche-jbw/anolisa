@@ -47,6 +47,13 @@
                   "items": {
                     "type": "string"
                   }
+                },
+                "onError": {
+                  "type": "string",
+                  "enum": [
+                    "block",
+                    "report"
+                  ]
                 }
               }
             }
@@ -72,6 +79,12 @@
                   "items": {
                     "type": "string"
                   }
+                },
+                "onError": {
+                  "type": "string",
+                  "enum": [
+                    "report"
+                  ]
                 }
               }
             }

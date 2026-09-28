@@ -31,13 +31,14 @@ effects/failure actions and active `ask` steps. `security.violation` keeps the
 existing POC event vocabulary for an active final internal check; only an enabled
 tool-before guard can activate it. This does not establish global Hook ordering.
 
-The next protocol increment must define Provider `describe`, `validate_config`
-and `invoke` contracts, private-schema validation and effect admission. Names in
+The [Provider increment](provider-protocol.md) implements `describe`,
+`validate_config` and `invoke`, private configuration validation and a limited
+common effect subset under native scheduling. Names in
 this configuration do not prove that an operation exists. Control effects and
 their failure actions cannot be discarded via `required: false`. A runtime must
 also distinguish unsupported optional observation from installed/connected/
 triggered/adopted state, enforce shared budgets and validate actual consumption.
 
-The service, four framework adapters, sec-core integration, installer and
-auditing follow those contracts. cosh and Herdr remain later clients of the public
+This fork has an experimental service, four adapters, a sec-core CLI sample and
+metadata audit. Packaging, binding lifecycle and full security delivery remain pending. cosh and Herdr remain later clients of the public
 service interface; no field or library dependency here requires them.
