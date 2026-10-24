@@ -75,7 +75,7 @@ python3 -B -m unittest discover -s tests -p 'test_ci_*.py'
 
 ## 日常 CI 与 nightly 集成
 
-只有改动 `src/aw/**` 或 `providers/**` 的 PR 才运行 AW 检查。日常门禁保留全部无需凭证的安全、
+改动 `src/aw/**` 或 `providers/**` 的 PR 会运行 AW 检查。日常门禁保留全部无需凭证的安全、
 Tokenless、生命周期、Agent/Hook 矩阵契约，以及原生验收清单和文件大小检查。
 其他组件的内部改动由各自 CI 负责；AW 消费的公开契约发生变化时，需要对候选
 SHA 显式运行兼容性验证。
@@ -133,14 +133,55 @@ Docker 命令和版本检查会从环境中明确移除它。凭据缺失或过�
 对确切发布提交重新运行，并验收发布所需的其他原生边界。
 
 日常 Rust 缓存由 PR 读取，仅 main 推送写入；重型构建缓存由 nightly 写入。
-原生 Python/npm 依赖分别缓存，原生任务最多三个并行。须从 `main` 触发；
+原生 Python/npm 依赖分别缓存，原生任务最多三个并行。完整模式须从 `main` 触发，
 候选提交须属于拉取到的 `origin/main` 历史，才能执行候选脚本或接收 Qoder Secret。
-未合入的 feature/release 提交会被拒绝；这些提交仍可显式提供本地凭据进行原生验证。
+fork 的手动运行可选择 `credential_free=true`，验收该 workflow 的确切 SHA。
+该模式执行包验收、六种无凭据 Agent 和常驻容器；汇总明确列出待完整主线 nightly
+验收的 Qoder CLI/SDK 托管模型任务。调用方与原生任务均在该模式下禁止传递 Qoder Secret。
 
 ```bash
 gh workflow run aw-ci.yml --ref main -f integration=true
 gh workflow run aw-preview.yml --ref main -f candidate_sha=<40-character-SHA>
 ```
+
+### 最小常驻测试容器
+
+新增必需的容器任务复用原生清单中全部 `tests/sdk_resident.py` 命令及其确切 JSON
+报告。初始清单包含 16 个套件：Claude 十个、Pi 六个，覆盖顺序/并发任务、取消、
+启动所有权、消息/EOF、中断失败、observation 准入、Pi 关闭超时和 managed MCP
+结果采纳，并使用真实 Tokenless。
+
+镜像只包含明确列出的公开夹具、固定 SDK 依赖和三个候选二进制：`aw`、
+`aw-provider-tokenless`、`tokenless`。Ubuntu、Node 和 uv 镜像通过 manifest digest
+固定；Python/SDK 版本来自原生清单，Pi 使用已提交的 npm lock。构建上下文排除完整
+仓库、部署文件和用户配置。运行使用普通测试用户、合成数据和 loopback 模型夹具，
+关闭外网、禁止宿主挂载，且不传递凭据。镜像仅供本次运行使用。
+保留产物限于声明的结果 JSON、运行时版本、输入摘要及命令/清理记录；私有 profile 和任务数据
+随容器删除。汇总重新核对逐项报告、候选 SHA、运行时版本及容器/镜像清理。
+
+显式运行 fork 候选模式：
+
+```bash
+gh workflow run aw-ci.yml --repo <owner>/anolisa --ref <branch> \
+  -f integration=true -f credential_free=true
+```
+
+在 `src/aw` 中使用匹配的 nightly bundle，仅运行本地容器验收：
+
+```bash
+python3 -B scripts/resident_container.py --candidate-sha "$(git rev-parse HEAD)" \
+  --bin target/native-binaries --output target/resident-evidence
+```
+
+输出目录须尚未存在，镜像输入须已提交。执行器在成功或失败后删除所属构建上下文、
+容器及唯一镜像标签。保留 `target/resident-evidence` 供检查，评审后运行
+`rm -rf -- target/resident-evidence` 清理。Docker 不可用时，可按容器记录中的确切
+停止/删除命令完成清理。
+
+长会话调用回收、可配置容量边界、模型中继传输、回调排空、session-store 复用及资源
+增长验收，将按 #8988 合入后的合同补齐。合并清单时保留已有消息/EOF、observation、
+Pi 关闭及 native-attach 套件。常驻 SDK 与真实 sec-core 的组合、请求接流/排空及
+监督器重启仍需追加验收。
 
 本地清单检查与原生执行使用和 CI 相同的入口：
 

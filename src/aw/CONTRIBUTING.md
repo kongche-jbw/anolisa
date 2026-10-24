@@ -87,7 +87,7 @@ python3 -B -m unittest discover -s tests -p 'test_ci_*.py'
 
 ## Daily CI and nightly integration
 
-PRs run AW checks only when `src/aw/**` or `providers/**` changes. The daily gate retains all
+PRs run AW checks when `src/aw/**` or `providers/**` changes. The daily gate retains all
 credential-free security, Tokenless, lifecycle and Agent/Hook matrix contracts,
 including native-inventory validation and source-size checks. Other components'
 internal changes are owned by their own CI. An externally changed public contract
@@ -165,16 +165,63 @@ commit and validate any additional release-specific native boundaries.
 
 The daily Rust cache is restored for PRs and written only by main pushes; the
 heavy build cache is written by nightly. Native Python/npm dependencies are
-cached separately, and native concurrency is capped at three jobs. Dispatch from
-`main`; the candidate must belong to the fetched `origin/main` history before
-any candidate script runs or receives the Qoder Secret. Unmerged feature/release
-commits are rejected. Local native execution remains available for those commits
-with explicitly supplied local credentials.
+cached separately, and native concurrency is capped at three jobs. The full profile requires dispatch from
+`main` and a candidate in the fetched `origin/main` history before any candidate
+script runs or receives the Qoder Secret. A manual fork dispatch can select
+`credential_free=true` for its exact workflow SHA. This profile runs packages, all
+six credential-free Agents and the resident container; its summary explicitly
+leaves Qoder CLI/SDK hosted-model acceptance to the full trusted-main nightly.
+Both the caller and native job withhold the Qoder Secret in this profile.
 
 ```bash
 gh workflow run aw-ci.yml --ref main -f integration=true
 gh workflow run aw-preview.yml --ref main -f candidate_sha=<40-character-SHA>
 ```
+
+### Minimal resident container
+
+The additional required container job reuses every `tests/sdk_resident.py` command
+and exact JSON report in the native inventory. The initial inventory has 16 such
+suites: ten Claude and six Pi. These cover sequential/concurrent tasks, cancellation,
+startup ownership, message/EOF handling, failed interruption, observation admission,
+Pi close timeout and managed MCP result adoption, including real Tokenless.
+
+The image contains only allowlisted public fixtures, pinned SDK dependencies and
+three candidate binaries: `aw`, `aw-provider-tokenless`, and `tokenless`. Ubuntu,
+Node and uv images use manifest digests; Python and SDK versions come from the
+native inventory, and Pi uses its committed npm lock. The build context excludes
+the repository checkout, deployment files and user configuration. Execution uses
+an unprivileged test user, synthetic data, loopback model fixtures, no external
+network, no host mounts and no forwarded credentials. No image is published.
+Only declared result JSON, runtime versions, input digests and command/cleanup records are retained;
+private profiles and per-task data remain in the removed container. Aggregation
+rechecks every report, candidate SHA, runtime version and container/image removal.
+
+Run the fork candidate profile explicitly:
+
+```bash
+gh workflow run aw-ci.yml --repo <owner>/anolisa --ref <branch> \
+  -f integration=true -f credential_free=true
+```
+
+Run only the container locally from `src/aw`, using the matching nightly bundle:
+
+```bash
+python3 -B scripts/resident_container.py --candidate-sha "$(git rev-parse HEAD)" \
+  --bin target/native-binaries --output target/resident-evidence
+```
+
+The output directory must be new and image inputs must be committed. The runner
+removes its context, container and unique image tag on success or failure. Retain
+`target/resident-evidence` for inspection; remove it with
+`rm -rf -- target/resident-evidence` after review. The container record includes
+exact stop/removal commands if Docker becomes unavailable during cleanup.
+
+Long-lived-session retirement, configurable saturation, model-relay transport,
+callback drain, session-store reuse and resource-growth acceptance will follow
+#8988's merged contract. Preserve existing message/EOF, observation, Pi close and
+native-attach suites when combining its inventory. Resident composition with real
+sec-core, request ingress/drain and supervisor restart remain additional acceptance.
 
 Local inventory planning and native execution use the same entrypoints as CI:
 
