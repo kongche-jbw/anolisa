@@ -622,6 +622,38 @@
     "claude-managed-mcp-ownership": {
       "target": "aw-cli/test/claude_sdk",
       "test": "managed_mcp_freezes_registered_tools_and_checked_results"
+    },
+    "invocation-long-history": {
+      "target": "aw-service/lib/aw_service",
+      "test": "runtime::invocations::tests::old_active_call_survives_unbounded_later_retirement"
+    },
+    "invocation-overload-unit": {
+      "target": "aw-service/lib/aw_service",
+      "test": "runtime::invocations::tests::overload_consumes_sequence_and_changed_identity_remains_rejected"
+    },
+    "invocation-retirement": {
+      "target": "aw-cli/test/service",
+      "test": "invocations::producer_calls_reclaim_both_phases_and_reject_late_or_changed_callbacks"
+    },
+    "invocation-overload": {
+      "target": "aw-cli/test/service",
+      "test": "invocations::invocation_overload_is_observable_and_recovers_without_replaying_old_calls"
+    },
+    "invocation-configuration": {
+      "target": "aw-config/test/configuration",
+      "test": "daemon_limits_accept_concurrent_budgets_and_reject_invalid_values"
+    },
+    "claude-producer-drain": {
+      "target": "aw-cli/test/claude_sdk",
+      "test": "model_producer_identity_and_callback_drain_contracts"
+    },
+    "pi-producer": {
+      "target": "aw-cli/test/pi",
+      "test": "model_producer_rejects_replayed_changed_and_overloaded_calls"
+    },
+    "invocation-control-reserve": {
+      "target": "aw-cli/test/service",
+      "test": "invocations::saturated_connections_reserve_capacity_for_invocation_drain_and_status"
     }
   },
   "agents": {
@@ -686,7 +718,14 @@
         "sdk-scope-process-cli",
         "sdk-scope-observation-root",
         "sdk-scope-observation-child",
-        "claude-managed-mcp"
+        "claude-managed-mcp",
+        "invocation-long-history",
+        "invocation-overload-unit",
+        "invocation-retirement",
+        "invocation-overload",
+        "invocation-configuration",
+        "claude-producer-drain",
+        "invocation-control-reserve"
       ],
       "security": [
         "security-retry"
@@ -784,7 +823,14 @@
         "sdk-scope-observation-root",
         "sdk-scope-observation-child",
         "pi-resident-observation",
-        "pi-legacy-observation"
+        "pi-legacy-observation",
+        "invocation-long-history",
+        "invocation-overload-unit",
+        "invocation-retirement",
+        "invocation-overload",
+        "invocation-configuration",
+        "pi-producer",
+        "invocation-control-reserve"
       ],
       "security": [
         "security-retry"
